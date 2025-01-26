@@ -17,6 +17,10 @@ scrape_configs:
     static_configs:
       - targets: ['localhost:3000']
 
+  - job_name: 'blackbox_exporter'  # collect blackbox exporter's operational metrics.
+    static_configs:
+      - targets: ['localhost:9115']
+
 alerting:
   alertmanagers:
   - static_configs:
