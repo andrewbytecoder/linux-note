@@ -1,0 +1,42 @@
+services:
+  prometheus:
+    image: prom/prometheus
+    container_name: prometheus
+    volumes:
+      - ./yaml/prometheus/:/etc/prometheus/
+      - ./yaml/prometheus/rules/:/etc/prometheus/rules/
+    network_mode: host
+    pid: host
+    depends_on:
+      - node_exporter
+
+
+  alertmanager:
+    image: prom/alertmanager
+    container_name: alertmanager
+    network_mode: host
+    pid: host
+    depends_on:
+      - prometheus
+
+  node_exporter:
+    image: quay.io/prometheus/node-exporter
+    container_name: node_exporter
+    command:
+      - '--path.rootfs=/host'
+    network_mode: host
+    pid: host
+    restart: unless-stopped
+    volumes:
+      - '/:/host:ro,rslave'
+
+  grafana:
+    image: grafana/grafana
+    container_name: grafana
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+    network_mode: host
+    pid: host
+    depends_on:
+      - prometheus
+
