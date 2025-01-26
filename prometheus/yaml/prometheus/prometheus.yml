@@ -37,11 +37,11 @@ scrape_configs:
         - localhost:3000 # grafana
     relabel_configs:
       - source_labels: [__address__]
-        target_label: __param_target
+        target_label: __param_target  # target_label 替换key值
       - source_labels: [__param_target]
         target_label: instance
       - target_label: __address__
-        replacement: localhost:9115  # The blackbox exporter's real hostname:port.
+        replacement: localhost:9115  # replacement 替换内容，为value值
 
 
 alerting:
