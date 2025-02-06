@@ -1,5 +1,7 @@
 #!/bin/sh
 
-docker stop $(docker ps -q)
-docker rm $(docker ps -aq)
+docker-compose down
+
+# docker stop $(docker ps -q)
+# docker rm $(docker ps -aq)
 
