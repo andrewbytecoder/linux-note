@@ -33,3 +33,10 @@ spec:
       protocol: TCP
       port: 443
       targetPort: 443
+  # 服务拓扑，用于服务匹配Endpoints，可以按照zone划分不同的Endpoints这样同区域的Endpoints能有限被转发流量
+  topologyKeys:
+    - "topology.kubernetes.io/zone"
+    - "topology.kubernetes.io/region"
+    # 优先将流量转发到相同node上
+    - "kubernetes.io/hostname"
+    - "*"
