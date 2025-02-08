@@ -40,3 +40,13 @@ spec:
     # 优先将流量转发到相同node上
     - "kubernetes.io/hostname"
     - "*"
+
+---
+# Headless service
+apiVersion: v1
+kind: Service
+metadata:
+  name: mysubdomain
+  namespace: default
+spec:
+  ClusterIP: None

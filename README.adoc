@@ -1,0 +1,24 @@
+
+:toc:
+// :footnote:
+
+:rootpath: ./
+
+// 整个文档保留换行符
+// :hardbreaks:
+
+//:chapter-signifier: Peatükk
+
+= k8s-explore
+
+[quote, 王亚周, wangyazhoujy@gmail.com;564631192@qq.com;wangyazhoujy@qq.com]
+____
+开发环境搭建。
+____
+
+
+v1.0.0.1, 2024-11-25
+
+// utils
+// include::utils/TODO.adoc[TODO]
+

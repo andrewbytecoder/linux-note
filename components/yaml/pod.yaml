@@ -10,9 +10,33 @@ metadata:
 spec:
   # 重启策略：Always、OnFailure、Never
   restartPolicy: Always
+  # Pod的名称将被系统设置为容器环境内的主机名称
+  #（hostname） ， 但通过副本控制器创建的Pod名称会有一段随机后缀
+  #名， 无法固定， 此时可以通过在Pod yaml配置中设置hostname字段定义
+  #容器环境的主机名。
+  # 设置之后再使用 kubectl get pod 获取出来的就是指定的名字，而不是kubernetes按照 name + 随机后缀生成的pod名了
+  #  在Pod创建成功之后， Kubernetes系统为其设置的DNS域名
+  #  （FQDN） 为“webapp-1.mysubdomain.default.svc.cluster.local”，
+  #  为了使集群内的其他应用能够访问Pod的DNS域名， 还需要部署一
+  #  个Headless Service， 其服务名称为Pod的子域名（subdomain） ， 这样系
+  #  统就会在DNS服务器中自动创建相应的DNS记录。
+  hostname: webapp-1
+  subdomain: mysubdomain
+  dnsPolicy: "None"
+  dnsConfig:
+    nameservers:
+      - 10.96.0.10
+    searches:
+      - nsl.svc.cluster-domain.example
+      - mysubdomain.svc.cluster-domain.example
+    options:
+      - name: ndots
+        value: "2"
+      - name: edns0
 
   # 容器定义
   containers:
+
     - name: nginx-container
       image: nginx:1.23.1
       imagePullPolicy: IfNotPresent
