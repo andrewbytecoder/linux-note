@@ -1,0 +1,48 @@
+# 如果一个请求同时被在Ingress中设置的多个URL路径匹配， 则系统将以最长的匹配路径为优先
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: example-ingress
+  annotations:
+    nginx.ingress.kubernetes.io/rewrite-target: /
+spec:
+  rules:
+    # host（可选配置） ： 基于域名的访问， 客户端请求将作用于指定域名的客户端请求。
+    - host: example.com
+      http:
+        paths:
+          # 一组根据路径进行转发的规则设置， 每个路径都应配置相应的后端服务信息
+          - path: /app
+            pathType: Prefix
+            # 目标后端服务， 包括服务的名称和端口号
+            backend:
+              service:
+                name: my-service
+                port:
+                  number: 80
+
+---
+# https
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: example-ingress-tls
+  annotations:
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+spec:
+  tls:
+    - hosts:
+        - example.com
+      secretName: example-tls-secret
+  rules:
+    - host: example.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: my-service
+                port:
+                  number: 80
+
