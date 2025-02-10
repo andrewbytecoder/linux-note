@@ -11,19 +11,28 @@ metadata:
 spec:
   egress:
   - {}
+  # 定义允许访问目标Pod的入站白名单规则， 满足from
+  #条件的客户端才能访问ports定义的目标Pod端口号。
   ingress:
+#  对符合条件的客户端Pod进行网络放行， 规则包括基于客
+#  户端Pod的Label、 基于客户端Pod所在命名空间的Label或者客户端的IP
+#  范围
   - from:
+    # 作用到访问客户端的Pod的Label，也就是选择哪些Pod能够访问该NetworkPolicy作用的Pod身上
     - podSelector:
         matchLabels:
           app.kubernetes.io/name: prometheus
+    # 允许访问的目标Pod监听的端口号
     ports:
     - port: 3000
       protocol: TCP
+  # 定义该网络策略所针对的Pod，这里选择包含以下标签的Pod，也就是这个网络策略作用到那个Pod身上
   podSelector:
     matchLabels:
       app.kubernetes.io/component: grafana
       app.kubernetes.io/name: grafana
       app.kubernetes.io/part-of: kube-prometheus
+  # 网络策略类型，包含ingress 和 egress ，用于设置目标Pod的入站和出站的网络限制。 如果未指定policyTypes， 则系统默认会设置Ingress类型若设置了egress策略， 则系统自动设置Egress类型
   policyTypes:
   - Egress
   - Ingress
