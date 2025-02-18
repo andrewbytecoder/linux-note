@@ -861,102 +861,855 @@ image::containerd/image-2025-02-17-20-44-02-504.png[]
 
 === 容器网络
 
+==== 容器网络：我修改了/proc/sys/net下的参数，为什么在容器中不起效？
 
+*Network Namespace*
 
+我们还是先来看看操作手册，在Linux Programmer’s Manual里对 Network Namespace 有一个段简短的描述，在里面就列出了最主要的几部分资源，它们都是通过 Network Namespace 隔离的。
 
+我把这些资源给你做了一个梳理：
 
+第一种，网络设备，这里指的是 lo，eth0 等网络设备。你可以可以通过 ip link命令看到它们。
+
+第二种是 IPv4 和 IPv6 协议栈。从这里我们可以知道，IP 层以及上面的 TCP 和 UPD 协议栈也是每个 Namespace 独立工作的。
 
+所以 IP、TCP、PUD 的很多协议，它们的相关参数也是每个 Namespace 独立的，这些参数大多数都在 /proc/sys/net/ 目录下面，同时也包括了 TCP 和 UPD 的 port 资源。
 
+第三种，IP 路由表，这个资源也是比较好理解的，你可以在不同的 Network Namespace 运行 ip route 命令，就能看到不同的路由表了。
 
+第四种是防火墙规则，其实这里说的就是 iptables 规则了，每个 Namespace 里都可以独立配置 iptables 规则。
 
+最后一种是网络的状态信息，这些信息你可以从 /proc/net 和 /sys/class/net 里得到，这里的状态基本上包括了前面 4 种资源的的状态信息。
 
+*Namespace 的操作*
+
+我们可以通过系统调用 clone() 或者 unshare() 这两个函数来建立新的 Network Namespace。
 
+第一种方法呢，是在新的进程创建的时候，伴随新进程建立，同时也建立出新的 Network Namespace。这个方法，其实就是通过 clone() 系统调用带上 CLONE_NEWNET flag 来实现的。
+
+Clone 建立出来一个新的进程，这个新的进程所在的 Network Namespace 也是新的。然后我们执行 ip link 命令查看 Namespace 里的网络设备，就可以确认一个新的 Network Namespace 已经建立好了。
+
+[source, bash]
+----
+int new_netns(void *para)
+{
+            printf("New Namespace Devices:\n");
+            system("ip link");
+            printf("\n\n");
+
+            sleep(100);
+            return 0;
+}
 
+int main(void)
+{
+            pid_t pid;
 
+            printf("Host Namespace Devices:\n");
+            system("ip link");
+            printf("\n\n");
 
+            pid =
+                clone(new_netns, stack + STACK_SIZE, CLONE_NEWNET | SIGCHLD, NULL);
+            if (pid == -1)
+                        errExit("clone");
 
+            if (waitpid(pid, NULL, 0) == -1)
+                        errExit("waitpid");
 
+            return 0;
+}
+----
+
+第二种方法呢，就是调用 unshare() 这个系统调用来直接改变当前进程的 Network Namespace。
+
+[source, bash]
+----
+int main(void)
+{
+            printf("Host Namespace Devices:\n");
+            system("ip link");
+            printf("\n\n");
+
+            if (unshare(CLONE_NEWNET) == -1)
+                        errExit("unshare");
+
+            printf("New Namespace Devices:\n");
+            system("ip link");
+            printf("\n\n");
+
+            sleep(100);
+            return 0;
+}
+----
+
+而创建容器的程序，比如runC也是用 unshare() 给新建的容器建立 Namespace 的。
+
+[source, bash]
+----
+# 使用 lsns -t net 查看网络命名空间
+[root@k8smaster-73 ~]# lsns -t net
+        NS TYPE NPROCS     PID USER                NETNSID NSFS                                                COMMAND
+4026531840 net     321       1 root             unassigned                                                     /usr/lib/s
+4026532402 net       3    2832 65535                     0 /run/netns/cni-8f11f12e-09f0-be9a-46a5-d0133fc14483 /pause
+# 使用nsenter 进入命名空间，并执行ip addr查看网络设备
+[root@k8smaster-73 ~]# nsenter -t 2832 -n ip addr
+1: lo: <LOOPBACK,UP,LOWER_UP> mtu 65536 qdisc noqueue state UNKNOWN group default qlen 1000
+    link/loopback 00:00:00:00:00:00 brd 00:00:00:00:00:00
+    inet 127.0.0.1/8 scope host lo
+       valid_lft forever preferred_lft forever
+    inet6 ::1/128 scope host
+       valid_lft forever preferred_lft forever
+3: eth0@if5: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 qdisc noqueue state UP group default
+    link/ether ae:11:e8:06:52:97 brd ff:ff:ff:ff:ff:ff link-netnsid 0
+    inet 10.225.160.84/32 scope global eth0
+       valid_lft forever preferred_lft forever
+    inet6 fe80::ac11:e8ff:fe06:5297/64 scope link
+       valid_lft forever preferred_lft forever
+4: tunl0@NONE: <NOARP> mtu 1480 qdisc noop state DOWN group default qlen 1000
+    link/ipip 0.0.0.0 brd 0.0.0.0
+[root@k8smaster-73 ~]#
+----
 
+在我们的例子里 tcp_congestion_control 的值是从 Host Namespace 里继承的，而 tcp_keepalive 相关的几个值会被重新初始化了。
 
+在函数tcp_sk_init() 里，tcp_keepalive 的三个参数都是重新初始化的，而 tcp_congestion_control 的值是从 Host Namespace 里复制过来的。
+
+[source, c]
+----
+static int __net_init tcp_sk_init(struct net *net)
+{
+…
+        net->ipv4.sysctl_tcp_keepalive_time = TCP_KEEPALIVE_TIME;
+        net->ipv4.sysctl_tcp_keepalive_probes = TCP_KEEPALIVE_PROBES;
+        net->ipv4.sysctl_tcp_keepalive_intvl = TCP_KEEPALIVE_INTVL;
 
+…
+        /* Reno is always built in */
+        if (!net_eq(net, &init_net) &&
+            try_module_get(init_net.ipv4.tcp_congestion_control->owner))
+                net->ipv4.tcp_congestion_control = init_net.ipv4.tcp_congestion_control;
+        else
+                net->ipv4.tcp_congestion_control = &tcp_reno;
 
+…
 
+}
+----
 
+也就是说，在容器启动的时候，这些网络参数已经初始化好了，而且容器启动之后在修改这些网络参数也无法生效，应为网络已经建立好了，所有相关的参数只有在建立网络的时候才会被用到，而且为了保证这些网络参数的安全，一般的容器运行时都是按照只读的方式对 /proc 和 /sys 目录进行mount 的。
 
+为了解决这个问题runC 也在对 /proc/sys 目录做 read-only mount 之前，预留出了修改接口，就是用来修改容器里 "/proc/sys"下参数的，同样也是 sysctl 的参数。
 
+而 Docker 的–sysctl或者 Kubernetes 里的allowed-unsafe-sysctls特性也都利用了 runC 的 sysctl 参数修改接口，允许容器在启动时修改容器 Namespace 里的参数。
 
+[source, bash]
+----
+# docker run -d --name net_para --sysctl net.ipv4.tcp_keepalive_time=600 centos:8.1.1911 sleep 3600 7efed88a44d64400ff5a6d38fdcc73f2a74a7bdc3dbc7161060f2f7d0be170d1
+# docker exec net_para cat /proc/sys/net/ipv4/tcp_keepalive_time 600
+----
 
+==== 容器网络配置（1）：容器网络不通了要怎么调试?
 
+[source, bash]
+----
+# --network none 启动容器，但是容器中只有loopback网卡
+# docker run -d --name if-test --network none centos:8.1.1911 sleep 36000
+cf3d3105b11512658a025f5b401a09c888ed3495205f31e0a0d78a2036729472
+# docker exec -it if-test ip addr
+1: lo: <LOOPBACK,UP,LOWER_UP> mtu 65536 qdisc noqueue state UNKNOWN group default qlen 1000
+    link/loopback 00:00:00:00:00:00 brd 00:00:00:00:00:00
+    inet 127.0.0.1/8 scope host lo
+       valid_lft forever preferred_lft forever
+----
 
+[source, bash]
+----
+pid=$(ps -ef | grep "sleep 36000" | grep -v grep | awk '{print $2}')
+echo $pid
+ln -s /proc/$pid/ns/net /var/run/netns/$pid
 
+# Create a pair of veth interfaces
+ip link add name veth_host type veth peer name veth_container
+# Put one of them in the new net ns
+ip link set veth_container netns $pid
 
+# In the container, setup veth_container
+ip netns exec $pid ip link set veth_container name eth0
+ip netns exec $pid ip addr add 172.17.1.2/16 dev eth0
+ip netns exec $pid ip link set eth0 up
+ip netns exec $pid ip route add default via 172.17.0.1
 
+# In the host, set veth_host up
+ip link set veth_host up
+----
 
 
+首先呢，我们先找到这个容器里运行的进程"sleep 36000"的 pid，通过 "/proc/$pid/ns/net"这个文件得到 Network Namespace 的 ID，这个 Network Namespace ID 既是这个进程的，也同时属于这个容器。
 
+然后我们在"/var/run/netns/"的目录下建立一个符号链接，指向这个容器的 Network Namespace。完成这步操作之后，在后面的"ip netns"操作里，就可以用 pid 的值作为这个容器的 Network Namesapce 的标识了。
 
+接下来呢，我们用 ip link 命令来建立一对 veth 的虚拟设备接口，分别是 veth_container 和 veth_host。从名字就可以看出来，veth_container 这个接口会被放在容器 Network Namespace 里，而 veth_host 会放在宿主机的 Host Network Namespace。
 
+所以我们后面的命令也很好理解了，就是用 ip link set veth_container netns $pid 把 veth_container 这个接口放入到容器的 Network Namespace 中。
 
+再然后我们要把 veth_container 重新命名为 eth0，因为这时候接口已经在容器的 Network Namesapce 里了，eth0 就不会和宿主机上的 eth0 冲突了。
 
+最后对容器内的 eht0，我们还要做基本的网络 IP 和缺省路由配置。因为 veth_host 已经在宿主机的 Host Network Namespace 了，就不需要我们做什么了，这时我们只需要 up 一下这个接口就可以了。
 
 
+image::containerd/image-2025-02-18-10-49-53-310.png[]
 
+现在，我们再来看看 veth 的定义了，其实它也很简单。veth 就是一个虚拟的网络设备，一般都是成对创建，而且这对设备是相互连接的。当每个设备在不同的 Network Namespaces 的时候，Namespace 之间就可以用这对 veth 设备来进行网络通讯了。
 
+比如说，你可以执行下面的这段代码，试试在 veth_host 上加上一个 IP，172.17.1.1/16，然后从容器里就可以 ping 通这个 IP 了。这也证明了从容器到宿主机可以利用这对 veth 接口来通讯了
 
+[source, bash]
+----
+# ip addr add 172.17.1.1/16 dev veth_host
+# docker exec -it if-test ping 172.17.1.1
+PING 172.17.1.1 (172.17.1.1) 56(84) bytes of data.
+64 bytes from 172.17.1.1: icmp_seq=1 ttl=64 time=0.073 ms
+64 bytes from 172.17.1.1: icmp_seq=2 ttl=64 time=0.092 ms
+^C
+--- 172.17.1.1 ping statistics ---
+2 packets transmitted, 2 received, 0% packet loss, time 30ms
+rtt min/avg/max/mdev = 0.073/0.082/0.092/0.013 ms
+----
 
+那下面我们再来看第二步， 数据包到了 Host Network Namespace 之后呢，怎么把它从宿主机上的 eth0 发送出去?
 
+Docker 程序在节点上安装完之后，就会自动建立了一个 docker0 的 bridge interface。所以我们只需要把第一步中建立的 veth_host 这个设备，接入到 docker0 这个 bridge 上。
 
+这里我要提醒你注意一下，如果之前你在 veth_host 上设置了 IP 的，就需先运行一下"ip addr delete 172.17.1.1/16 dev veth_host"，把 IP 从 veth_host 上删除。
 
+[source, bash]
+----
+# ip addr delete 172.17.1.1/16 dev veth_host
+ip link set veth_host master docker0
+----
 
+image::containerd/image-2025-02-18-10-53-34-561.png[]
 
+从这张示意图中，我们可以看出来，容器和 docker0 组成了一个子网，docker0 上的 IP 就是这个子网的网关 IP。
 
+如果我们要让子网通过宿主机上 eth0 去访问外网的话，那么加上 iptables 的规则就可以了，也就是下面这条规则。
 
+[source, bash]
+----
+iptables -P FORWARD ACCEPT
+# 查看nat类型的网络转发配置
+# iptables -L  -t nat
+----
 
+- 抓容器的包
 
+[source, bash]
+----
+# $pid 是容器的网络命名空间 ID
+# ip netns exec $pid tcpdump -i eth0 host 39.106.233.176 -nn
+tcpdump: verbose output suppressed, use -v or -vv for full protocol decode
+listening on eth0, link-type EN10MB (Ethernet), capture size 262144 bytes
+00:47:29.934294 IP 172.17.1.2 > 39.106.233.176: ICMP echo request, id 71, seq 1, length 64
+00:47:30.934766 IP 172.17.1.2 > 39.106.233.176: ICMP echo request, id 71, seq 2, length 64
+00:47:31.958875 IP 172.17.1.2 > 39.106.233.176: ICMP echo request, id 71, seq 3, length 64
+----
 
 
+经过上述设置之后，在容器中如果还是不能ping同外部网络，可以确认一下物理网卡的 ip_forward 是否打开。
 
+[source, bash]
+----
+# 直接写入打开
+# cat /proc/sys/net/ipv4/ip_forward
+0
+# echo 1 > /proc/sys/net/ipv4/ip_forward
 
+# 使用sysctl打开
+# sysctl net.ipv4.ip_forward
+net.ipv4.ip_forward = 1
+# sysctl -w net.ipv4.ip_forward=1
+----
 
 
+==== 容器网络延时要比宿主机上的高吗?
 
+.containerd容器网络
+image::containerd/image-2025-02-18-16-05-18-020.png[]
 
+.docker容器网络
+image::containerd/image-2025-02-18-11-08-46-663.png[]
 
+这种容器向外发送数据包的路径，相比宿主机上直接向外发送数据包的路径，很明显要多了一次接口层的发送和接收。尽管 veth 是虚拟网络接口，在软件上还是会增加一些开销。
 
+如果我们的应用程序对网络性能有很高的要求，特别是之前运行在物理机器上，现在迁移到容器上的，如果网络配置采用 veth 方式，就会出现网络延时增加的现象。
 
+对于这种 veth 接口配置导致网络延时增加的现象，我们可以通过运行netperf（Netperf 是一个衡量网络性能的工具，它可以提供单向吞吐量和端到端延迟的测试）来模拟一下。
 
+image::containerd/image-2025-02-18-11-16-04-661.png[]
 
+我们可以运行 netperf 的 TCP_RR 测试用例，TCP_RR 是 netperf 里专门用来测试网络延时的，缺省每次运行 10 秒钟。运行以后，我们还要计算平均每秒钟 TCP request/response 的次数，这个次数越高，就说明延时越小。
 
+[source, bash]
+----
+# ./netperf -H 192.168.0.194 -t TCP_RR
+MIGRATED TCP REQUEST/RESPONSE TEST from 0.0.0.0 (0.0.0.0) port 0 AF_INET to 192.168.0.194 () port 0 AF_INET : first burst 0
+Local /Remote
+Socket Size   Request  Resp.   Elapsed  Trans.
+Send   Recv   Size     Size    Time     Rate
+bytes  Bytes  bytes    bytes   secs.    per sec
 
+16384  131072 1        1       10.00    2504.92
+16384  131072
 
+# 容器中运行
+[root@4150e2a842b5 /]# ./netperf -H 192.168.0.194 -t TCP_RR
+MIGRATED TCP REQUEST/RESPONSE TEST from 0.0.0.0 (0.0.0.0) port 0 AF_INET to 192.168.0.194 () port 0 AF_INET : first burst 0
+Local /Remote
+Socket Size   Request  Resp.   Elapsed  Trans.
+Send   Recv   Size     Size    Time     Rate
+bytes  Bytes  bytes    bytes   secs.    per sec
 
+16384  131072 1        1       10.00    2104.68
+16384  131072
+----
 
+虽然 veth 是一个虚拟的网络接口，但是在接收数据包的操作上，这个虚拟接口和真实的网路接口并没有太大的区别。这里除了没有硬件中断的处理，其他操作都差不多，特别是软中断（softirq）的处理部分其实就和真实的网络接口是一样的。
 
+我们可以通过阅读 Linux 内核里的 veth 的驱动代码（drivers/net/veth.c）确认一下。
 
+veth 发送数据的函数是 veth_xmit()，它里面的主要操作就是找到 veth peer 设备，然后触发 peer 设备去接收数据包。
+比如 veth_container 这个接口调用了 veth_xmit() 来发送数据包，最后就是触发了它的 peer 设备 veth_host 去调用 netif_rx() 来接收数据包。
 
+[source, c]
+----
+static netdev_tx_t veth_xmit(struct sk_buff *skb, struct net_device *dev)
+{
+…
+       /* 拿到veth peer设备的net_device */
+       rcv = rcu_dereference(priv->peer);
+…
+       /* 将数据送到veth peer设备 */
+       if (likely(veth_forward_skb(rcv, skb, rq, rcv_xdp) == NET_RX_SUCCESS)) {
 
 
+…
+}
 
+static int veth_forward_skb(struct net_device *dev, struct sk_buff *skb,
+                            struct veth_rq *rq, bool xdp)
+{
+        /* 这里最后调用了 netif_rx() */
+        return __dev_forward_skb(dev, skb) ?: xdp ?
+                veth_xdp_rx(rq, skb) :
+                netif_rx(skb);
+}
+----
 
+而 netif_rx() 是一个网络设备驱动里面标准的接收数据包的函数，netif_rx() 里面会为这个数据包 raise 一个 softirq。 ` __raise_softirq_irqoff(NET_RX_SOFTIRQ);`
 
+一般在硬件中断处理结束之后，网络 softirq 的函数才会再去执行没有完成的包的处理工作。即使这里 softirq 的执行速度很快，还是会带来额外的开销。
 
+所以，根据 veth 这个虚拟网络设备的实现方式，我们可以看到它必然会带来额外的开销，这样就会增加数据包的网络延时。
 
+那么我们有什么方法可以减少容器的网络延时呢？你可能会想到，我们可不可以不使用 veth 这个方式配置网络接口，而是换成别的方式呢？
 
+的确是这样，其实除了 veth 之外，容器还可以选择其他的网络配置方式。在 Docker 的文档中提到了 macvlan 的配置方式，和 macvlan 很类似的方式还有 ipvlan。
 
+我们先来看这两个方式的相同之处，无论是 macvlan 还是 ipvlan，它们都是在一个物理的网络接口上再配置几个虚拟的网络接口。在这些虚拟的网络接口上，都可以配置独立的 IP，并且这些 IP 可以属于不同的 Namespace。
 
+然后我再说说它们的不同点。对于 macvlan，每个虚拟网络接口都有自己独立的 mac 地址；而 ipvlan 的虚拟网络接口是和物理网络接口共享同一个 mac 地址。而且它们都有自己的 L2/L3 的配置方式，不过我们主要是拿 macvlan/ipvlan 来和 veth 做比较，这里可以先忽略 macvlan/ipvlan 这些详细的特性。
 
+我们就以 ipvlan 为例，运行下面的这个脚本，为容器手动配置上 ipvlan 的网络接口。
 
+[source, bash]
+----
+docker run --init --name lat-test-1 --network none -d registry/latency-test:v1 sleep 36000
 
+pid1=$(docker inspect lat-test-1 | grep -i Pid | head -n 1 | awk '{print $2}' | awk -F "," '{print $1}')
+echo $pid1
+ln -s /proc/$pid1/ns/net /var/run/netns/$pid1
+# 接着我们在宿主机 eth0 的接口上增加一个 ipvlan 虚拟网络接口 ipvt1，再把它加入到容器的 Network Namespace 里面，重命名为容器内的 eth0，并且配置上 IP。这样我们就配置好了第一个用 ipvlan 网络接口的容器。
+ip link add link eth0 ipvt1 type ipvlan mode l2
+ip link set dev ipvt1 netns $pid1
 
+ip netns exec $pid1 ip link set ipvt1 name eth0
+ip netns exec $pid1 ip addr add 172.17.3.2/16 dev eth0
+ip netns exec $pid1 ip link set eth0 up
+----
 
+我们可以用同样的方式配置第二个容器，这样两个容器可以相互 ping 一下 IP，看看网络是否配置成功了。脚本你可以在这里得到。
 
+两个容器配置好之后，就像下面图中描述的一样了。从这张图里，你很容易就能看出 macvlan/ipvlan 与 veth 网络配置有什么不一样。容器的虚拟网络接口，直接连接在了宿主机的物理网络接口上了，形成了一个网络二层的连接。
 
+image::containerd/image-2025-02-18-11-33-01-510.png[]
 
+如果从容器里向宿主机外发送数据，看上去通过的接口要比 veth 少了，那么实际情况是不是这样呢？我们先来看一下 ipvlan 接口发送数据的代码。
 
+从下面的 ipvlan 接口的发送代码中，我们可以看到，如果是往宿主机外发送数据，发送函数会直接找到 ipvlan 虚拟接口对应的物理网络接口。
 
+比如在我们的例子中，这个物理接口就是宿主机上的 eth0，然后直接调用 dev_queue_xmit()，通过物理接口把数据直接发送出去。
 
+[source, c]
+----
+static int ipvlan_xmit_mode_l2(struct sk_buff *skb, struct net_device *dev)
+{
+…
+        if (!ipvlan_is_vepa(ipvlan->port) &&
+            ether_addr_equal(eth->h_dest, eth->h_source)) {
+…
+        } else if (is_multicast_ether_addr(eth->h_dest)) {
+…
+        }
+        /*
+         * 对于普通的对外发送数据，上面的if 和 else if中的条件都不成立，
+         * 所以会执行到这一步，拿到ipvlan对应的物理网路接口设备，
+         * 然后直接从这个设备发送数据。
+         */
+        skb->dev = ipvlan->phy_dev;
+        return dev_queue_xmit(skb);
+}
+----
 
+我们讲过通过 veth 接口从容器向外发送数据包，会触发 peer veth 设备去接收数据包，这个接收的过程就是一个网络的 softirq 的处理过程。
 
+和 veth 接口相比，我们用 ipvlan 发送对外数据就要简单得多，因为这种方式没有内部额外的 softirq 处理开销。
+
+容器通常缺省使用 veth 虚拟网络接口，不过 veth 接口会有比较大的网络延时。我们可以使用 netperf 这个工具来比较网络延时，相比物理机上的网络延时，使用 veth 接口容器的网络延时会增加超过 10%。
+
+我们通过对 veth 实现的代码做分析，可以看到由于 veth 接口是成对工作，在对外发送数据的时候，peer veth 接口都会 raise softirq 来完成一次收包操作，这样就会带来数据包处理的额外开销。
+
+如果要减小容器网络延时，就可以给容器配置 ipvlan/macvlan 的网络接口来替代 veth 网络接口。Ipvlan/macvlan 直接在物理网络接口上虚拟出接口，在发送对外数据包的时候可以直接通过物理接口完成，没有节点内部类似 veth 的那种 softirq 的开销。容器使用 ipvlan/maclan 的网络接口，它的网络延时可以非常接近物理网络接口的延时。
+
+对于延时敏感的应用程序，我们可以考虑使用 ipvlan/macvlan 网络接口的容器。不过，由于 ipvlan/macvlan 网络接口直接挂载在物理网络接口上，对于需要使用 iptables 规则的容器，比如 Kubernetes 里使用 service 的容器，就不能工作了。这就需要你结合实际应用的需求做个判断，再选择合适的方案。
+
+==== 容器中的网络乱序包怎么这么高？
+
+通过 veth 接口从容器向外发送数据包，会触发 peer veth 设备去接收数据包，这个接收的过程就是一个网络的 softirq 的处理过程，veth 接口会模拟硬件接收数据的过程，通过 enqueue_to_backlog() 函数把数据包放到某个 CPU 对应的数据包队列里（softnet_data）。
+
+[source, c]
+----
+static int netif_rx_internal(struct sk_buff *skb)
+{
+        int ret;
+
+        net_timestamp_check(netdev_tstamp_prequeue, skb);
+
+        trace_netif_rx(skb);
+
+#ifdef CONFIG_RPS
+        if (static_branch_unlikely(&rps_needed)) {
+                struct rps_dev_flow voidflow, *rflow = &voidflow;
+                int cpu;
+
+                preempt_disable();
+                rcu_read_lock();
+
+                cpu = get_rps_cpu(skb->dev, skb, &rflow);
+                if (cpu < 0)
+                        cpu = smp_processor_id();
+
+                ret = enqueue_to_backlog(skb, cpu, &rflow->last_qtail);
+
+                rcu_read_unlock();
+                preempt_enable();
+        } else
+#endif
+        {
+                unsigned int qtail;
+
+                ret = enqueue_to_backlog(skb, get_cpu(), &qtail);
+                put_cpu();
+        }
+        return ret;
+}
+----
+
+从上面的代码，我们可以看到，在缺省的状况下（也就是没有 RPS 的情况下），enqueue_to_backlog() 把数据包放到了“当前运行的 CPU”（get_cpu()）对应的数据队列中。如果是从容器里通过 veth 对外发送数据包，那么这个“当前运行的 CPU”就是容器中发送数据的进程所在的 CPU。
+
+对于多核的系统，这个发送数据的进程可以在多个 CPU 上切换运行。进程在不同的 CPU 上把数据放入队列并且 raise softirq 之后，因为每个 CPU 上处理 softirq 是个异步操作，所以两个 CPU network softirq handler 处理这个进程的数据包时，处理的先后顺序并不能保证。
+
+所以，veth 对的这种发送数据方式增加了容器向外发送数据出现乱序的几率。
+
+*RSS 和 RPS*
+
+那么对于 veth 接口的这种发包方式，有办法减少一下乱序的几率吗？
+
+其实，我们在上面 netif_rx_internal() 那段代码中，有一段在"#ifdef CONFIG_RPS"中的代码。
+
+我们看到这段代码中在调用 enqueue_to_backlog() 的时候，传入的 CPU 并不是当前运行的 CPU，而是通过 get_rps_cpu() 得到的 CPU，那么这会有什么不同呢？这里的 RPS 又是什么意思呢？
+
+要解释 RPS 呢，需要先看一下 RSS，这个 RSS 不是我们之前说的内存 RSS，而是和网卡硬件相关的一个概念，它是 Receive Side Scaling 的缩写。
+
+现在的网卡性能越来越强劲了，从原来一条 RX 队列扩展到了 N 条 RX 队列，而网卡的硬件中断也从一个硬件中断，变成了每条 RX 队列都会有一个硬件中断。
+
+每个硬件中断可以由一个 CPU 来处理，那么对于多核的系统，多个 CPU 可以并行的接收网络包，这样就大大地提高了系统的网络数据的处理能力.
+
+同时，在网卡硬件中，可以根据数据包的 4 元组或者 5 元组信息来保证同一个数据流，比如一个 TCP 流的数据始终在一个 RX 队列中，这样也能保证同一流不会出现乱序的情况。
+
+image::containerd/image-2025-02-18-14-33-03-178.png[]
+
+RSS 的实现在网卡硬件和驱动里面，而 RPS（Receive Packet Steering）其实就是在软件层面实现类似的功能。它主要实现的代码框架就在上面的 netif_rx_internal() 代码里，原理也不难。
+
+就像下面的这张示意图里描述的这样：在硬件中断后，CPU2 收到了数据包，再一次对数据包计算一次四元组的 hash 值，得到这个数据包与 CPU1 的映射关系。接着会把这个数据包放到 CPU1 对应的 softnet_data 数据队列中，同时向 CPU1 发送一个 IPI 的中断信号。
+
+这样一来，后面 CPU1 就会继续按照 Netowrk softirq 的方式来处理这个数据包了
+
+image::containerd/image-2025-02-18-14-34-02-481.png[]
+
+RSS 和 RPS 的目的都是把数据包分散到更多的 CPU 上进行处理，使得系统有更强的网络包处理能力。在把数据包分散到各个 CPU 时，保证了同一个数据流在一个 CPU 上，这样就可以减少包的乱序。
+
+明白了 RPS 的概念之后，我们再回头来看 veth 对外发送数据时候，在 enqueue_to_backlog() 的时候选择 CPU 的问题。显然，如果对应的 veth 接口上打开了 RPS 的配置以后，那么对于同一个数据流，就可以始终选择同一个 CPU 了。
+
+其实我们打开 RPS 的方法挺简单的，只要去 /sys 目录下，在网络接口设备接收队列中修改队列里的 rps_cpus 的值，这样就可以了。rps_cpus 是一个 16 进制的数，每个 bit 代表一个 CPU。
+
+RPS 和 RSS 的作用类似，都是把数据包分散到更多的 CPU 上进行处理，使得系统有更强的网络包处理能力。它们的区别是 RSS 工作在网卡的硬件层，而 RPS 工作在 Linux 内核的软件层。
+
+=== 容器安全
+
+在普通 Linux 节点上，非 root 用户启动的进程缺省没有任何 Linux capabilities，而 root 用户启动的进程缺省包含了所有的 Linux capabilities
+
+使用capsh执行一个root用户启动的程序，但是去除了cap_net_admin这个cap，就会发现iptables命令执行失败。
+
+[source, c]
+----
+# sudo /usr/sbin/capsh --keep=1 --user=root   --drop=cap_net_admin  --   -c './iptables -L;sleep 100'
+Chain INPUT (policy ACCEPT)
+target     prot opt source               destination
+
+Chain FORWARD (policy ACCEPT)
+target     prot opt source               destination
+
+Chain OUTPUT (policy ACCEPT)
+target     prot opt source               destination
+iptables: Permission denied (you must be root).
+
+# ps -ef | grep sleep
+root     22603 22275  0 19:44 pts/1    00:00:00 sudo /usr/sbin/capsh --keep=1 --user=root --drop=cap_net_admin -- -c ./iptables -L;sleep 100
+root     22604 22603  0 19:44 pts/1    00:00:00 /bin/bash -c ./iptables -L;sleep 100
+
+# cat /proc/22604/status | grep Cap
+CapInh:            0000000000000000
+CapPrm:          0000003fffffefff
+CapEff:             0000003fffffefff
+CapBnd:          0000003fffffefff
+CapAmb:         0000000000000000
+----
+
+运行上面的命令查看 /proc//status 里 Linux capabilities 的相关参数之后，我们可以发现，输出结果中包含 5 个 Cap 参数。
+
+这里我给你解释一下， 对于当前进程，直接影响某个特权操作是否可以被执行的参数，是"CapEff"，也就是"Effective capability sets"，这是一个 bitmap，每一个 bit 代表一项 capability 是否被打开。
+
+在 Linux 内核capability.h里把 CAP_NET_ADMIN 的值定义成 12，所以我们可以看到"CapEff"的值是"0000003fffffefff"，第 4 个数值是 16 进制的"e"，而不是 f。
+
+这表示 CAP_NET_ADMIN 对应的第 12-bit 没有被置位了（0xefff = 0xffff & (~(1 << 12))），所以这个进程也就没有执行 iptables 命令的权限了。
+
+image::containerd/image-2025-02-18-15-12-01-891.png[]
+
+如果我们要新启动一个程序，在 Linux 里的过程就是先通过 fork() 来创建出一个子进程，然后调用 execve() 系统调用读取文件系统里的程序文件，把程序文件加载到进程的代码段中开始运行。
+
+就像图片所描绘的那样，这个新运行的进程里的相关 capabilities 参数的值，是由它的父进程以及程序文件中的 capabilities 参数值计算得来的。具体可以参见：Linux capabilities，或者如下两篇文章。
+
+1. Capabilities: Why They Exist and How They Work
+2. Linux Capabilities in Practice
+
+这里你只要记住最重要的一点，文件中可以设置 capabilities 参数值，并且这个值会影响到最后运行它的进程。比如，我们如果把 iptables 的应用程序加上 CAP_NET_ADMIN 的 capability，那么即使是非 root 用户也有执行 iptables 的权限了。
+
+[source, bash]
+----
+$ id
+uid=1000(centos) gid=1000(centos) groups=1000(centos),10(wheel)
+$ sudo setcap cap_net_admin+ep ./iptables
+$ getcap ./iptables
+./iptables = cap_net_admin+ep
+$./iptables -L
+Chain INPUT (policy ACCEPT)
+target     prot opt source               destination
+
+Chain FORWARD (policy ACCEPT)
+target     prot opt source               destination
+DOCKER-USER  all  --  anywhere             anywhere
+DOCKER-ISOLATION-STAGE-1  all  --  anywhere             anywhere
+ACCEPT     all  --  anywhere             anywhere             ctstate RELATED,ESTABLISHED
+DOCKER     all  --  anywhere             anywhere
+ACCEPT     all  --  anywhere             anywhere
+ACCEPT     all  --  anywhere             anywhere
+----
+
+我们搞懂了 Linux capabilities 之后，那么对 privileged 的容器也很容易理解了。Privileged 的容器也就是允许容器中的进程可以执行所有的特权操作。
+
+因为安全方面的考虑，容器缺省启动的时候，哪怕是容器中 root 用户的进程，系统也只允许了 15 个 capabilities。这个你可以查看runC spec 文档中的 security 部分，你也可以查看容器 init 进程 status 里的 Cap 参数。
+
+因为容器中的权限越高，对系统安全的威胁显然也是越大的。比如说，如果容器中的进程有了 CAP_SYS_ADMIN 的特权之后，那么这些进程就可以在容器里直接访问磁盘设备，直接可以读取或者修改宿主机上的所有文件了。
+
+所以，在容器平台上是基本不允许把容器直接设置为"privileged"的，我们需要根据容器中进程需要的最少特权来赋予 capabilities。
+
+我们结合这一讲开始的例子来说说。在开头的例子中，容器里需要使用 iptables。因为使用 iptables 命令，只需要设置 CAP_NET_ADMIN 这个 capability 就行。那么我们只要在运行 Docker 的时候，给这个容器再多加一个 NET_ADMIN 参数就可以了。
+
+[source, bash]
+----
+# docker run --name iptables --cap-add NET_ADMIN -it registry/iptables:v1 bash
+[root@cfedf124dcf1 /]# iptables -L
+Chain INPUT (policy ACCEPT)
+target     prot opt source               destination
+
+Chain FORWARD (policy ACCEPT)
+target     prot opt source               destination
+
+Chain OUTPUT (policy ACCEPT)
+target     prot opt source               destination
+----
+
+=== 实践
+
+==== 理解perf：怎么用perf聚焦热点函数？
+
+[source, bash]
+----
+# 使用perf命令查看CPU 32上函数调用热度
+# perf record -C 32 -g -- sleep 10
+----
+
+第一步，抓取数据。当时我们运行了下面这条 perf 命令，这里的参数 -C 32 是指定只抓取 CPU32 的执行指令；-g 是指 call-graph enable，也就是记录函数调用关系； sleep 10 主要是为了让 perf 抓取 10 秒钟的数据。
+
+perf 可以在 CPU Usage 增高的节点上找到具体的引起 CPU 增高的函数，然后我们就可以有针对性地聚焦到那个函数做分析。
+
+查看 page-faults错误
+
+[source, bash]
+----
+[root@k8smaster-40-170 ~]# perf stat -e page-faults -- sleep 2
+
+ Performance counter stats for 'sleep 2':
+
+                74      page-faults
+
+       2.001660323 seconds time elapsed
+
+       0.001613000 seconds user
+       0.000000000 seconds sys
+----
+
+perf record 在不加 -e 指定 event 的时候，它缺省的 event 就是 Hardware event cycles。
+
+第一点，Perf 通过系统调用 perf_event_open() 来完成对 perf event 的计数或者采样。不过 Docker 使用 seccomp（seccomp 是一种技术，它通过控制系统调用的方式来保障 Linux 安全）会默认禁止 perf_event_open()。
+
+所以想要让 Docker 启动的容器可以运行 perf，我们要怎么处理呢？
+
+其实这个也不难，在用 Docker 启动容器的时候，我们需要在 seccomp 的 profile 里，允许 perf_event_open() 这个系统调用在容器中使用。在我们的例子中，启动 container 的命令里，已经加了这个参数允许了，参数是"--security-opt seccomp=unconfined"。
+
+第二点，需要允许容器在没有 SYS_ADMIN 这个 capability的情况下，也可以让 perf 访问这些 event。那么现在我们需要做的就是，在宿主机上设置出 echo -1 > /proc/sys/kernel/perf_event_paranoid，这样普通的容器里也能执行 perf 了。
+
+完成了权限设置之后，在容器中运行 perf，就和在 VM/BM 上运行没有什么区别了。
+
+最后，我们再来说一下我们在定位 CPU Uage 异常时最常用的方法，常规的步骤一般是这样的：
+
+首先，调用 perf record 采样几秒钟，一般需要加 -g 参数，也就是 call-graph，还需要抓取函数的调用关系。在多核的机器上，还要记得加上 -a 参数，保证获取所有 CPU Core 上的函数运行情况。至于采样数据的多少，在讲解 perf 概念的时候说过，我们可以用 -c 或者 -F 参数来控制。
+
+[source, bash]
+----
+# perf record -a -g -- sleep 60
+# perf script > out.perf
+# git clone --depth 1 https://github.com/brendangregg/FlameGraph.git
+# FlameGraph/stackcollapse-perf.pl out.perf > out.folded
+# FlameGraph/flamegraph.pl out.folded > out.sv
+----
+
+==== 理解ftrace（1）：怎么应用ftrace查看长延时内核函数？
+
+ftrace 的操作都可以在 tracefs 这个虚拟文件系统中完成，对于 CentOS，这个 tracefs 的挂载点在 /sys/kernel/debug/tracing 下：
+
+[source, bash]
+----
+# cat /proc/mounts | grep tracefs
+tracefs /sys/kernel/debug/tracing tracefs rw,relatime 0 0
+----
+
+你可以进入到 /sys/kernel/debug/tracing 目录下，看一下这个目录下的文件：
+
+[source, bash]
+----
+# cd /sys/kernel/debug/tracing
+# ls
+available_events            dyn_ftrace_total_info     kprobe_events    saved_cmdlines_size  set_graph_notrace   trace_clock          tracing_on
+available_filter_functions  enabled_functions         kprobe_profile   saved_tgids          snapshot            trace_marker         tracing_thresh
+available_tracers           error_log                 max_graph_depth  set_event            stack_max_size      trace_marker_raw     uprobe_events
+buffer_percent              events                    options          set_event_pid        stack_trace         trace_options        uprobe_profile
+buffer_size_kb              free_buffer               per_cpu          set_ftrace_filter    stack_trace_filter  trace_pipe
+buffer_total_size_kb        function_profile_enabled  printk_formats   set_ftrace_notrace   synthetic_events    trace_stat
+current_tracer              hwlat_detector            README           set_ftrace_pid       timestamp_mode      tracing_cpumask
+dynamic_events              instances                 saved_cmdlines   set_graph_function   trace               tracing_max_latency
+----
+
+tracefs 虚拟文件系统下的文件操作，其实和我们常用的 Linux proc 和 sys 虚拟文件系统的操作是差不多的。通过对某个文件的 echo 操作，我们可以向内核的 ftrace 系统发送命令，然后 cat 某个文件得到 ftrace 的返回结果。
+
+对于 ftrace，它的输出结果都可以通过 cat trace 这个命令得到。在缺省的状态下 ftrace 的 tracer 是 nop，也就是 ftrace 什么都不做。因此，我们从cat trace中也看不到别的，只是显示了 trace 输出格式。
+
+[source, bash]
+----
+# pwd
+/sys/kernel/debug/tracing
+# cat trace
+
+# tracer: nop
+#
+# entries-in-buffer/entries-written: 0/0   #P:12
+#
+#                              _-----=> irqs-off
+#                             / _----=> need-resched
+#                            | / _---=> hardirq/softirq
+#                            || / _--=> preempt-depth
+#                            ||| /     delay
+#           TASK-PID   CPU#  ||||    TIMESTAMP  FUNCTION
+#              | |       |   ||||       |         |
+----
+
+下面，我们可以执行 echo function > current_tracer 来告诉 ftrace，我要启用 function tracer。
+
+[source, bash]
+----
+# cat current_tracer
+nop
+# cat available_tracers
+hwlat blk mmiotrace function_graph wakeup_dl wakeup_rt wakeup function nop
+# echo function > current_tracer
+# cat current_tracer
+function
+----
+
+在启动了 function tracer 之后，我们再查看一下 trace 的输出。这时候我们就会看到大量的输出，每一行的输出就是当前内核中被调用到的内核函数，具体的格式你可以参考 trace 头部的说明
+
+[source, bash]
+----
+cat trace | more
+# tracer: function
+#
+# entries-in-buffer/entries-written: 615132/134693727   #P:12
+#
+#                              _-----=> irqs-off
+#                             / _----=> need-resched
+#                            | / _---=> hardirq/softirq
+#                            || / _--=> preempt-depth
+#                            ||| /     delay
+#           TASK-PID   CPU#  ||||    TIMESTAMP  FUNCTION
+#              | |       |   ||||       |         |
+   systemd-udevd-20472 [011] .... 2148512.735026: lock_page_memcg <-page_remove_rmap
+   systemd-udevd-20472 [011] .... 2148512.735026: PageHuge <-page_remove_rmap
+   systemd-udevd-20472 [011] .... 2148512.735026: unlock_page_memcg <-page_remove_rmap
+   systemd-udevd-20472 [011] .... 2148512.735026: __unlock_page_memcg <-unlock_page_memcg
+   systemd-udevd-20472 [011] .... 2148512.735026: __tlb_remove_page_size <-unmap_page_range
+   systemd-udevd-20472 [011] .... 2148512.735027: vm_normal_page <-unmap_page_range
+   systemd-udevd-20472 [011] .... 2148512.735027: mark_page_accessed <-unmap_page_range
+   systemd-udevd-20472 [011] .... 2148512.735027: page_remove_rmap <-unmap_page_range
+   systemd-udevd-20472 [011] .... 2148512.735027: lock_page_memcg <-page_remove_rmap
+----
+
+其实在实际使用的时候，我们可以利用 ftrace 里的 filter 参数做筛选，比如我们可以通过 set_ftrace_filter 只列出想看到的内核函数，或者通过 set_ftrace_pid 只列出想看到的进程。
+
+为了让你加深理解，我给你举个例子，比如说，如果我们只是想看 do_mount 这个内核函数有没有被调用到，那我们就可以这么操作:
+
+[source, bash]
+----
+# echo nop > current_tracer
+# echo do_mount > set_ftrace_filter
+# echo function > current_tracer
+----
+
+输出里"do_mount <- ksys_mount"表示 do_mount() 函数是被 ksys_mount() 这个函数调用到的，"2159455.499195"表示函数执行时的时间戳，而"[005]"是内核函数 do_mount() 被执行时所在的 CPU 编号，还有"mount-20889"，它是 do_mount() 被执行时当前进程的 pid 和进程名。
+
+[source, bash]
+----
+# mount -t tmpfs tmpfs /tmp/fs
+# cat trace
+# tracer: function
+#
+# entries-in-buffer/entries-written: 1/1   #P:12
+#
+#                              _-----=> irqs-off
+#                             / _----=> need-resched
+#                            | / _---=> hardirq/softirq
+#                            || / _--=> preempt-depth
+#                            ||| /     delay
+#           TASK-PID   CPU#  ||||    TIMESTAMP  FUNCTION
+#              | |       |   ||||       |         |
+           mount-20889 [005] .... 2159455.499195: do_mount <-ksys_mount
+----
+
+这里我们只能判断出，ksys mount() 调用了 do mount() 这个函数，这只是一层调用关系，如果我们想要看更加完整的函数调用栈，可以打开 ftrace 中的 func_stack_trace 选项：
+
+[source, bash]
+----
+# echo 1 > options/func_stack_trace
+----
+
+打开以后，我们再来做一次 mount 操作，就可以更清楚地看到 do_mount() 是系统调用 (syscall) 之后被调用到的。
+
+[source, bash]
+----
+# umount /tmp/fs
+# mount -t tmpfs tmpfs /tmp/fs
+# cat trace
+
+# tracer: function
+#
+# entries-in-buffer/entries-written: 3/3   #P:12
+#
+#                              _-----=> irqs-off
+#                             / _----=> need-resched
+#                            | / _---=> hardirq/softirq
+#                            || / _--=> preempt-depth
+#                            ||| /     delay
+#           TASK-PID   CPU#  ||||    TIMESTAMP  FUNCTION
+#              | |       |   ||||       |         |
+           mount-20889 [005] .... 2159455.499195: do_mount <-ksys_mount
+           mount-21048 [000] .... 2162013.660835: do_mount <-ksys_mount
+           mount-21048 [000] .... 2162013.660841: <stack trace>
+ => do_mount
+ => ksys_mount
+ => __x64_sys_mount
+ => do_syscall_64
+ => entry_SYSCALL_64_after_hwframe
+----
+
+结合刚才说的内容，我们知道了，通过 function tracer 可以帮我们判断内核中函数是否被调用到，以及函数被调用的整个路径 也就是调用栈。
+
+这样我们就理清了整体的追踪思路：如果我们通过 perf 发现了一个内核函数的调用频率比较高，就可以通过 function tracer 工具继续深入，这样就能大概知道这个函数是在什么情况下被调用到的。
+
+那如果我们还想知道，某个函数在内核中大致花费了多少时间，需要用到 ftrace 中的另外一个 tracer，它就是 function_graph。我们可以在刚才的 ftrace 的设置基础上，把 current_tracer 设置为 function_graph，然后就能看到 do_mount() 这个函数调用的时间了。
+
+[source, bash]
+----
+# echo function_graph > current_tracer
+# umount /tmp/fs
+# mount -t tmpfs tmpfs /tmp/fs
+# cat trace
+# tracer: function_graph
+#
+# CPU  DURATION                  FUNCTION CALLS
+# |     |   |                     |   |   |   |
+  0) ! 175.411 us  |  do_mount();
+----
+
+通过 function_graph tracer，还可以让我们看到每个函数里所有子函数的调用以及时间，这对我们理解和分析内核行为都是很有帮助的。
+
+比如说，我们想查看 kfree_skb() 这个函数是怎么执行的，就可以像下面这样配置：
+
+[source, bash]
+----
+# echo '!do_mount ' >> set_ftrace_filter ### 先把之前的do_mount filter给去掉。
+# echo kfree_skb > set_graph_function  ### 设置kfree_skb()
+# echo nop > current_tracer ### 暂时把current_tracer设置为nop, 这样可以清空trace
+# echo function_graph > current_tracer ### 把current_tracer设置为function_graph
+----
+
+下面这张图描述了 ftrace 实现的 high level 的架构，用户通过 tracefs 向内核中的 function tracer 发送命令，然后 function tracer 把收集到的数据写入一个 ring buffer，再通过 tracefs 输出给用户
+
+image::containerd/image-2025-02-18-20-09-28-448.png[]
+
+[source, bash]
+----
+# perf stat -a -e fs:do_sys_open -- sleep 10
+----
 
 
 
