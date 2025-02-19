@@ -1,0 +1,251 @@
+:toc:
+
+// 保证所有的目录层级都可以正常显示图片
+:path: linux/
+:imagesdir: ../image/
+
+// 只有book调用的时候才会走到这里
+ifdef::rootpath[]
+:imagesdir: {rootpath}{path}{imagesdir}
+endif::rootpath[]
+
+== perf
+
+- trace system calls faster than trace
+- profile your C, Go, C++, node.js, Rust, and Java/JVM programs really easily
+- trace or count almost `any` kernel event
+
+The perf system is split into 2 parts:
+
+- a program in userspace called perf
+- a system in the Linux kernel
+
+When you run perf record, perf stat, or perf top to get information about a program, here's what happens:
+
+- perf asks the kernel to collect information.
+
+image::../image/linux/image-2025-02-19-17-11-02-786.png[]
+
+- the kernel gets samples/traces/CPU counters from the programs perf asks about.
+- perf displays the data back to you in a (hopefully) useful way.
+
+=== 参数
+
+- `-F`: pic sample frequency
+- `-g`: record stack traces
+- `-p`: trace process
+- `-e`: choose events to record
+- `-a`: trace all processes
+- `-i`: input file
+- `-p`: specify a PID
+
+[source,bash]
+----
+# Sample CPUs at 49 Hertz, show top symbols:
+perf top -F 49
+# Sample CPUs, show top process names and segments:
+perf top -ns comm,dso
+# Count system calls by process, refreshing every 1 second:
+perf top -e raw_syscalls:sys_enter -ns comm -d 1
+# Count sent network packets by process, rolling output:
+stdbuf -oL perf top -e net:net_dev_xmit -ns comm | strings
+
+# *perf stat counteventsFCPUcounters9*
+# CPU counter statistics for COMMAND:
+perf stat COMMAND
+# *Detailed* CPU counter statistics for COMMAND:
+perf stat -ddd command
+# Count system calls for PID, until Ctrl-C:
+perf stat -e 'syscalls:sys_enter_*' -p PID
+# Count block device I/O events for the entire system, for 10
+seconds:
+perf stat -e 'block:*' -a sleep 10
+
+
+# *Reporting*
+# Show perf.data in an ncurses browser:
+perf report
+# Show perf.data as a text report:
+perf report --stdio
+# List all events from perf.data:
+perf script
+# Annotate assembly instructions from perf.data
+# with percentages
+perf annotate [--stdio]
+
+# *perf trace trace system calls otherevents*
+# Trace syscalls system wide
+perf trace
+# Trace syscalls for PID
+perf trace -p PID
+
+# *perf record record profiling data*
+# Sample CPU functions for COMMAND at 99 Hertz:
+perf record -F 99 COMMAND
+# Sample CPU functions for PID, until Ctrl-C:
+perf record -p PID
+# Sample CPU functions for PID, for 10 seconds:
+perf record -p PID sleep 10
+# Sample CPU stack traces for PID, for 10 seconds:
+perf record -p PID -g -- sleep 10
+# Sample CPU stack traces for PID, using DWARF to unwind stack:
+perf record -p PID --call-graph dwarf
+
+# *perfrecord record tracing data*
+# Trace new processes, until Ctrl-C:
+perf record -e sched:sched_process_exec -a
+# Trace all context switches, until Ctrl-C:
+perf record -e context-switches -a
+# Trace all context switches with stack traces, for 10 seconds: 上下文切换是指从一个进程或线程切换到另一个的过程，特别是针对高性能的应用，非常有用
+perf record -e context-switches -ag -- sleep 10
+# Trace all page faults with stack traces, until Ctrl-C: 缓存未命中，对文件经常读写时会用到
+perf record -e page-faults -ag
+
+# *adding new trace events*
+# Add a tracepoint for kernel function tcp_sendmsg():
+perf probe 'tcp_sendmsg'
+# Trace previously created probe:
+perf record -e probe:tcp_sendmsg -a
+# Add a tracepoint for myfunc() and include the retval as a string:
+perf probe 'myfunc%return +0($retval):string'
+# Trace previous probe when size > 0:
+perf record -e probe:tcp_sendmsg --filter 'size > 0' -a
+# Add a tracepoint for do_sys_open() with the filename as a string:
+perf probe 'do_sys_open filename:string'
+----
+
+=== pef top
+
+使用top命令，你能看出进程占用的CPU百分比，使用perf top你能看出函数占用cpu的情况。
+
+如果你想知道具体哪个函数占用CPU，使用 `perf top` 命令来查看。
+
+[source,bash]
+----
+# perf top
+Samples: 36K of event 'cycles:P', 4000 Hz, Event count (approx.): 12219433698 lost: 0/0 drop: 0/0
+Overhead  Shared Object                          Symbol
+   1.93%  perf                                   [.] __symbols__insert
+   1.72%  perf                                   [.] rb_next
+   1.48%  [kernel]                               [k] __update_blocked_fair
+   0.94%  perf                                   [.] kallsyms__parse
+   0.86%  [kernel]                               [k] module_get_kallsym
+   0.67%  [kernel]                               [k] kallsyms_expand_symbol.constprop.0
+   0.61%  [kernel]                               [k] memcpy_erms
+   0.61%  [kernel]                               [k] vsnprintf
+   ...
+----
+
+以第一行为例：
+
+- 1.93% : CPU使用百分比
+- [./k] : 用户态/内核态
+- __symbols__insert ： 符号或函数名
+
+
+=== perf record
+
+和top命令一样，perf record命令只是能让你有个对整体状况有个了解，想要深入挖掘，需要使用perf report命令。
+
+perf record和perf top收集的信息一样，但是perf record会将收集的信息perf.data保存在当前目录，后面有需要的时候可以进行分析。
+
+- perf record [COMMAND] : 运行命令，知道命令退出
+- perf record PID : 监控指定进程，知道CTRL+C退出
+- perf record -a : 监控所有进程，知道CTRL+C退出
+
+当然perf也能够支持定时任务，比如：
+
+[source,bash]
+----
+# 监控 pid 为 8325 的进程，5秒后退出
+perf record -p 8325 sleep 5
+----
+
+如果你不是很确定是那个函数导致的问题，可以使用 `-e` 参数指定事件，然后使用模糊匹配来监控所有相关的函数
+
+[source,bash]
+----
+# 监控网络相关的函数
+sudo perf record -e 'net:*' -ag -- sleep 60
+# 监控系统调用相关函数， -g表示收集函数调用栈
+perf record -e syscalls:sys_enter_connect -ag
+----
+
+如果只是从函数还是不能断定到底哪里出现了问题，可以在perf record之后，使用perf annotate命令来具体看下哪条指令占用的时间比较久，perf annotate会自动将对应函数进行反汇编。
+
+[source,bash]
+----
+# 默认会使用当前目录下的perf.data文件
+perf annotate
+# 也可以使用-i 指定perf.data文件
+perf annotate -i perf.data
+----
+
+如果你嫌弃perf.data可读性差，可以使用 perf script命令将perf.data转化为可读性高的文本。
+
+[source,bash]
+----
+perf script > performance.txt
+----
+
+当然了一图胜千言，如果你想以图形的方式来查看，可以使用Flamegraph，地址为：`github.com/brendangregg/Flamegraph`
+
+[source,bash]
+----
+sudo perf script | stackcollapse-perf.pl | flamegraph.pl > graph.svg
+----
+
+=== perf stat CPU counters
+
+If you're writing high-performance programs, there  are a lot of CPU/hardware-level events you might be interested in counting:
+
+- L1 cache hits/misses
+- instructions per cycle
+- page faults
+- branch prediction misses
+- CPU  cycles
+- TLB misses
+
+最后，千万不要忘记man手册
+
+[source,bash]
+----
+# man 中对perf的子命令也进行了收录
+man perf stat
+man perf record
+man perf report
+man perf trace
+man perf top
+----
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
