@@ -1,0 +1,932 @@
+:toc:
+
+// 保证所有的目录层级都可以正常显示图片
+:path: eBPF/
+:imagesdir: ../image/
+
+// 只有book调用的时候才会走到这里
+ifdef::rootpath[]
+:imagesdir: {rootpath}{path}{imagesdir}
+endif::rootpath[]
+
+== bcc
+
+=== 命令
+
+安装bcc之后在目录/usr/share/bcc/tools下有各种命令
+
+==== argdist
+
+argdist 是一个强大的性能分析和调试工具，它允许用户探测指定的函数，并收集参数值到直方图或频率计数中。这使得开发者无需附加调试器即可理解特定参数值的分布情况、过滤并打印出感兴趣的参数值，以及获取关于各种函数的一般执行统计信息。这种功能特别适用于那些希望在不中断程序正常运行的情况下监控函数调用及其参数的应用场景。
+
+[source,bash]
+----
+# ./argdist -c -H 'p:c:write(int fd, void *buf, size_t len):size_t:len'
+[01:45:22]
+p:c:write(int fd, void *buf, size_t len):size_t:len
+     len                 : count     distribution
+         0 -> 1          : 0        |                                        |
+         2 -> 3          : 2        |*************                           |
+         4 -> 7          : 0        |                                        |
+         8 -> 15         : 2        |*************                           |
+        16 -> 31         : 0        |                                        |
+        32 -> 63         : 6        |****************************************|
+[01:45:23]
+----
+
+能以直方图的形式将函数的返回值进行统计
+
+==== bashreadline
+
+用于从系统上所有正在运行的 Bash shell 中读取命令。这对于调试、审计或学习如何使用这些技术非常有用。运行之后系统任何地方调用bash这里都能收到执行的命令。
+
+[source,bash]
+----
+# ./bashreadline
+TIME      PID    COMMAND
+05:28:25  21176  ls -l
+05:28:28  21176  date
+----
+
+==== bindsnoop
+
+监听系统上哪些端口被绑定了
+
+==== biolatency
+
+用于显示块设备I/O的延迟，结果以直方图的形式展示
+
+[source,bash]
+----
+# ./biolatency
+Tracing block device I/O... Hit Ctrl-C to end.
+^C
+     usecs           : count     distribution
+       0 -> 1        : 0        |                                      |
+       2 -> 3        : 0        |                                      |
+       4 -> 7        : 0        |                                      |
+       8 -> 15       : 0        |                                      |
+      16 -> 31       : 0        |                                      |
+      32 -> 63       : 0        |                                      |
+      64 -> 127      : 1        |                                      |
+----
+
+==== biolatpcts
+
+追踪块设备 I/O（即磁盘 I/O），并按 I/O 类型打印延迟百分位数。这对于分析磁盘性能瓶颈、了解不同类型的 I/O 操作（如读、写等）的延迟分布非常有用。
+
+[source,bash]
+----
+# ./biolatpcts.py /dev/nvme0n1
+nvme0n1    p1    p5   p10   p16   p25   p50   p75   p84   p90   p95   p99  p100
+read     95us 175us 305us 515us 895us 985us 995us 1.5ms 2.5ms 3.5ms 4.5ms  10ms
+write     5us   5us   5us  15us  25us 135us 765us 855us 885us 895us 965us 1.5ms
+discard   5us   5us   5us   5us 135us 145us 165us 205us 385us 875us 1.5ms 2.5ms
+flush     5us   5us   5us   5us   5us   5us   5us   5us   5us 1.5ms 4.5ms 5.5ms
+----
+
+==== biopattern
+
+用于识别磁盘访问模式（如随机访问和顺序访问）。这对于理解应用程序如何与存储交互、优化数据库或文件系统性能特别有用。通过分析 I/O 模式，可以做出更好的决策来提高系统的整体性能。
+
+[source,bash]
+----
+# ./biopattern.py
+TIME      DISK     %RND  %SEQ    COUNT     KBYTES
+22:03:51  vdb         0    99      788       3184
+22:03:51  Unknown     0   100        4          0
+----
+
+特别是开发数据库或者消息队列这种需要经常进行存储的产品
+
+==== biosnoop
+
+用于追踪块设备 I/O（即磁盘 I/O），并为每次 I/O 操作打印一行输出。这对于分析磁盘性能、识别慢速 I/O 操作以及了解系统中磁盘活动的具体细节非常有用。
+
+==== biotop
+
+用于实时显示哪些进程正在进行磁盘 I/O 操作。它类似于 top 命令，但专门针对磁盘 I/O 进行了优化，能够帮助用户识别出系统中占用大量磁盘资源的进程。
+
+==== bitesize
+
+旨在显示按进程名称划分的请求块大小的 I/O 分布。这对于理解不同应用程序如何执行磁盘 I/O 操作以及这些操作的块大小分布非常有用。通过分析块大小分布，可以帮助优化存储系统配置或应用程序性能。
+
+[source,bash]
+----
+# ./bitesize.py
+Tracing... Hit Ctrl-C to end.
+^C
+
+Process Name = 'kworker/u128:1'
+     Kbytes              : count     distribution
+         0 -> 1          : 1        |********************                    |
+         2 -> 3          : 0        |                                        |
+         4 -> 7          : 2        |****************************************|
+----
+
+能够通过直方图清晰的看到对应进程使用磁盘块的大小情况，如果有io性能问题可以作为参考依据
+
+==== bpflist
+
+bpflist 是一个用于显示当前在系统上运行的 BPF（Berkeley Packet Filter）程序信息的工具。它可以帮助你了解哪些 BPF 程序正在运行，并且还可以选择性地列出已打开的 kprobes 和 uprobes。这对于调试和监控基于 eBPF 的工具非常有用。
+
+[source,bash]
+----
+# bpflist
+PID    COMM             TYPE     COUNT
+4058   fileslower       prog     4
+4058   fileslower       map      2
+----
+
+==== btrfsdist
+
+btrfsdist 是一个基于 eBPF 和 bcc（BPF Compiler Collection）的工具，用于追踪 Btrfs 文件系统上的读取、写入、打开和同步（fsync）操作，并将其延迟汇总为2的幂次方直方图。这对于分析 Btrfs 文件系统的性能瓶颈特别有用，因为它可以帮助你了解这些操作的延迟分布情况。
+
+[source,bash]
+----
+# ./btrfsdist
+Tracing btrfs operation latency... Hit Ctrl-C to end.
+^C
+
+operation = 'read'
+     usecs               : count     distribution
+         0 -> 1          : 15       |                                        |
+         2 -> 3          : 1308     |*******                                 |
+         4 -> 7          : 198      |*                                       |
+         8 -> 15         : 0        |                                        |
+        16 -> 31         : 11       |                                        |
+        32 -> 63         : 361      |*                                       |
+        64 -> 127        : 55       |                                        |
+       128 -> 255        : 104      |                                        |
+       256 -> 511        : 7312     |****************************************|
+       512 -> 1023       : 387      |**                                      |
+      1024 -> 2047       : 10       |                                        |
+      2048 -> 4095       : 4        |                                        |
+
+operation = 'write'
+     usecs               : count     distribution
+         0 -> 1          : 0        |                                        |
+         2 -> 3          : 0        |                                        |
+         4 -> 7          : 0        |                                        |
+         8 -> 15         : 4        |****************************************|
+
+operation = 'open'
+     usecs               : count     distribution
+         0 -> 1          : 1        |**********                              |
+         2 -> 3          : 4        |****************************************|
+----
+
+==== cachestat
+
+用于捕获系统上缓存命中情况的信息统计，page cache的 hits和misses的情况
+
+[source,bash]
+----
+# cachestat
+    HITS   MISSES  DIRTIES HITRATIO   BUFFERS_MB  CACHED_MB
+    1132        0        4  100.00%          277       4367
+     161        0       36  100.00%          277       4372
+      16        0       28  100.00%          277       4372
+   17154    13750       15   55.51%          277       4422
+      19        0        1  100.00%          277       4422
+      83        0       83  100.00%          277       4421
+      16        0        1  100.00%          277       4423
+^C       0      -19      360    0.00%          277       4423
+Detaching...
+----
+
+==== cachetop
+
+cachetop 是一个非常有用的工具，它基于 eBPF 和 bcc（BPF Compiler Collection），可以实时显示 Linux 系统中每个进程的页面缓存（page cache）命中和未命中情况。它提供了一个类似 top 的界面，让你能够直观地看到各个进程的缓存性能，包括读取和写入操作的命中率。
+
+[source,bash]
+----
+# ./cachetop.py
+13:01:01 Buffers MB: 76 / Cached MB: 115 / Sort: HITS / Order: ascending
+PID      UID      CMD              HITS     MISSES   DIRTIES  READ_HIT%  WRITE_HIT%
+     544 messageb dbus-daemon             2        2        1      25.0%      50.0%
+     680 root     vminfo                  2        2        1      25.0%      50.0%
+     243 root     jbd2/dm-0-8             3        2        1      40.0%      40.0%
+----
+
+==== capable
+
+capable 是一个基于 eBPF 和 bcc（BPF Compiler Collection）的工具，用于追踪对内核 cap_capable() 函数的调用。这个函数负责执行安全权限检查，以确定某个进程是否具备执行特定操作所需的能力（capabilities）。通过使用 capable 工具，可以深入了解系统中哪些进程正在请求哪些权限，并且这些请求的结果是什么。
+
+[source,bash]
+----
+# ./capable.py
+TIME      UID    PID    COMM             CAP  NAME                 AUDIT
+22:11:23  114    2676   snmpd            12   CAP_NET_ADMIN        1
+22:11:23  0      6990   run              24   CAP_SYS_RESOURCE     1
+22:11:23  0      7003   chmod            3    CAP_FOWNER           1
+22:11:23  0      7003   chmod            4    CAP_FSETID           1
+22:11:23  0      7005   chmod            4    CAP_FSETID           1
+----
+
+==== compactsnoop
+
+compactsnoop 是一个基于 eBPF 和 bcc（BPF Compiler Collection）的工具，用于追踪整个系统的内存紧凑（compact zone）操作，并打印相关的详细信息。内存紧凑是 Linux 内核中的一种机制，旨在减少外部碎片并提高内存分配的效率。
+
+[source,bash]
+----
+# ./compactsnoop
+COMM           PID    NODE ZONE         ORDER MODE      LAT(ms)           STATUS
+zsh            23685  0    ZONE_DMA     -1    SYNC        0.025         complete
+zsh            23685  0    ZONE_DMA32   -1    SYNC        3.925         complete
+zsh            23685  0    ZONE_NORMAL  -1    SYNC      113.975         complete
+----
+
+==== cpudist
+
+cpudist 是一个基于 eBPF 和 BCC（BPF Compiler Collection）的工具，用于汇总任务在 CPU 上的时间，并以直方图的形式展示任务在被调度出 CPU 之前花费的时间长度。这有助于识别系统中的问题，如处理器过载、过多的上下文切换开销、工作负载分布不均等。
+
+[source,bash]
+----
+[root@k8smaster-ims tools]# ./cpudist
+Tracing on-CPU time... Hit Ctrl-C to end.
+^C
+     usecs               : count     distribution
+         0 -> 1          : 7        |                                        |
+         2 -> 3          : 30596    |******                                  |
+         4 -> 7          : 20443    |****                                    |
+         8 -> 15         : 184665   |****************************************|
+        16 -> 31         : 141411   |******************************          |
+        32 -> 63         : 43491    |*********                               |
+        64 -> 127        : 18057    |***                                     |
+       128 -> 255        : 6590     |*                                       |
+       256 -> 511        : 3002     |                                        |
+       512 -> 1023       : 1317     |                                        |
+      1024 -> 2047       : 833      |                                        |
+      2048 -> 4095       : 409      |                                        |
+      4096 -> 8191       : 71       |                                        |
+      8192 -> 16383      : 10       |                                        |
+     16384 -> 32767      : 4        |                                        |
+     32768 -> 65535      : 1        |                                        |
+     65536 -> 131071     : 1        |                                        |
+    131072 -> 262143     : 2        |                                        |
+    262144 -> 524287     : 1        |                                        |
+----
+
+usecs：微秒，表示时间区间，比如 0-1微秒区间调度的个数
+
+> 可以试验一下死锁的情况，(可能只有自旋锁才能一直占着CPU不丢)
+
+==== cpuunclaimed
+
+cpuunclaimed.py 是一个用于监控系统中 CPU 利用率的脚本，特别关注那些在有可用 CPU 时仍处于等待状态的线程。该工具通过采样 CPU 运行队列的长度来确定系统中是否存在空闲 CPU 同时又有线程在排队等待执行的情况，并报告未被利用的 CPU 百分比（即系统范围内空闲但未被排队线程使用的 CPU 的百分比）。
+
+[source,bash]
+----
+# ./cpuunclaimed.py
+Sampling run queues... Output every 1 seconds. Hit Ctrl-C to end.
+%CPU  83.00%, unclaimed idle 0.12%
+%CPU  87.25%, unclaimed idle 0.38%
+%CPU  85.00%, unclaimed idle 0.25%
+%CPU  85.00%, unclaimed idle 0.25%
+%CPU  80.88%, unclaimed idle 0.00%
+%CPU  82.25%, unclaimed idle 0.00%
+%CPU  83.50%, unclaimed idle 0.12%
+%CPU  81.50%, unclaimed idle 0.00%
+%CPU  81.38%, unclaimed idle 0.00%
+----
+
+系统运行在超过 80% 的 CPU 利用率下，且未被利用的空闲 CPU 小于 0.5%
+
+- %CPU：显示了当前时刻的 CPU 使用率。
+- unclaimed idle：显示了当前时刻未被利用的空闲 CPU 百分比。这表示有部分 CPU 核心处于空闲状态，但是由于某些原因（如 CPU 亲和性设置），这些核心没有被排队的任务使用。
+
+==== criticalstat
+
+criticalstat 是一个用于追踪和报告 Linux 内核中出现的原子临界区的工具，它通过有用的堆栈跟踪来展示这些临界区的来源。临界区通常由于使用自旋锁（spinlocks）、显式禁用中断或抢占（由驱动程序执行）而发生。在 Linux 中，IRQ 例程也执行时禁用中断。这些临界区是实时系统中导致长时间延迟或响应问题的一个常见原因。
+
+[source,bash]
+----
+# ./criticalstat
+Finding critical section with IRQ disabled for > 100us
+===================================
+TASK: kworker/u16:5 (pid  5903 tid  5903) Total Time: 194.427  us
+
+Section start: __schedule -> schedule
+Section end:   _raw_spin_unlock_irq -> finish_task_switch
+  trace_hardirqs_on+0xdc
+  trace_hardirqs_on+0xdc
+  _raw_spin_unlock_irq+0x18
+  finish_task_switch+0xf0
+  __schedule+0x8c8
+  preempt_schedule_irq+0x38
+  el1_preempt+0x8
+===================================
+----
+
+==== dbslower
+
+dbslower 是一个基于 eBPF 和 BCC（BPF Compiler Collection）的工具，用于追踪由 MySQL 或 PostgreSQL 数据库服务器处理的查询，并打印那些超过指定延迟（查询时间）阈值的查询。默认情况下，它使用的阈值是 1 毫秒。这个工具对于识别慢查询非常有用，可以帮助优化数据库性能。
+
+
+==== dbstat
+
+dbstat traces queries performed by a MySQL or PostgreSQL database process, and displays a histogram of query latencies. For example:
+
+[source,bash]
+----
+# dbstat mysql
+Tracing database queries for pids 25776 slower than 0 ms...
+     query latency (ms)  : count     distribution
+         0 -> 1          : 990      |****************************************|
+         2 -> 3          : 7        |                                        |
+         4 -> 7          : 0        |                                        |
+         8 -> 15         : 0        |                                        |
+        16 -> 31         : 0        |                                        |
+        32 -> 63         : 0        |                                        |
+        64 -> 127        : 0        |                                        |
+       128 -> 255        : 0        |                                        |
+       256 -> 511        : 0        |                                        |
+       512 -> 1023       : 0        |                                        |
+      1024 -> 2047       : 2        |                                        |
+^C
+----
+
+It's immediately evident that the vast majority of queries finish very quickly,
+in under 1ms, but there are some super-slow queries occasionally, in the 1-2
+seconds bucket.
+
+==== dcsnoop
+
+dcsnoop 是一个基于 eBPF 和 BCC（BPF Compiler Collection）的工具，用于追踪目录项缓存（dcache）查找。它可以帮助你进行比 dcstat(8) 更深入的调查，尤其是当需要了解文件系统元数据操作的具体行为时。由于 dcache 查找通常非常频繁，dcsnoop 的输出可能会比较冗长。默认情况下，它只显示失败的查找
+
+[source,bash]
+----
+# ("T" column: M == miss, R == reference),
+# ./dcsnoop.py
+TIME(s)     PID    COMM             T FILE
+0.002837    1643   snmpd            M net/dev
+0.002852    1643   snmpd            M 1643
+0.002856    1643   snmpd            M net
+0.002863    1643   snmpd            M dev
+0.002952    1643   snmpd            M net/if_inet6
+----
+
+==== dcstat
+
+dcstat 是一个用于显示目录项缓存（dcache）统计信息的工具。它提供了每秒引用次数（REFS/s）、使用较慢代码路径处理的请求数量（SLOW/s）、dcache 未命中次数（MISS/s）以及命中率百分比（HIT%）。默认情况下，该工具每秒输出一次统计数据。
+
+并不是目录不存在，而是对使用目录缓存时，是否命中目录缓存的统计心系 。
+
+[source,bash]
+----
+# ./dcstat
+TIME         REFS/s   SLOW/s   MISS/s     HIT%
+08:11:47:      2059      141       97    95.29
+08:11:48:     79974      151      106    99.87
+08:11:49:    192874      146      102    99.95
+08:11:50:      2051      144      100    95.12
+08:11:51:     73373    17239    17194    76.57
+08:11:52:     54685    25431    25387    53.58
+08:11:53:     18127     8182     8137    55.12
+08:11:54:     22517    10345    10301    54.25
+08:11:55:      7524     2881     2836    62.31
+08:11:56:      2067      141       97    95.31
+08:11:57:      2115      145      101    95.22
+----
+
+- TIME：时间戳，表示数据收集的时间点。
+- REFS/s：每秒对 dcache 的引用次数。
+- SLOW/s：每秒中需要走较慢代码路径处理的请求次数。
+- MISS/s：每秒中 dcache 未命中的次数。
+- HIT%：缓存命中率的百分比。
+
+==== deadlock
+
+用于检测运行中进程潜在死锁的工具。它通过在 pthread_mutex_lock 和 pthread_mutex_unlock 上附加 uprobes 来构建一个互斥等待有向图，并查找该图中的循环。如果存在循环，则表明存在锁顺序反转（即潜在的死锁）。以下是关于该工具的工作原理及其使用方法的详细说明。
+
+
+==== dirtop
+
+用于显示按目录划分的读写操作的工具。它可以帮助用户实时监控文件系统中各个目录的 I/O 活动情况，包括读取和写入的数量或频率。这对于识别哪些目录正在产生大量的磁盘 I/O 操作特别有用，有助于性能调优和故障排查。
+
+[source,bash]
+----
+# ./dirtop.py -d '/hdfs/uuid/*/yarn'
+Tracing... Output every 1 secs. Hit Ctrl-C to end
+
+14:28:12 loadavg: 25.00 22.85 21.22 31/2921 66450
+
+READS  WRITES R_Kb     W_Kb     PATH
+1030   2852   8        147341   /hdfs/uuid/c11da291-28de-4a77-873e-44bb452d238b/yarn
+3308   2459   10980    24893    /hdfs/uuid/bf829d08-1455-45b8-81fa-05c3303e8c45/yarn
+2227   7165   6484     11157    /hdfs/uuid/76dc0b77-e2fd-4476-818f-2b5c3c452396/yarn
+1985   9576   6431     6616     /hdfs/uuid/99c178d5-a209-4af2-8467-7382c7f03c1b/yarn
+1986   398    6474     6486     /hdfs/uuid/7d512fe7-b20d-464c-a75a-dbf8b687ee1c/yarn
+----
+
+比如你有一个程序，需要确定具体目录里面对I/O的占用，这样就能按照目录来决定具体是那部分代码导致的I/O比较高了。
+
+
+==== drsnoop
+
+drsnoop 是一个用于追踪系统范围内直接回收（direct reclaim）事件的工具，并打印出相关的详细信息。直接回收发生在系统内存不足时，内核需要从用户态进程那里回收页面以满足新的内存分配请求。通过 drsnoop，可以监控哪些进程触发了直接回收、它们花费的时间以及回收了多少页面等信息。
+
+[source,bash]
+----
+# ./drsnoop
+COMM           PID     LAT(ms) PAGES
+summond        17678      0.19   143
+summond        17669      0.55   313
+summond        17669      0.15   145
+summond        17669      0.27   237
+----
+
+可以用来作为内存不足的提前预警，如果大量出现说明内存已经成为限制因素。
+
+==== execsnoop
+
+execsnoop 是一个用于追踪新进程创建的工具，它通过监控 execve() 系统调用来捕获新进程的启动情况。这对于了解系统中哪些命令被执行、它们的参数是什么以及执行的结果如何非常有用。例如，当你运行 man ls 命令时，execsnoop 可以显示该命令及其子命令的详细信息。
+
+[source,bash]
+----
+# ./execsnoop
+COMM             PID    RET ARGS
+bash             15887    0 /usr/bin/man ls
+preconv          15894    0 /usr/bin/preconv -e UTF-8
+man              15896    0 /usr/bin/tbl
+man              15897    0 /usr/bin/nroff -mandoc -rLL=169n -rLT=169n -Tutf8
+man              15898    0 /usr/bin/pager -s
+nroff            15900    0 /usr/bin/locale charmap
+----
+
+当有个CPU使用很满，但是使用top又看不出是那个进程导致，有可能是因为启动的子进程比较耗CPU但是启动之后子进程又会快速退出导致的这个时候就可以用这个工具。
+
+==== exitsnoop
+
+exitsnoop 是一个用于追踪所有进程终止及其原因的Linux工具。它通过BPF（Berkeley Packet Filter）技术实现，需要 CAP_SYS_ADMIN 权限，因此通常需要用 sudo 来调用。该工具通过监听内核文件 kernel/exit.c 中的 sched_process_exit 跟踪点来捕获进程退出事件，包括由 root 和其他用户启动的进程、容器内的进程以及变为僵尸状态的进程。
+
+[source,bash]
+----
+./exitsnoop.py > exitlog
+PCOMM            PID    PPID   TID    AGE(s)  EXIT_CODE
+sleep            19004  19003  19004  1.65    0
+bash             19003  17656  19003  1.65    code 65
+sleep            19007  19006  19007  1.70    0
+bash             19006  17656  19006  1.70    code 70
+sleep            19010  19009  19010  1.75    0
+bash             19009  17656  19009  1.75    code 75
+sleep            19014  19013  19014  0.23    signal 2 (INT)
+bash             19013  17656  19013  0.23    signal 2 (INT)
+----
+
+==== ext4dist
+
+ext4dist 是一个用于追踪 ext4 文件系统操作（如读取、写入、打开和同步）并将其延迟汇总为以2的幂为间隔的直方图的工具。它可以帮助用户了解这些文件系统操作的延迟分布情况，从而对性能瓶颈进行诊断
+
+[source,bash]
+----
+# ./ext4dist
+Tracing ext4 operation latency... Hit Ctrl-C to end.
+^C
+
+operation = 'read'
+     usecs               : count     distribution
+         0 -> 1          : 1210     |****************************************|
+         2 -> 3          : 126      |****                                    |
+         4 -> 7          : 376      |************                            |
+         8 -> 15         : 86       |**                                      |
+        16 -> 31         : 9        |                                        |
+        32 -> 63         : 47       |*                                       |
+        64 -> 127        : 6        |                                        |
+       128 -> 255        : 24       |                                        |
+       256 -> 511        : 137      |****                                    |
+       512 -> 1023       : 66       |**                                      |
+      1024 -> 2047       : 13       |                                        |
+      2048 -> 4095       : 7        |                                        |
+      4096 -> 8191       : 13       |                                        |
+      8192 -> 16383      : 3        |                                        |
+
+operation = 'write'
+     usecs               : count     distribution
+         0 -> 1          : 0        |                                        |
+         2 -> 3          : 0        |                                        |
+         4 -> 7          : 0        |                                        |
+         8 -> 15         : 75       |****************************************|
+        16 -> 31         : 5        |**                                      |
+
+operation = 'open'
+     usecs               : count     distribution
+         0 -> 1          : 1278     |****************************************|
+         2 -> 3          : 40       |*                                       |
+         4 -> 7          : 4        |                                        |
+         8 -> 15         : 1        |                                        |
+        16 -> 31         : 1        |                                        |
+----
+
+分析ext4文件系统的读写性能。
+
+==== ext4slower
+
+ext4slower 是一个用于显示慢于指定阈值的 ext4 文件系统操作（如读取、写入、打开和同步）的工具。它可以帮助识别哪些文件系统操作导致了较高的延迟
+
+[source,bash]
+----
+# 慢于1ms的 ext4操作
+# ./ext4slower 1
+# ./ext4slower
+Tracing ext4 operations slower than 10 ms
+TIME     COMM           PID    T BYTES   OFF_KB   LAT(ms) FILENAME
+06:35:01 cron           16464  R 1249    0          16.05 common-auth
+06:35:01 cron           16463  R 1249    0          16.04 common-auth
+06:35:01 cron           16465  R 1249    0          16.03 common-auth
+06:35:01 cron           16465  R 4096    0          10.62 login.defs
+----
+
+用来查看慢于指定阈值的 ext4 文件系统操作
+
+
+==== filegone
+
+用来查看文件是否被删除或重命名
+
+[source,bash]
+----
+# ./filegone
+18:30:56 22905   vim               DELETE .fstab.swpx
+18:30:56 22905   vim               DELETE .fstab.swp
+18:31:00 22905   vim               DELETE .viminfo
+18:31:00 22905   vim               RENAME .viminfo.tmp > .viminfo
+18:31:00 22905   vim               DELETE .fstab.swp
+----
+
+==== filelive
+
+filelive用来捕获那些存活时间短 `short-lived` 的文件，其实只要在捕获期间创建但是没有删除的文件都会被捕获。
+
+[source,bash]
+----
+# ./filelife
+TIME     PID    COMM             AGE(s)  FILE
+05:57:59 8556   gcc              0.04    ccCB5EDe.s
+05:57:59 8560   rm               0.02    .entry_64.o.d
+05:57:59 8563   gcc              0.02    cc5UFHXf.s
+05:57:59 8567   rm               0.01    .thunk_64.o.d
+05:57:59 8578   rm               0.02    .syscall_64.o.d
+05:58:00 8589   rm               0.03    .common.o.d
+05:58:00 8596   rm               0.01    .8592.tmp
+05:58:00 8601   rm               0.01    .8597.tmp
+----
+
+==== fileslower
+
+fileslower 是一个用于显示基于文件的同步读写操作，并且仅显示那些延迟超过指定阈值的操作的工具。它帮助识别哪些文件 I/O 操作导致了较高的延迟，从而有助于性能调优和故障排查。如果不指定默认捕获所有的同步读写操作，注意是同步读写，默认情况下read writer 是异步的，所以不会被捕获。
+
+[source,bash]
+----
+# ./fileslower 1
+Tracing sync read/writes slower than 1 ms
+TIME(s)  COMM           PID    D BYTES   LAT(ms) FILENAME
+0.000    randread.pl    6925   R 8192       1.06 data1
+0.082    randread.pl    6925   R 8192       2.42 data1
+0.116    randread.pl    6925   R 8192       1.78 data1
+----
+
+
+==== filetop
+
+filetop 是一个用于显示按文件分类的读写操作，并提供进程详细信息的工具。它可以帮助用户了解哪些文件正在被读写、由哪个进程进行操作及其读写量，这对于分析系统性能和排查问题非常有用。
+
+[source,bash]
+----
+# ./filetop -C
+Tracing... Output every 1 secs. Hit Ctrl-C to end
+
+08:00:23 loadavg: 0.91 0.33 0.23 3/286 26635
+
+PID    COMM             READS  WRITES R_Kb    W_Kb    T FILE
+26628  ld               161    186    643     152     R built-in.o
+26634  cc1              1      0      200     0       R autoconf.h
+26618  cc1              1      0      200     0       R autoconf.h
+26634  cc1              12     0      192     0       R tracepoint.h
+26584  cc1              2      0      143     0       R mm.h
+26634  cc1              2      0      143     0       R mm.h
+26631  make             34     0      136     0       R auto.conf
+26634  cc1              1      0      98      0       R fs.h
+26584  cc1              1      0      98      0       R fs.h
+----
+
+可以查看对具体哪个文件的读写比较大。
+
+==== funccount
+
+funccount 是一个用于追踪符合指定模式的函数、跟踪点或USDT探针的程序，并在按下 Ctrl-C 时打印出这些追踪点的调用次数汇总。它对于性能分析和系统行为理解非常有用，可以快速了解哪些函数被调用了多少次。
+
+[source,bash]
+----
+# ./funccount 'vfs_*'
+Tracing... Ctrl-C to end.
+^C
+FUNC                          COUNT
+vfs_create                        1
+vfs_rename                        1
+vfs_fsync_range                   2
+vfs_lock_file                    30
+vfs_fstatat                     152
+vfs_fstat                       154
+vfs_write                       166
+vfs_getattr_nosec               262
+vfs_getattr                     262
+vfs_open                        264
+vfs_read                        470
+Detaching...
+----
+
+==== funcinterval
+
+funcinterval 是一个基于 eBPF/bcc 的工具，用于分析特定函数调用之间的时间间隔分布。与 funclatency 不同，后者关注的是函数执行的延迟时间，而 funcinterval 则专注于函数调用之间的时间间隔。这对于性能调试特别有用，尤其是在硬件和软件交互场景下，例如 USB 控制器的操作等。
+
+[source,bash]
+----
+# ./funcinterval xhci_ring_ep_doorbell -d 2 -u
+Tracing 1 functions for "xhci_ring_ep_doorbell"... Hit Ctrl-C to end.
+
+     usecs               : count     distribution
+         0 -> 1          : 0        |                                        |
+         2 -> 3          : 0        |                                        |
+         4 -> 7          : 0        |                                        |
+         8 -> 15         : 0        |                                        |
+        16 -> 31         : 0        |                                        |
+        32 -> 63         : 134      |                                        |
+        64 -> 127        : 2862     |********************                    |
+       128 -> 255        : 5552     |****************************************|
+       256 -> 511        : 216      |*                                       |
+       512 -> 1023       : 2        |                                        |
+Detaching...
+----
+
+==== funclatency
+
+funclatency 是一个用于测量内核函数执行时间（延迟）的工具，通过跟踪函数进入和返回的时间戳来计算函数调用的时间消耗。它使用 eBPF 和 kprobes/kretprobes 技术动态地追踪指定函数，并提供其延迟分布的直方图，这对于性能分析非常有用。
+
+[source,bash]
+----
+[root@k8smaster-ims tools]# ./funclatency -u vfs_read
+Tracing 1 functions for "vfs_read"... Hit Ctrl-C to end.
+^C
+     usecs               : count     distribution
+         0 -> 1          : 23872    |******************                      |
+         2 -> 3          : 19679    |***************                         |
+         4 -> 7          : 51444    |****************************************|
+         8 -> 15         : 11378    |********                                |
+        16 -> 31         : 8736     |******                                  |
+        32 -> 63         : 2473     |*                                       |
+        64 -> 127        : 969      |                                        |
+       128 -> 255        : 381      |                                        |
+       256 -> 511        : 87       |                                        |
+       512 -> 1023       : 83       |                                        |
+      1024 -> 2047       : 203      |                                        |
+      2048 -> 4095       : 73       |                                        |
+      4096 -> 8191       : 33       |                                        |
+      8192 -> 16383      : 12       |                                        |
+     16384 -> 32767      : 3        |                                        |
+     32768 -> 65535      : 2        |                                        |
+     65536 -> 131071     : 3        |                                        |
+    131072 -> 262143     : 2        |                                        |
+    262144 -> 524287     : 5        |                                        |
+    524288 -> 1048575    : 0        |                                        |
+   1048576 -> 2097151    : 2        |                                        |
+   2097152 -> 4194303    : 0        |                                        |
+   4194304 -> 8388607    : 0        |                                        |
+   8388608 -> 16777215   : 1        |                                        |
+
+avg = 140 usecs, total: 16807683 usecs, count: 119444
+
+Detaching...
+----
+
+==== funcslower
+
+funcslower 是一个用于追踪超过特定延迟阈值的内核或用户函数调用的工具。这对于当基于聚合的工具无法提供足够信息时，作为最后的诊断手段非常有用。它能够帮助识别那些执行时间较长的函数调用，从而可能发现性能瓶颈或异常行为。
+
+[source,bash]
+----
+# c:open c说明是libc中的函数，也就是C标准库中的函数，而不是内核中的函数
+# ./funcslower c:open -u 1
+Tracing function calls slower than 1 us... Ctrl+C to quit.
+COMM           PID    LAT(us)             RVAL FUNC
+less           27074    33.77                3 c:open
+less           27074     9.96 ffffffffffffffff c:open
+less           27074     5.92 ffffffffffffffff c:open
+less           27074    15.88 ffffffffffffffff c:open
+less           27074     8.89                3 c:open
+less           27074    15.89                3 c:open
+sh             27075    20.97                4 c:open
+bash           27075    20.14                4 c:open
+lesspipe.sh    27075    18.77                4 c:open
+lesspipe.sh    27075    11.21                4 c:open
+lesspipe.sh    27075    13.68                4 c:open
+file           27076    14.83 ffffffffffffffff c:open
+file           27076     8.02                4 c:open
+file           27076    10.26                4 c:open
+file           27076     6.55                4 c:open
+less           27074    11.67                4 c:open
+----
+
+====  gethostlatency
+
+gethostlatency 工具用于追踪主机名查找调用（如 getaddrinfo()、gethostbyname() 和 gethostbyname2()），并显示执行查找的进程ID（PID）、命令、调用的延迟（持续时间，以毫秒为单位）以及主机字符串。这有助于了解网络请求中的DNS解析性能和识别潜在的问题。
+
+[source,bash]
+----
+# ./gethostlatency
+TIME      PID    COMM          LATms HOST
+06:10:24  28011  wget          90.00 www.iovisor.org
+06:10:28  28127  wget           0.00 www.iovisor.org
+06:10:41  28404  wget           9.00 www.netflix.com
+06:10:48  28544  curl          35.00 www.netflix.com.au
+06:11:10  29054  curl          31.00 www.plumgrid.com
+06:11:16  29195  curl           3.00 www.facebook.com
+06:11:25  29404  curl          72.00 foo
+06:11:28  29475  curl           1.00 foo
+----
+
+==== hardirqs
+
+捕获到硬中断事件，并显示其名称和总执行时间（以微秒为单位）。
+
+[source, bash]
+----
+# ./hardirqs
+Tracing hard irq event time... Hit Ctrl-C to end.
+^C
+HARDIRQ                    TOTAL_usecs
+eth0                             11441
+resched2                          1750
+timer0                            1558
+resched1                          1048
+timer4                             943
+timer2                             746
+timer6                             679
+timer1                             529
+timer5                             474
+----
+
+==== inject
+
+inject.py 是一个用于在特定调用链和可选谓词条件下，保证指定注入模式（如 kmalloc, bio 等）错误返回的工具。它允许用户模拟内核函数的失败情况，以测试系统的健壮性和调试目的。以
+
+`inject.py` 是一个用于在特定调用链和可选谓词条件下，保证指定注入模式（如 `kmalloc`, `bio` 等）错误返回的工具。它允许用户模拟内核函数的失败情况，以测试系统的健壮性和调试目的。以下是一些使用示例及其解释：
+
+===== 基本用法
+
+失败所有挂载操作
+
+如果你想让所有的挂载操作失败（从4.17版本开始可以直接失败系统调用），可以使用如下命令：
+
+```bash
+# ./inject.py kmalloc -v 'SyS_mount()'
+```
+
+- 第一个参数 `kmalloc` 表示要失败的操作类型。
+- `-v` 参数用于打印生成的BPF程序。
+- 注意，一些系统调用可能以 `SyS_xyz` 或 `sys_xyz` 的形式可用，这主要取决于系统调用的参数数量。
+
+执行此命令后，尝试挂载任何文件系统都会因内存分配失败而报告错误。
+
+使用谓词
+
+显式添加谓词
+
+上述例子等价于显式地写出谓词 `(true)`：
+
+[source,bash]
+----
+# ./inject.py kmalloc -v '(true) => SyS_mount()(true)'
+----
+
+这里，`(true)` 作为错误注入机制当前模式的谓词。
+
+特定条件下的失败
+
+假设你只想让从 `btrfs_mount()` 调用的 `mount_subtree()` 函数中的 `kmalloc` 失败，即仅让 btrfs 挂载失败：
+
+[source,bash]
+----
+# ./inject.py kmalloc -v 'mount_subtree() => btrfs_mount()'
+----
+
+这样，只有当从 `btrfs_mount()` 调用 `mount_subtree()` 时，`kmalloc` 才会失败，其他文件系统的挂载不受影响。
+
+===== 更复杂的用例
+
+触发BUG_ON
+假设你想触发 `fs/btrfs/volumes.c:1002` 中的 `BUG_ON`，可以通过以下方式：
+
+[source,bash]
+----
+# ./inject.py kmalloc -v 'btrfs_alloc_device() => btrfs_close_devices()'
+----
+执行此命令并进行 btrfs 文件系统的挂载和卸载操作会导致段错误，因为满足了指定的调用路径。
+
+根据函数参数区分调用
+
+对于频繁遍历的路径，可以通过函数参数来区分不同的调用。例如，想要让名称为 "bananas" 的 dentry 分配失败：
+
+[source,bash]
+----
+# ./inject.py kmalloc -v 'd_alloc_parallel(struct dentry *parent, const struct qstr *name)(STRCMP(name->name, 'bananas'))'
+----
+
+此命令会使任何涉及名为 "bananas" 的文件的操作导致 dentry 分配失败。
+
+生物I/O请求的失败
+
+假设你想让对特定扇区的生物I/O请求失败（例如，使 btrfs 的超级块写入失败）：
+
+[source,bash]
+----
+# ./inject.py bio -v -I 'linux/blkdev.h' '(({struct gendisk *d = bio->bi_disk; struct disk_part_tbl *tbl = d->part_tbl; struct hd_struct **parts = (void *)tbl + sizeof(struct disk_part_tbl); struct hd_struct **partp = parts + bio->bi_partno; struct hd_struct *p = *partp; dev_t disk = p->__dev.devt; disk == MKDEV(254,16);}) && bio->bi_iter.bi_sector == 128)'
+----
+这个命令会根据给定的逻辑判断是否为 btrfs 文件系统的超级块写入，并且只针对扇区号为 128 的请求失败。
+
+注入概率
+
+如果你想让挂载失败的概率为1%，可以使用 `-P` 参数：
+
+[source,bash]
+----
+# ./inject.py kmalloc -v -P 0.01 'SyS_mount()'
+----
+
+==== killsnoop
+
+捕获通过 kill() 接口发起的信号
+
+[source,bash]
+----
+# ./killsnoop
+TIME      PID    COMM             SIG  TPID   RESULT
+12:10:51  13967  bash             9    13885  0
+12:11:34  13967  bash             9    1024   -3
+12:11:41  815    systemd-udevd    15   14076  0
+----
+
+==== klockstat
+
+klockstat.py 是一个基于 Linux eBPF/bcc 的工具，用于追踪内核互斥锁（mutex）的锁定事件，并显示锁的统计信息。它可以帮助开发者和系统管理员了解内核中不同部分获取和持有锁的行为，从而进行性能优化和问题排查。
+
+[source,bash]
+----
+# klockstat.py
+Tracing lock events... Hit Ctrl-C to end.
+^C
+                                  Caller   Avg Spin  Count   Max spin Total spin
+                      psi_avgs_work+0x2e       3675      5       5468      18379
+                     flush_to_ldisc+0x22       2833      2       4210       5667
+                       n_tty_write+0x30c       3914      1       3914       3914
+                               isig+0x5d       2390      1       2390       2390
+                   tty_buffer_flush+0x2a       1604      1       1604       1604
+                      commit_echoes+0x22       1400      1       1400       1400
+          n_tty_receive_buf_common+0x3b9       1399      1       1399       1399
+
+                                  Caller   Avg Hold  Count   Max hold Total hold
+                     flush_to_ldisc+0x22      42558      2      76135      85116
+                      psi_avgs_work+0x2e      14821      5      20446      74106
+          n_tty_receive_buf_common+0x3b9      12300      1      12300      12300
+                       n_tty_write+0x30c      10712      1      10712      10712
+                               isig+0x5d       3362      1       3362       3362
+                   tty_buffer_flush+0x2a       3078      1       3078       3078
+                      commit_echoes+0x22       3017      1       3017       3017
+----
+
+锁获取数据（Lock Acquiring Data）
+
+- Caller：正在获取互斥锁的符号或函数名称。
+- Average Spin：获取互斥锁所需的平均时间（纳秒）。
+- Count：该互斥锁被获取的次数。
+- Max spin：获取互斥锁所需的最大时间（纳秒）。
+- Total spin：总花费在获取该互斥锁上的时间（纳秒）。
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+=== 附录
+
+https://github.com/iovisor/bcc/search?q=bpf_probe_read_kernel_str+path%3Atools&type=Code[search /tools]
+
+
