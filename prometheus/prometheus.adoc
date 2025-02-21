@@ -1,0 +1,28 @@
+:toc:
+
+// 保证所有的目录层级都可以正常显示图片
+:path: eBPF/
+:imagesdir: ../image/
+
+// 只有book调用的时候才会走到这里
+ifdef::rootpath[]
+:imagesdir: {rootpath}{path}{imagesdir}
+endif::rootpath[]
+
+== Prometheus
+
+
+=== 基础知识
+
+==== 热加载更新配置
+
+Prometheus支持热加载更新配置，即在运行时，可以修改配置文件，然后触发配置的重新加载即可。
+
+[source,bash]
+----
+# 1. 向prometheus发送SIGHUP信号，实现配置的热加载
+kill -HUP <pid>
+# 2. 向prometheus发送POST请求到 /-/reload 来实现配置的热加载
+curl -X POST http://localhost:9090/-/reload
+----
+
