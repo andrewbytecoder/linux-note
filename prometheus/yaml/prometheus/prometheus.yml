@@ -36,7 +36,14 @@ scrape_configs:
         - https://www.baidu.com.com   # Target to probe with https.
         - localhost:3000 # grafana
     relabel_configs:
-      - source_labels: [__address__]
+      # keep：丢弃source_labels指定的值中没有匹配到regex正则表达式内容的target。
+      # drop：丢弃source_labels指定的值中匹配到regex正则表达式内容的target。
+      # hashmod：将多个source_labels的值进行hash，作为target标签的值。
+      # labelmap：针对所有标签名来匹配regex，然后将匹配的标签的值复制到replacement所指定的新标签中。
+      # labelkeep：针对所有标签名来匹配regex，任何不匹配的标签将从标签集中删除。
+      # labeldrop：针对所有标签来匹配regex，任何匹配的标签将从标签集中删除。
+      - action: keep  #
+        source_labels: [__address__]
         target_label: __param_target  # target_label 替换key值
       - source_labels: [__param_target]
         target_label: instance
