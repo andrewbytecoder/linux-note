@@ -12,8 +12,10 @@ metadata:
 spec:
   image: quay.io/prometheus/alertmanager:v0.28.0
   nodeSelector:
+    # 指定node应该运行在哪些节点上
     kubernetes.io/os: linux
   podMetadata:
+    # 为生成的pod添加额外的标签，上面的时基础模板标签
     labels:
       app.kubernetes.io/component: alert-router
       app.kubernetes.io/instance: main

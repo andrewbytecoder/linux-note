@@ -70,6 +70,11 @@ Alertmanager的抑制机制（Inhibition）是指，当某告警已经发出，�
 
 
 
+=== kube-prometheus
+
+
+
+
 
 
 

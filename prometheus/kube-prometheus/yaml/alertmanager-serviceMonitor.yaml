@@ -1,4 +1,5 @@
 apiVersion: monitoring.coreos.com/v1
+# 用来实现服务发现
 kind: ServiceMonitor
 metadata:
   labels:
@@ -12,10 +13,12 @@ metadata:
 spec:
   endpoints:
   - interval: 30s
+    # 通过端口名进行服务发现
     port: web
   - interval: 30s
     port: reloader-web
   selector:
+    # 选择需要符合标签的服务
     matchLabels:
       app.kubernetes.io/component: alert-router
       app.kubernetes.io/instance: main

@@ -12,6 +12,7 @@ metadata:
   name: alertmanager-main-rules
   namespace: monitoring
 spec:
+  # alertmanager 设置的一些prometheus报警规则
   groups:
   - name: alertmanager.rules
     rules:

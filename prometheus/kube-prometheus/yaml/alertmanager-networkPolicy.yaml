@@ -1,4 +1,5 @@
 apiVersion: networking.k8s.io/v1
+# 控制Pod的网络进出策略
 kind: NetworkPolicy
 metadata:
   labels:
@@ -10,8 +11,10 @@ metadata:
   name: alertmanager-main
   namespace: monitoring
 spec:
+  # 网络出口策略
   egress:
   - {}
+  # 网络进入策略
   ingress:
   - from:
     - podSelector:
@@ -31,6 +34,7 @@ spec:
       protocol: TCP
     - port: 9094
       protocol: UDP
+  # 这里的Pod是用来指定这个NetworkPolicy能控制哪些Pod，只有被选中的Pod才受该网络策略控制
   podSelector:
     matchLabels:
       app.kubernetes.io/component: alert-router

@@ -2,6 +2,7 @@ apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
   name: blackbox-exporter
+# 该Role含有的权限，通过ClusterRoleBinding之后就会赋予对应的User, Group, Service Account相应的权限
 rules:
 - apiGroups:
   - authentication.k8s.io

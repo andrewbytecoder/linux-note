@@ -1,4 +1,6 @@
 apiVersion: policy/v1
+# 类型为 PodDisruptionBudget (PDB)，属于 policy/v1 API 版本。
+# PDB 是 Kubernetes 中的一种资源，用于确保在自愿性干扰（如节点维护）下，指定数量的 Pod 副本仍然可用，从而保障应用的高可用性。
 kind: PodDisruptionBudget
 metadata:
   labels:
@@ -10,6 +12,7 @@ metadata:
   name: alertmanager-main
   namespace: monitoring
 spec:
+  # 至多只能有一个Pod不能使用
   maxUnavailable: 1
   selector:
     matchLabels:
