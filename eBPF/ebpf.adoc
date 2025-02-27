@@ -138,7 +138,7 @@ sudo bpftool prog list
 sudo bpftool prog dump xlated id 89
 
 # 第一部分，冒号前面的数字 0-12 ，代表 BPF 指令行数；
-# 第二部分，括号中的 16 进制数值，表示 BPF 指令码。它的具体含义你可以参考 IOVisorBPF 文档，比如第 0 行的 0xb7 表示为 64 位寄存器赋值。
+# 第二部分，括号中的 16 进制数值，表示 BPF 指令码。它的具体含义你可以参考 IOVisorBPF 文档，比如第 0 行的 0xb7 表示为 64 位寄存器赋值。
 # 第三部分，括号后面的部分，就是 BPF 指令的伪代码。
 int hello_world(void * ctx):
 ; int hello_world(void *ctx)
@@ -270,7 +270,7 @@ $ bpftool map dump id 386
 
 === 事件触发：各类 eBPF 程序的触发机制及其应用场景
 
-根据内核头文件 include/uapi/linux/bpf.h 中 bpf_prog_type 的定义，Linux 内核 v5.13 已
+根据内核头文件include/uapi/linux/bpf.h 中 bpf_prog_type 的定义，Linux 内核 v5.13 已
 经支持 30 种不同类型的 eBPF 程序。对于具体的内核来说，因为不同内核的版本和编译配置选项不同，一个内核并不会支持所有的程序类型。你可以在命令行中执行下面的命令，来查询当前系统支持的程序类型
 
 [source, bash]
@@ -474,7 +474,7 @@ sudo perf list [hw|sw|cache|tracepoint|pmu|sdt|metric|metricgroup]
 
 bpftrace 在 eBPF 和 BCC 之上构建了一个简化的跟踪语言，通过简单的几行脚本，就可以实现复杂的跟踪功能。并且，多行的跟踪指令也可以放到脚本文件中执行（脚本后缀通常为 .bt)
 
-bpftrace 会把你开发的脚本借助 BCC 编译加载到内核中执行，再通过 BPF 映射获取执行的结果
+bpftrace 会把你开发的脚本借助BCC编译加载到内核中执行，再通过 BPF 映射获取执行的结果
 
 image::eBPF/image-2025-02-11-17-30-37-703.png[]
 
@@ -490,7 +490,7 @@ sudo bpftrace -l 'tracepoint:syscalls:*'
 sudo bpftrace -l '*execve*'
 ----
 
-对于跟踪点来说，你还可以加上 -v 参数查询函数的入口参数或返回值。而由于内核函数属于不稳定的 API，在 bpftrace 中只能通过 arg0、arg1 这样的参数来访问，具体的参数格式还需要参考内核源代码。
+对于跟踪点来说，你还可以加上 -v 参数查询函数的入口参数或返回值。而由于内核函数属于不稳定的 API，在 bpftrace中只能通过 arg0、arg1 这样的参数来访问，具体的参数格式还需要参考内核源代码。
 
 [source, bash]
 ----

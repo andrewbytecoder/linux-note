@@ -1,8 +1,8 @@
 :toc:
 
 // 保证所有的目录层级都可以正常显示图片
-:path: study_journal/
-:imagesdir: ../image/
+:path: k8s/
+:imagesdir: ../image/k8s/
 
 // 只有book调用的时候才会走到这里
 ifdef::rootpath[]
@@ -438,11 +438,11 @@ kubectl create cm info --from-literal=k=v $out
 其运行结果如下：
 
 .eg ConfigMap data
-[source, yaml]
+[source,yaml]
 ----
 apiVersion: v1
 data:
-  k: v
+  k: "v"
 kind: ConfigMap
 metadata:
   creationTimestamp: null
@@ -530,19 +530,19 @@ spec:
             key: count
       - name: GREETING
         valueFrom:
-        configMapKeyRef:
-          name: info
-          key: greeting
+          configMapKeyRef:
+            name: info
+            key: greeting
       - name: USERNAME
         valueFrom:
-        secretKeyRef:
-          name: user
-          key: name
+          secretKeyRef:
+            name: user
+            key: name
       - name: PASSWORD
         valueFrom:
-        secretKeyRef:
-          name: user
-          key: pwd
+          secretKeyRef:
+            name: user
+            key: pwd
 
       image: busybox
       name: busy
@@ -803,6 +803,8 @@ Kubernetes的4个核心组件apiserver、etcd、scheduler、controller-manager�
 
 image::0347a0b3bae55fb9ef6c07469e964b74.png[]
 
+image::image-2025-02-26-16-11-17-130.png[]
+
 这里Service使用了iptables技术，每个节点上的kube-proxy组件自动维护iptables规则，客户不再关心Pod的具体地址，只要访问Service的固定IP地址，Service就会根据iptables规则转发请求给它管理的多个Pod，是典型的负载均衡架构。
 
 用命令 `kubectl api-resources` 查看它的基本信息，可以知道它的简称是 `svc`，apiVersion是 `v1`。 **注意，这说明它与Pod一样，属于Kubernetes的核心对象，不关联业务应用，与Job、Deployment是不同的。**
@@ -856,6 +858,24 @@ image::643cf4690a42f723732f9f150021fff9.png[]
 image::fyyebea67e4471aa53cb3a0e8ebe624a.jpg[]
 
 > HostPort（宿主机端口映射）是直接访问Pod不会进行负载均衡，但是NodePort Service会进行负载均衡，见: https://team.jiunile.com/blog/2020/11/k8s-cilium-service.html[k8s-service]
+
+
+=== 服务发现
+
+Kubernetes 通过以下方式来实现服务发现（ Service discovery）。
+
+- DNS（推荐）
+- 环境变量（绝对不推荐）
+
+基于 DNS 的服务发现需要 DNS 集群插件（ cluster-add-on） 它其实就是 Kubernetes的 DNS 原生服务的另一种说法。在其内部实现了以下功能。
+
+- 运行 DNS 服务的控制层 Pod。
+- 一个面向所有 Pod 的名为 kube-dns 的服务。
+- Kubelet 为每一个容器都注入了该 DNS（通过/etc/resolv.conf）
+
+这个 DNS 插件会持续监测 API Server 中新 Service 的动向，并且自动注册到 DNS 中。因此，每一个 Service 都有一个可以在整个集群范围内都能解析的 DNS 名称。另一种实现服务发现的方式是借助环境变量。每一个 Pod 中都有能够解析集群中所有Service 的一组环境变量。不过，这种方式极其受限，仅仅在不使用集群中的 DNS 服务时才会被考虑。
+
+关于环境变量方式的最大问题在于，环境变量只有在 Pod 最初创建的时候才会被注入。 这就意味着， Pod 在创建之后是并不知道新 Service 的。这种方式并不理想，也因此更加推荐 DNS 方式。
 
 
 
@@ -914,10 +934,10 @@ spec:
       - path: /
         pathType: Exact
         backend:
-        service:
-          name: ngx-svc
-          port:
-            number: 80
+          service:
+            name: ngx-svc
+            port:
+              number: 80
 ----
 
 [source,yaml]
