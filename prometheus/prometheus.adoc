@@ -25,6 +25,22 @@ TIP: 以下代码相关内容是参考的prometheus 3.0.1  2024-11-28
 
 === 基础知识
 
+==== prometheus pprof查看火焰图
+
+以下列举了prometheus支持的各种资源查看连接
+
+[source,bash]
+----
+# 将promehteus的当前情况生成火焰图
+go tool pprof -svg http://127.0.0.1:9090/debug/pprof/heap > bsvg
+# 1. 启动pprof服务
+go tool pprof -http=:8080 http://localhost:9090/debug/pprof/profile
+# 2. 访问http://localhost:8080/debug/pprof/profile查看火焰图
+# 3. 访问http://localhost:8080/debug/pprof/heap查看内存占用情况
+# 4. 访问http://localhost:8080/debug/pprof/goroutine查看goroutine情况
+# 5. 访问http://localhost:8080/debug/pprof/block查看阻塞情况
+----
+
 ==== 热加载更新配置
 
 Prometheus支持热加载更新配置，即在运行时，可以修改配置文件，然后触发配置的重新加载即可。
@@ -37,19 +53,12 @@ kill -HUP <pid>
 curl -X POST http://localhost:9090/-/reload
 ----
 
-
-
-
-
-
 - keep：丢弃source_labels指定的值中没有匹配到regex正则表达式内容的target。
 - drop：丢弃source_labels指定的值中匹配到regex正则表达式内容的target。
 - hashmod：将多个source_labels的值进行hash，作为target标签的值。
 - labelmap：针对所有标签名来匹配regex，然后将匹配的标签的值复制到replacement所指定的新标签中。
 - labelkeep：针对所有标签名来匹配regex，任何不匹配的标签将从标签集中删除。
 - labeldrop：针对所有标签来匹配regex，任何匹配的标签将从标签集中删除。
-
-
 
 
 === Alertmanager

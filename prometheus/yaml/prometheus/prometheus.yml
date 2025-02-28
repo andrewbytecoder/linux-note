@@ -1,5 +1,9 @@
 global:
   scrape_interval: 15s
+#  # 开启查询日志
+#  query_log_enabled: true
+#  # 查询日志文件路径，将日志写入指定的文件
+#  query_log_file: /opt/log/query_log_file.log
 
 rule_files:
   - /etc/prometheus/rules/alert.rules.yml
@@ -49,7 +53,6 @@ scrape_configs:
         target_label: instance
       - target_label: __address__
         replacement: localhost:9115  # replacement 替换内容，为value值
-
 
 alerting:
   alertmanagers:

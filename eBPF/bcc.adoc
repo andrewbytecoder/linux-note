@@ -1077,8 +1077,13 @@ nfsslower 是一个用于显示 NFS（网络文件系统）中读取、写入、
 
 这个程序用于展示线程被阻塞时的堆栈跟踪以及它们被阻塞的总时长。它通过追踪线程何时被阻塞以及何时返回CPU来实现，测量的是线程“离CPU”的时间（即“off-CPU时间”）和被阻塞时的堆栈跟踪及任务名称。该数据在内核中汇总，通过唯一堆栈跟踪和任务名称对阻塞时间进行求和。
 
+> 和profile形成互补，显示了线程在系统中花费的全部时间
+
+> offcputime -f 5 | ./flamegraph.pl --bgcolors=blue --title="off-CPU Time Flame Graph" > out.svg
+
 [source,bash]
 ----
+# 默认是用户态和内核态一起跟踪，指定-K参数只跟踪内核态
 # ./offcputime -K
 Tracing off-CPU time (us) of all threads by kernel stack... Hit Ctrl-C to end.
 ^C
@@ -1219,6 +1224,7 @@ Detaching...
 
 [source,bash]
 ----
+# ./profile -F 49 10
 # ./profile
 Sampling at 49 Hertz of all threads by user + kernel stack... Hit Ctrl-C to end.
 ^C

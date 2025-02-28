@@ -1,3 +1,4 @@
+version: '3.4'
 services:
   prometheus:
     image: prom/prometheus
@@ -5,11 +6,11 @@ services:
     volumes:
       - ./yaml/prometheus/:/etc/prometheus/
       - ./yaml/prometheus/rules/:/etc/prometheus/rules/
+      - /work/log:/opt/log/
     network_mode: host
     pid: host
     depends_on:
       - node_exporter
-
 
   alertmanager:
     image: prom/alertmanager
@@ -26,7 +27,6 @@ services:
       - '--path.rootfs=/host'
     network_mode: host
     pid: host
-    restart: unless-stopped
     volumes:
       - '/:/host:ro,rslave'
 
@@ -34,13 +34,11 @@ services:
     image: quay.io/prometheus/blackbox-exporter:latest
     container_name: blackbox_exporter
     command:
-      --config.file=/config/blackbox.yml
+      - --config.file=/config/blackbox.yml
     network_mode: host
     pid: host
-    restart: unless-stopped
     volumes:
       - ./yaml/blackbox/:/config
-
 
   grafana:
     image: grafana/grafana
@@ -51,4 +49,3 @@ services:
     pid: host
     depends_on:
       - prometheus
-
