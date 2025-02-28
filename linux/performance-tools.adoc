@@ -177,14 +177,6 @@ image::linux/image-2025-02-27-15-17-15-063.png[]
 
 image::linux/image-2025-02-27-15-23-07-550.png[]
 
-.观测工具
-image::linux/image-2025-02-27-15-31-07-239.png[]
-
-.静态工具分析
-image::linux/image-2025-02-27-15-32-21-502.png[]
-
-.追踪数据来源
-image::linux/image-2025-02-27-15-40-08-564.png[]
 
 *工具来源*
 
@@ -271,9 +263,32 @@ cmdline     dma        fs/             kcore       kpageflags   modules  schedst
 - **stat**: 内核和系统资源的统计，包括 CPU、磁盘、分页、交换区、进程。
 - **zoneinfo**: 内存区信息。
 
-=== `/sys`
 
-Linux还提供了一个名为 `/sys` 的文件系统，挂载在 `/sys` 目录下。
+=== 观测工具
+
+.观测工具
+image::linux/image-2025-02-27-15-31-07-239.png[]
+
+.静态工具分析
+image::linux/image-2025-02-27-15-32-21-502.png[]
+
+.追踪数据来源
+image::linux/image-2025-02-27-15-40-08-564.png[]
+
+==== sar 命令
+
+sar命令提供了对内核和设备非常广泛的覆盖，甚至对风扇也能进行观测，选项 `-m` (电源管理)
+
+.sar 命令覆盖范围
+image::linux/image-2025-02-28-19-28-53-811.png[]
+
+[source, bash]
+----
+# 1秒为时间间隔，采集5次TCP数据
+sar -n TCP 1 5
+----
+
+
 
 
 
