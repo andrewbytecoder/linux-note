@@ -288,6 +288,66 @@ image::linux/image-2025-02-28-19-28-53-811.png[]
 sar -n TCP 1 5
 ----
 
+==== strace
+
+strace命令是Linux中系统调用跟踪器，跟踪系统调用，为每个系统调用打印一行摘要信息。
+
+[source, bash]
+----
+# -ttt 打印第一列UNIX时间戳，单位秒，分辨率微秒
+# -T 打印最后一个字段（<time>）,即系统调用持续时间，单位秒，分辨率微秒
+# -p PID 跟踪的进程ID，也可指定为命令。 -f 跟踪子线程
+strace -ttt -T -p 18836
+# -c 选项可以对系统调用活动做一个汇总
+strace -c dd if=/dev/zero of=/dev/null bs=1M count=1024
+----
+
+*strace* 开销
+
+当前版本的strace通过linux ptrace接口采用基于断点的跟踪，这为所有系统调用的进入和返回设置了断点，这种侵入做法会使经常调用系统函数的应用程序性能下降一个数量级。
+
+[source, bash]
+----
+[root@localhost ~]# dd if=/dev/zero of=/dev/null bs=1k count=5000k
+5120000+0 records in
+5120000+0 records out
+5242880000 bytes (5.2 GB, 4.9 GiB) copied, 1.05875 s, 5.0 GB/s
+[root@localhost ~]# strace -c dd if=/dev/zero of=/dev/null bs=1k count=5000k
+5120000+0 records in
+5120000+0 records out
+5242880000 bytes (5.2 GB, 4.9 GiB) copied, 56.7417 s, 92.4 MB/s
+% time     seconds  usecs/call     calls    errors syscall
+------ ----------- ----------- --------- --------- ----------------
+ 50.82    4.404512           0   5120003           read
+ 49.18    4.262552           0   5120003           write
+  0.00    0.000010           0        35        15 openat
+  0.00    0.000004           0        23           close
+  0.00    0.000000           0        18           fstat
+  0.00    0.000000           0         1           lseek
+  0.00    0.000000           0        22           mmap
+  0.00    0.000000           0         3           mprotect
+  0.00    0.000000           0         1           munmap
+  0.00    0.000000           0         3           brk
+  0.00    0.000000           0         3           rt_sigaction
+  0.00    0.000000           0         4           pread64
+  0.00    0.000000           0         1         1 access
+  0.00    0.000000           0         2           dup2
+  0.00    0.000000           0         1           execve
+  0.00    0.000000           0         2         1 arch_prctl
+  0.00    0.000000           0         1           futex
+  0.00    0.000000           0         1           set_tid_address
+  0.00    0.000000           0         1           set_robust_list
+  0.00    0.000000           0         1           prlimit64
+  0.00    0.000000           0         1           getrandom
+  0.00    0.000000           0         1           rseq
+------ ----------- ----------- --------- --------- ----------------
+100.00    8.667078           0  10240131        17 total
+----
+
+
+
+
+256
 
 
 

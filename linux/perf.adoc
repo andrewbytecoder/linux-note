@@ -74,6 +74,25 @@ format:
 print fmt: "%d,%d %s %u (%s) %llu + %u [%s]", ((unsigned int) ((REC->dev) >> 20)), ((unsigned int) ((REC->dev) & ((1U << 20) - 1))), REC->rwbs, REC->bytes, __get_str(cmd), (unsigned long long)REC->sector, REC->nr_sector, REC->comm
 ----
 
+==== perf commond
+
+===== CPU
+
+- 使用 `perf trace -p $(pgrep mysql)` 来调用跟踪具体的应用进程
+
+===== 内核时间分析
+
+- 使用 `perf trace -s -p $(pgrep mysql)` 来调用跟踪具体的应用进程
+
+===== I/O 剖析
+
+[source,bash]
+----
+# 使用过滤器跟踪sendto调用，但是这里不会给出很具体的信息，如果向概要知到比如套接字类型，IP地址和端口等信息，需要使用bpftrace
+perf trace -e sendto -p  $(pgrep mysql)
+----
+
+
 
 ==== Counting Events
 
