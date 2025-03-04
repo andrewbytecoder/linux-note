@@ -9,6 +9,11 @@ ifdef::rootpath[]
 :imagesdir: {rootpath}{path}{imagesdir}
 endif::rootpath[]
 
+== go
+
+
+
+
 
 
 

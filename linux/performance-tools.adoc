@@ -344,10 +344,197 @@ strace -c dd if=/dev/zero of=/dev/null bs=1M count=1024
 100.00    8.667078           0  10240131        17 total
 ----
 
+==== hardware
+
+image::linux/image-2025-03-03-22-07-33-934.png[]
+
+- P-cache: 预取缓存（每个CPU核一个）
+- W-cache: 写缓存（每个CPU核一个）
+- 时钟：CPU时钟信号生成器
+- 时间戳计数器：通过时钟递增，可获取高精度时间
+- 微代码ROM: 快速把指令转化为电路信号
+- 温度传感器：用户温度检测
+- 网络接口： 如果集成在芯片里（为了高性能）
+
+*缓存一致性*
+
+内存可能会同时被缓存在不同的处理器的多个CPU里，当一个CPU修改了内存时，所有的缓存都需要知道他们的缓存拷贝已经失效，应该被丢弃，这样后续所有的读才会读取到新修改的拷贝，这个过程叫缓存一致性，确保了CPU永远访问正确的内存状态。
+
+*MMU*
+
+MMU负责虚拟地址到物理地址的转换，通过一个在芯片上集成的TLB来缓存地址转换的缓存。主存DRAM里的转换表（页表），处理缓存未命中的情况(Cache misses are satisfied by translation tables in main memory (DRAM), called page tables, which are read directly by
+the MMU (hardware) and maintained by the kernel.)。
+
+image::linux/image-2025-03-04-10-00-08-357.png[]
+
+内核CPU调度器的主要功能：
+
+- 分时： 可运行线程之间的多任务，优先执行优先级最高的任务
+- 抢占： 一旦有高优先级线程变为可运行状态，调度器就能够抢占当前运行的线程，这样高优先级线程可以马上开始运行。
+- 负载均衡：把可运行的线程移动到空闲或者不太繁忙的CPU队列中。
+
+.内核CPU调度函数
+image::linux/image-2025-03-04-11-00-39-174.png[]
+
+> VCX: 自愿上下文切换 +
+> ICX: 非自愿上下文切换 + Time sharing/preemption 分时/抢占 + Load balancing 负载均衡 + Migration 迁移 + sleep 休眠
+
+
+=== *CPU的观测工具*
+
+
+|===
+|工具 |描述
+
+|uptime
+|平均负载
+
+|vmstat
+|包括系统级的CPU平均负载
+
+|mpstat
+|单个CPU统计信息
+
+|sar
+|历史统计信息
+
+|ps
+|进程状态
+
+|top
+|检测每个进程/线程的CPU用量
+
+|pidstat
+|每个进程/线程CPU用量分解
+
+|time && ptime
+|给一个命令计时
+
+|turbostat
+|显示CPU时钟频率和其他状态
+
+|showboost
+|显示CPU时钟频率和睿频加速
+
+|pmcarch
+|显示高级CPU周期用量
+
+|tlbstat
+|总结TLB周期
+
+|perf
+|CPU剖析和PMC分析
+
+|profile
+|CPU栈踪迹采样
+
+|cpudist
+|总结在CPU上运行的时间
+
+|runqlat
+|总计诶在CPU运行队列延时
+
+|runqlen
+|总结CPU运行队列长度
+
+|softirqs
+|总结软中断时间
+
+|hardirqs
+|总结硬中断时间
+
+|bpftrace
+|进行CPU分析的跟踪程序
+
+|===
+
+==== uptime
+
+[source, bash]
+----
+# 查看系统负载，最后三个是1分钟、5分钟、15分钟的平均负载，通过这些值的变化就可以知道最近15分钟内系统负载的变化情况。
+[root@localhost ~]# uptime
+ 19:38:08 up 4 days,  2:04,  4 users,  load average: 0.01, 0.00, 0.00
+----
+
+负载是以当前的资源用量（使用率）加上排队的请求（饱和度）来衡量的.想象一下一个公路收费站:你可以通过统计-天中不同时间点的负荷，计算有多少辆汽车正在被服务（使用率）以及有多少辆汽车正在排队（饱和度）。
+
+举一个现代的例子,一个有64颗CPU的系统的平均负载为128。这意昧着平均每个CPU上有一个线程在运行’还有一个线程在等待。
+
+==== vmstat
+
+r列是等待的任务总数加上正在运行的任务总数。
+
+[source, bash]
+----
+[root@k8smaster-ims ~]# vmstat 1
+procs -----------memory---------- ---swap-- -----io---- -system-- ------cpu-----
+ r  b   swpd   free   buff  cache   si   so    bi    bo   in   cs us sy id wa st
+ 9  0      0 1961552 890952 20010716    0    0    10   187    8    9  3  2 94  0  0
+----
+
+==== mpstat
+
+多处理器统计工具，能够报告每个CPU的统计信息
+
+[source, bash]
+----
+[root@k8smaster-ims ~]# mpstat -P ALL 1
+Linux 5.14.0-503.16.1.el9_5.x86_64 (k8smaster-ims)      03/04/25        _x86_64_        (32 CPU)
+
+19:54:26     CPU    %usr   %nice    %sys %iowait    %irq   %soft  %steal  %guest  %gnice   %idle
+19:54:27     all    5.40    0.00    1.48    0.00    0.41    0.44    0.00    0.00    0.00   92.27
+19:54:27       0    2.04    0.00    2.04    0.00    0.00    0.00    0.00    0.00    0.00   95.92
+19:54:27       1    1.98    0.00    1.98    0.00    0.99    0.99    0.00    0.00    0.00   94.06
+19:54:27       2    8.00    0.00    2.00    0.00    1.00    0.00    0.00    0.00    0.00   89.00
+19:54:27       3    7.92    0.00    1.98    0.00    0.99    0.99    0.00    0.00    0.00   88.12
+19:54:27       4    2.04    0.00    1.02    0.00    0.00    1.02    0.00    0.00    0.00   95.92
+----
+
+- %usr: 用户态CPU使用率，不包括%nice
+- %nice: 以nice设置的优先级运行的进程的用户时间
+- %sys: 系统态CPU使用率，不包括%iowait
+- %iowait: 等待IO的CPU使用率
+- %irq: 硬中断的CPU使用率
+- %soft: 软中断的CPU使用率
+- %steal: 用在服务其他租户上的时间
+- %guest: 虚拟化平台虚拟CPU使用率，用在客户虚拟机上的CPU时间
+- %gnice: 以nice设置的优先级运行的进程的系统时间
+- %idle: 空闲CPU使用率
+
+==== sar
+
+系统活动报告器，可以用来观测当前活动，以及配置归档和报告历史系统信息。
+
+- sar -q : 包括运行队列长度runq-sz(等待加上运行，与vmstat的r列相同)和平均负载值
 
 
 
-256
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 

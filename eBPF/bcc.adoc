@@ -109,13 +109,39 @@ TIME      DISK     %RND  %SEQ    COUNT     KBYTES
 
 用于实时显示哪些进程正在进行磁盘 I/O 操作。它类似于 top 命令，但专门针对磁盘 I/O 进行了优化，能够帮助用户识别出系统中占用大量磁盘资源的进程。
 
+[source,bash]
+----
+usage: biotop [-h] [-C] [-r MAXROWS] [-p PID] [interval] [count]
+
+Block device (disk) I/O by process
+
+positional arguments:
+  interval              output interval, in seconds
+  count                 number of outputs
+
+optional arguments:
+  -h, --help            show this help message and exit
+  -C, --noclear         don't clear the screen
+  -r MAXROWS, --maxrows MAXROWS
+                        maximum rows to print, default 20
+  -p PID, --pid PID     trace this PID only
+
+examples:
+    ./biotop            # block device I/O top, 1 second refresh
+    ./biotop -C         # don't clear the screen
+    ./biotop -p 181     # only trace PID 181
+    ./biotop 5          # 5 second summaries
+    ./biotop 5 10       # 5 second summaries, 10 times only
+----
+
+
 ==== bitesize
 
 旨在显示按进程名称划分的请求块大小的 I/O 分布。这对于理解不同应用程序如何执行磁盘 I/O 操作以及这些操作的块大小分布非常有用。通过分析块大小分布，可以帮助优化存储系统配置或应用程序性能。
 
 [source,bash]
 ----
-# ./bitesize.py
+# ./bitesize
 Tracing... Hit Ctrl-C to end.
 ^C
 
@@ -443,7 +469,7 @@ summond        17669      0.27   237
 
 ==== execsnoop
 
-execsnoop 是一个用于追踪新进程创建的工具，它通过监控 execve() 系统调用来捕获新进程的启动情况。这对于了解系统中哪些命令被执行、它们的参数是什么以及执行的结果如何非常有用。例如，当你运行 man ls 命令时，execsnoop 可以显示该命令及其子命令的详细信息。
+execsnoop 是一个用于追踪系统级别新进程创建的工具，它通过监控 execve() 系统调用来捕获新进程的启动情况。这对于了解系统中哪些命令被执行、它们的参数是什么以及执行的结果如何非常有用。例如，当你运行 man ls 命令时，execsnoop 可以显示该命令及其子命令的详细信息。
 
 [source,bash]
 ----
@@ -1222,6 +1248,11 @@ Detaching...
 
 它通过在定时间隔内对堆栈跟踪进行采样，并在内核上下文中高效地统计频率来工作。这种类型的分析对于识别系统或应用程序中的性能瓶颈非常有用。
 
+*我什么采样通常使用49HZ或者99或者119？*
+
+因为CPU通常是整数HZ进行运行，这里采用49Hz是因为可以避免某些以100Hz发生的事件发生合拍，这样就会造成采样的偏差。
+
+
 [source,bash]
 ----
 # ./profile -F 49 10
@@ -1732,7 +1763,7 @@ TIME(s)            COMM             CALL
 
 ==== syscount
 
-`syscount` 是一个用于汇总整个系统或特定进程的系统调用计数的工具，还可以选择性地提供延迟信息。这对于一般的工作负载特征化非常有用。
+`syscount` 是一个用于汇总整个系统级别或特定进程的统计系统调用的计数工具，还可以选择性地提供延迟信息。这对于一般的工作负载特征化非常有用。
 
 [source,bash]
 ----

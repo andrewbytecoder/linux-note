@@ -1,7 +1,7 @@
 :toc:
 
 // 保证所有的目录层级都可以正常显示图片
-:path: study_journal/
+:path: calico/
 :imagesdir: ../image/
 
 // 只有book调用的时候才会走到这里
@@ -11,33 +11,64 @@ endif::rootpath[]
 
 == Calico
 
-=== 网络策略
+Calico组件主要架构由Felix、Confd、BIRD组成
 
+- Felix 运行在每一台 Host 的 agent 进程，Felix负责刷新主机路由和ACL规则等，以便为该主机上的 Endpoint 正常运行提供所需的网络连接和管理。进出容器、虚拟机和物理主机的所有流量都会遍历Calico，利用Linux内核原生的路由和iptables生成的规则。是负责Calico Node运行并作为每个节点Endpoint端点的守护程序，它负责管理当前主机中的Pod信息，与集群etcd服务交换集群Pod信息，并组合路由信息和ACL策略。
+- Confd是负责存储集群etcd生成的Calico配置信息，提供给BIRD层运行时使用。
+- BIRD（BIRD Internet Routing Daemon）是核心组件，Calico中的BIRD特指BIRD Client和BIRD Route Reflector，负责主动读取Felix在本机上设置的路由信息，并通过BGP广播协议在数据中心中进行分发路由
+
+
+=== 网络模型
+
+==== `IPIP`
+
+流量：tunl0设备封装数据，形成隧道，承载流量。
+
+适用网络类型：适用于互相访问的pod不在同一个网段中，跨网段访问的场景。外层封装的ip能够解决跨网段的路由问题。
+
+效率：流量需要tunl0设备封装，效率略低。
+
+image::calico/image-2025-03-04-16-35-09-325.png[]
+
+==== `BGP` 网络
+
+流量：使用主机路由表信息导向流量
+
+适用网络类型：适用于互相访问的pod在同一个网段，适用于大型网络。
+
+效率：原生hostGW，效率高。
+
+image::calico/image-2025-03-04-16-36-17-662.png[]
+
+
+
+
+=== 网络策略
 ==== Cluster IP服务
 
 默认服务类型为 ClusterIP 。这允许通过虚拟 IP 地址（称为服务 Cluster IP）在集群内访问服务。服务的 Cluster IP 可通过 Kubernetes DNS 发现。例如，my-svc.my-namespace.svc.cluster-domain.example 。DNS 名称和 Cluster IP 地址在服务的整个生命周期内保持不变，即使支持该服务的 pod 可能会被创建或销毁，并且支持该服务的 pod 数量可能会随时间而变化。
 
 在典型的 Kubernetes 部署中，kube-proxy 在每个节点上运行，负责拦截到 Cluster IP 地址的连接，并在支持每个服务的 Pod 组之间进行负载平衡。作为此过程的一部分，DNAT 用于将目标 IP 地址从 Cluster IP 映射到所选的支持 Pod。连接上的响应数据包随后在返回发起连接的 Pod 的途中进行 NAT 反向转换
 
-image::image-2025-01-23-19-29-59-234.png[]
+image::calico/image-2025-01-23-19-29-59-234.png[]
 
 
 
-image::image-2025-01-23-20-07-26-827.png[]
+image::calico/image-2025-01-23-20-07-26-827.png[]
 
 
-image::image-2025-01-23-20-09-30-283.png[]
+image::calico/image-2025-01-23-20-09-30-283.png[]
 
 
 ==== NodePort 节点端口服务
 
 从集群外部访问服务的最基本方法是使用 NodePort 类型的服务。节点端口是集群中每个节点上保留的端口，可通过该端口访问服务。在典型的 Kubernetes 部署中，kube-proxy 负责拦截与节点端口的连接并在支持每个服务的 pod 之间对其进行负载平衡
 
-image::image-2025-01-23-19-36-07-020.png[]
+image::calico/image-2025-01-23-19-36-07-020.png[]
 
-image::image-2025-01-23-20-11-50-660.png[]
+image::calico/image-2025-01-23-20-11-50-660.png[]
 
-image::../image/image-2025-01-23-20-16-41-799.png[]
+image::calico/image-2025-01-23-20-16-41-799.png[]
 
 
 请注意，由于连接源 IP 地址已通过 SNAT 转换为节点 IP 地址，因此服务支持 pod 的入口网络策略看不到原始客户端 IP 地址。通常，这意味着任何此类策略仅限于限制目标协议和端口，而不能基于客户端/源 IP 进行限制。
