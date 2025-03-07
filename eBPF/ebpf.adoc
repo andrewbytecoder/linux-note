@@ -512,7 +512,6 @@ bpftrace -e 't:compaction:mm_compaction_begin { time(); }'
 bpftrace -l 'usdt:/lib/x86_64-linux-gnu/libc.so.6:*'
 # 列出内核的 kmem跟踪点
 bpftrace -l 't:kmem:*'
-
 ----
 
 对于跟踪点来说，你还可以加上 -v 参数查询函数的入口参数或返回值。而由于内核函数属于不稳定的 API，在 bpftrace中只能通过 arg0、arg1 这样的参数来访问，具体的参数格式还需要参考内核源代码。
@@ -533,7 +532,46 @@ tracepoint:syscalls:sys_exit_execve
     long ret
 ----
 
+使用bpftrace跟踪文件系统的性能
 
+[source, bash]
+----
+# 跟踪openat打开的文件，带进程名
+bpftrace -e 't:syscalls:sys_enter_openat { printf("%s %s\n", comm,str(args->filename)); }'
+# 按照系统调用类型统计读系统调用
+bpftrace -e 'tracepoint:syscalls:sys_enter_*read* { @[probe] = count(); }'
+# 按照系统调用类型统计写系统调用
+bpftrace -e 'tracepoint:syscalls:sys_enter_*write* { @[probe] = count(); }'
+# 显示read系统调用的请求大小分布
+bpftrace -e 'tracepoint:syscalls:sys_enter_read { @ = hist(args->count); }'
+Attaching 1 probe...
+^C
+
+@:
+[1]                   86 |                                                    |
+[2, 4)                20 |                                                    |
+[4, 8)                60 |                                                    |
+[8, 16)               86 |                                                    |
+[16, 32)            2690 |@@@@@@@@@@@@@@@@@@@@@@@                             |
+[32, 64)              39 |                                                    |
+[64, 128)             49 |                                                    |
+[128, 256)          1348 |@@@@@@@@@@@                                         |
+[256, 512)          4185 |@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@                 |
+[512, 1K)           6051 |@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@|
+[1K, 2K)            4425 |@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@              |
+[2K, 4K)            1044 |@@@@@@@@                                            |
+[4K, 8K)            4500 |@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@              |
+[8K, 16K)            200 |@                                                   |
+[16K, 32K)           293 |@@                                                  |
+[32K, 64K)          3008 |@@@@@@@@@@@@@@@@@@@@@@@@@                           |
+[64K, 128K)         1738 |@@@@@@@@@@@@@@                                      |
+[128K, 256K)           1 |                                                    |
+[256K, 512K)          54 |                                                    |
+
+# 按照错误码统计read系统调用错误数
+bpftrace -e 'tracepoint:syscalls:sys_exit_read { @ = hist(args->ret); }'
+
+----
 
 
 ==== 如何利用内核跟踪点排查短时进程问题？

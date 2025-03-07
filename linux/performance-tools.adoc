@@ -603,19 +603,107 @@ time命令可以用来运行程序并报告CPU用量
 .缓存是否命中指的是一级缓存命中率
 image::linux/image-2025-03-06-20-08-29-044.png[]
 
+=== 文件
 
+*读取*
 
+在顺序进行文件读写时，Linux系统采用预读来减少磁盘的读写次数，从而提高性能。最新的Linux系统已经支持使用readahead来允许应用程序显式地预热文件系统缓存。
 
+*写入*
 
+写回缓存广泛地应用于文件系统，用来提高写性能。它的原理是，当数据写入主存后，就认为写入已经结束并返回，之后再异步地把数据刷入磁盘。文件系统写入“脏”数据的过程称为刷新（flushing）。
 
+1.应用程序发起一个文件的write()请求，把控制权交给内核。
+2.数据从应用程序地址空间复制到内核空间。
+3.write()系统调用被内核视为已经结束，并把控制权交还给应用程 序。
+4.一段时间后，一个异步的内核任务定位到要写入的数据，并发起磁盘的写请求
 
+这期间牺牲了可靠性。基于DRAM 的主存是不可靠的，“脏”数据会在断电的情况下丢失，而应用程序却认为写入已经完成。并且，数据可能被非完整写入，这样磁盘上的数据就是在一种破坏（corrupted）的状态。
 
+文件系统I/O栈
 
+.File System I/O Stack
+image::linux/image-2025-03-07-19-11-23-712.png[]
 
+文件系统分析工具
 
+[options="header"]
+|===
+|工具 |描述
 
+|mount |列出文件系统和它们的挂载选项
 
+|free |缓存容量统计信息
 
+|top |包括内存使用概要
+
+|vmstat |虚拟内存统计信息
+
+|sar |多种统计信息，包括历史信息
+
+|slabtop |内核 slab 分配器统计信息
+
+|strace |系统调用跟踪
+
+|fatrace |使用 fanotify 跟踪文件系统操作
+
+|LatencyTop |显示系统级的延时来源
+
+|opensnoop |跟踪打开的文件
+
+|filetop |使用中的最高 IOPS 和字节数的文件
+
+|cachestat |页缓存统计信息
+
+|ex4dist(xfs、zfs、btrfs、nfs) |显示 ext4 操作延时分布
+
+|ext4slower(xfs、zfs、btrfs、nfs) |显示慢的 ext4 操作
+
+|bpfttrace |自定义文件系统跟踪
+|===
+
+==== mount
+
+列出挂载文件系统和挂载他们的选项
+
+[source, bash]
+----
+# mount
+proc on /proc type proc (rw,nosuid,nodev,noexec,relatime)
+sysfs on /sys type sysfs (rw,nosuid,nodev,noexec,relatime)
+devtmpfs on /dev type devtmpfs (rw,nosuid,size=4096k,nr_inodes=3980866,mode=755,inode64)
+securityfs on /sys/kernel/security type securityfs (rw,nosuid,nodev,noexec,relatime)
+tmpfs on /dev/shm type tmpfs (rw,nosuid,nodev,inode64)
+devpts on /dev/pts type devpts (rw,nosuid,noexec,relatime,gid=5,mode=620,ptmxmode=000)
+tmpfs on /run type tmpfs (rw,nosuid,nodev,size=6377420k,nr_inodes=819200,mode=755,inode64)
+cgroup2 on /sys/fs/cgroup type cgroup2 (rw,nosuid,nodev,noexec,relatime)
+----
+
+==== free
+
+展示内存和交换区的统计信息
+
+[source, bash]
+----
+[root@k8smaster-ims changeIP]# free
+               total        used        free      shared  buff/cache   available
+Mem:        31887100     7125876     3982104      828252    23442876    24761224
+Swap:              0           0           0
+----
+
+==== slabtop
+
+打印有关内核的slab缓存信息。
+
+==== strace
+
+文件系统延时课可以在系统调用接口层面使用strace在内的linux跟踪工具测量，因为strace本身使用ptrace实现，对于性能会有较大的影响，因此只能测试系统调用的相对耗时。
+
+[source, bash]
+----
+strace -ttT -p 854
+# 会输出系统调用的具体耗时
+----
 
 
 
