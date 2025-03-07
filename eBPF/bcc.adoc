@@ -269,6 +269,8 @@ zsh            23685  0    ZONE_NORMAL  -1    SYNC      113.975         complete
 
 cpudist 是一个基于 eBPF 和 BCC（BPF Compiler Collection）的工具，用于汇总任务在 CPU 上的时间，并以直方图的形式展示任务在被调度出 CPU 之前花费的时间长度。这有助于识别系统中的问题，如处理器过载、过多的上下文切换开销、工作负载分布不均等。
 
+> 可以和profile一起使用，查看一个应用程序在CPU上花费了多长时间，以及在做什么。
+
 [source,bash]
 ----
 [root@k8smaster-ims tools]# ./cpudist
@@ -1352,6 +1354,8 @@ Histogram of read-ahead used page age (ms):
 
 runqlat 程序用于总结调度器运行队列延迟，并以直方图形式展示任务等待其在CPU上运行所花费的时间。这对于了解系统负载和性能瓶颈特别有用。
 
+runqlat测量指标是每个线程（任务）在CPU上的等待时间。通过检测调度器唤醒和上下文切换事件来确定事件从唤醒到运行的时间，这些事件在反繁忙的生产系统上可能非常频繁，每秒都有可能超过100万个事件，在这个速率下每个事件增加1微秒都会造成明显的开销，请谨慎使用或者尽量使用 runqlen来代替。
+
 [source,bash]
 ----
 # ./runqlat
@@ -1397,6 +1401,21 @@ Tracing run queue latency... Hit Ctrl-C to end.
 - **大多数其他基本空闲的线程**：当这些线程被唤醒执行一些短暂的任务时，由于它们可能拥有较高的优先级，因此可以较快地获取CPU资源。
 
 排查后CPU调度慢的问题
+
+==== runqlen
+
+用于对CPU队列长度进行采样，计算有多少个任务在等待，并以线性直方图的形式呈现，这可以被用来进一步描述运行队列的延时问题，或者作为一个代价较低的近似。
+
+[source,bash]
+----
+# -C 每个CPU打印一幅直方图
+[root@k8smaster-ims tools]# ./runqlen
+Sampling run queue length... Hit Ctrl-C to end.
+^C
+     runqlen       : count     distribution
+        0          : 1519     |****************************************|
+        1          : 1        |                                        |
+----
 
 ==== runqslower
 

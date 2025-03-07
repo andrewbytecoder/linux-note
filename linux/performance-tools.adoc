@@ -279,6 +279,12 @@ image::linux/image-2025-02-27-15-40-08-564.png[]
 
 sar命令提供了对内核和设备非常广泛的覆盖，甚至对风扇也能进行观测，选项 `-m` (电源管理)
 
+- -B: 换页统计信息
+- -H: 巨型页统计信息
+- -r: 内存使用率
+- -S: 交换空间统计信息
+- -W: 交换统计信息
+
 .sar 命令覆盖范围
 image::linux/image-2025-02-28-19-28-53-811.png[]
 
@@ -287,6 +293,47 @@ image::linux/image-2025-02-28-19-28-53-811.png[]
 # 1秒为时间间隔，采集5次TCP数据
 sar -n TCP 1 5
 ----
+
+[options="header"]
+|===
+|选项 |统计信息 |描述 |单位
+
+|-B |pgpgin/s |页面换入 |千字节 / 秒
+|-B |pgpgout/s |页面换出 |千字节 / 秒
+|-B |fault/s |严重及轻微缺页 |次数 / 秒
+|-B |majflt/s |严重缺页 |次数 / 秒
+|-B |pgfree/s |将页面加入空闲链表 |次数 / 秒
+|-B |pgscank/s |被后台页面换出守护进程扫描过的页面（kswapd） |次数 / 秒
+|-B |pgscand/s |直接页面扫描 |次数 / 秒
+|-B |pgsteal/s |页面及交换缓存回收 |次数 / 秒
+|-B |%vmeff |页面盗取 / 页面扫描的比率，其显示页面回收的效率 |百分比
+|-H |hbhugfree |空闲巨型页内存（大页面尺寸） |千字节
+|-H |hbhugused |占用的巨型页内存 |千字节
+|-H |%hugused |巨型页使用率 |百分比
+|-r |kbmemfree |空闲内存（完全未使用的） |千字节
+|-r |kbavail |可用的内存，包括可以随时从页面缓存中释放的页 |千字节
+|-r |kbmemused |使用的内存（包括内核） |千字节
+|-r |%memused |内存使用率 |百分比
+|-r |kbbuffers |缓冲高速缓存尺寸 |千字节
+|-r |kbcached |页面高速缓存尺寸 |千字节
+|-r |kbcommit |提交的主存：服务当前工作负载需要量的估计 |千字节
+|-r |%commit |为当前工作负载提交的主存，估计值 |百分比
+|-r |kbactive |活动列表内存尺寸 |千字节
+|-r |kbinact |未活动列表内存尺寸 |千字节
+|-r |kbdirtyw |将被写入磁盘的修改过的内存 |千字节
+|-r ALL |kbanonpg |进程匿名内存 |千字节
+|-r ALL |kbslab |内核 slab 缓存大小 |千字节
+|-r ALL |kbbkstack |内核栈空间大小 |千字节
+|-r ALL |kbpgtbl |最低级别的页表大小 |千字节
+|-r ALL |kbvmused |已使用的虚拟内存地址空间 |千字节
+|-S |kbswpfree |释放的交换空间 |千字节
+|-S |kbswpused |占用的交换空间 |千字节
+|-S |%swpused |占用的交换空间的百分比 |百分比
+|-S |kbswpcad |高速缓存的交换空间：它同时保存在主存和交换设备中，因此不需要磁盘 I/O 就能被页面换出 |千字节
+|-S |%swpcad |缓存的交换空间大小和使用的交换空间的比例 |百分比
+|-W |pswpin/s |页面换入（Linux 换入） |页面 / 秒
+|-W |pswpout/s |页面换出（Linux 换出） |页面 / 秒
+|===
 
 ==== strace
 
@@ -343,6 +390,14 @@ strace -c dd if=/dev/zero of=/dev/null bs=1M count=1024
 ------ ----------- ----------- --------- --------- ----------------
 100.00    8.667078           0  10240131        17 total
 ----
+
+==== numastat
+
+非统一访问NUMA系统提供统计数据。
+
+==== pmap
+
+列出一个进程的内存映射，显示其大小、权限和映射对象
 
 ==== hardware
 
@@ -446,7 +501,11 @@ image::linux/image-2025-03-04-11-00-39-174.png[]
 |bpftrace
 |进行CPU分析的跟踪程序
 
+|offcputime
+|使用调度器跟踪剖析不在CPU上运行的行为
+
 |===
+
 
 ==== uptime
 
@@ -463,10 +522,18 @@ image::linux/image-2025-03-04-11-00-39-174.png[]
 
 ==== vmstat
 
-r列是等待的任务总数加上正在运行的任务总数。
+虚拟内存统计命令，它提供包括当前内存和换页在内的系统内存健康程度总览。
+
+> r列是等待的任务总数加上正在运行的任务总数。
 
 [source, bash]
 ----
+# swpd: 交换出的内存量
+# free: 空闲可用内存
+# buff: 用于缓冲缓存的内存
+# cache: 用于页缓存的内存
+# si: 换入的内存（换页）
+# so: 换出的内存（换页）
 [root@k8smaster-ims ~]# vmstat 1
 procs -----------memory---------- ---swap-- -----io---- -system-- ------cpu-----
  r  b   swpd   free   buff  cache   si   so    bi    bo   in   cs us sy id wa st
@@ -508,9 +575,33 @@ Linux 5.14.0-503.16.1.el9_5.x86_64 (k8smaster-ims)      03/04/25        _x86_64_
 
 - sar -q : 包括运行队列长度runq-sz(等待加上运行，与vmstat的r列相同)和平均负载值
 
+==== pidstat
+
+按照进程或者线程打印CPU使用量，包括用户时间和系统时间的细分
+
+[source, bash]
+----
+# pidstat 1
+Average:      UID       PID    %usr %system  %guest   %wait    %CPU   CPU  Command
+Average:        0         1    2.83    1.89    0.00    0.00    4.72     -  systemd
+Average:        0       892    0.94    0.00    0.00    0.00    0.94     -  systemd-journal
+Average:        0      1271    2.83    0.00    0.00    0.00    2.83     -  containerd
+Average:        0      1300    1.89    1.89    0.00    0.00    3.77     -  systemd
+----
+
+==== time && ptime
+
+time命令可以用来运行程序并报告CPU用量
 
 
+=== 内存
 
+- L1: 通常分为指令缓存和数据缓存
+- L2: 同时缓存指令和数据
+- L3: 更大一级的缓存
+
+.缓存是否命中指的是一级缓存命中率
+image::linux/image-2025-03-06-20-08-29-044.png[]
 
 
 

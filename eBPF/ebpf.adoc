@@ -488,6 +488,31 @@ sudo bpftrace -l
 sudo bpftrace -l 'tracepoint:syscalls:*'
 # 使用通配符查询所有名字包含"execve"的跟踪点
 sudo bpftrace -l '*execve*'
+# 按照用户栈和进程对libc malloc的请求量进行统计
+bpftrace -e 'uprobe:/lib/x86_64-linux-gnu/libc.so.6:malloc {@[ustack, comm] = sum(arg0); }'
+# 对进程ID为181的进程 malloc请求的字节数进行求和统计
+bpftrace -e 'uprobe:/lib/x86_64-linux-gnu/libc.so.6:malloc /pid == 181/ {@[ustack] = sum(arg0); }'
+# 按照直方图的形式对pid为181的进程 malloc请求的字节数进行直方图统计
+bpftrace -e 'uprobe:/lib/x86_64-linux-gnu/libc.so.6:malloc /pid == 181/ {@[ustack] = hist(arg0); }'
+# 按内核的栈显示内核kmem缓存分配字节数的总和
+bpftrace -e 't:kmem:kmem_cache_alloc { @bytes[kstack] = sum(args->bytes_alloc); }'
+# 按照进程进行统计缺页故障 page faults by process
+bpftrace -e 'software:page-fault:1 { @[comm, pid] = count(); }'
+# 在用户成面统计缺页错误 Count user page faults by user-level stack trace
+bpftrace -e 't:exceptions:page_fault_user { @[ustack, comm] = count(); }'
+# 统计vmscan操作计数通过 tracepoint
+bpftrace -e 'tracepoint:vmscan:* { @[probe] = count(); }'
+# 按进程对swapin操作计数
+bpftrace -e 'kprobe:swap_readpage { @[comm, pid] = count(); }'
+# 对页迁移数量进行计数
+bpftrace -e 'tracepoint:migrate:mm_migrate_pages { @ = count(); }'
+# 跟踪页压缩事件
+bpftrace -e 't:compaction:mm_compaction_begin { time(); }'
+# 列出libc中的USDT探针
+bpftrace -l 'usdt:/lib/x86_64-linux-gnu/libc.so.6:*'
+# 列出内核的 kmem跟踪点
+bpftrace -l 't:kmem:*'
+
 ----
 
 对于跟踪点来说，你还可以加上 -v 参数查询函数的入口参数或返回值。而由于内核函数属于不稳定的 API，在 bpftrace中只能通过 arg0、arg1 这样的参数来访问，具体的参数格式还需要参考内核源代码。
@@ -507,6 +532,9 @@ tracepoint:syscalls:sys_exit_execve
     int __syscall_nr
     long ret
 ----
+
+
+
 
 ==== 如何利用内核跟踪点排查短时进程问题？
 

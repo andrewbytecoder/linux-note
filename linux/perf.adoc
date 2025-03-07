@@ -92,6 +92,187 @@ print fmt: "%d,%d %s %u (%s) %llu + %u [%s]", ((unsigned int) ((REC->dev) >> 20)
 perf trace -e sendto -p  $(pgrep mysql)
 ----
 
+===== 记录exec新进程事件
+
+通过exec记录新进程事件
+
+[source,bash]
+----
+perf record -e sched:sched_process_exec -a
+----
+
+===== 带栈踪迹记录上下文切换事件
+
+[source,bash]
+----
+perf record -e sched:sched_switch -p $(pgrep mysql)
+perf record -e sched:sched_switch -a -g -- sleep 10
+----
+
+===== 对CPU迁移进行采样
+
+[source,bash]
+----
+perf record -e migrations -a -- sleep 10
+# 将本地的perf.data 以文本报告的形式显示出来，合并了数据以及计数器的百分比
+perf report -n --stdio
+----
+
+===== CPU上下文切换
+
+[source,bash]
+----
+# 展示每秒钟上下文切换率
+perf stat -e sched:sched_switch -a -I 1000
+# 展示每秒非自愿上下文切换率（上一个状态为TASK_RUNNING）
+perf stat -e sched:sched_switch --filter 'prev_state == 0' -a -I 1000
+
+# 先perf sched record 然后再使用 perf sched timehist 查看所有上下文切换的事件
+perf sched record
+perf sched timehist
+----
+
+===== 内存
+
+====== 整个系统缺页 Page Faults(RSS增长)以及系统级别栈追踪(stack traces system wide)
+
+[source,bash]
+----
+perf record -e page-faults -a -g
+----
+
+====== 查看指定进程60s内的所有缺页信息以及栈调用信息
+
+[source,bash]
+----
+perf record -e page-faults -c 1 -p 1834 -g -- sleep 60
+----
+
+====== 通过brk记录堆的增长
+
+[source,bash]
+----
+perf record -e syscalls:sys_enter_brk -a -g
+----
+
+====== 跟踪页在NUMA系统上的页迁移情况
+
+[source,bash]
+----
+perf record -e migrate:mm_migrate_pages -a
+----
+
+====== *vmscan* 虚拟内存扫描
+
+在 Linux 内核中，vmscan（Virtual Memory Scan）指的是内核用于回收内存的一系列机制和过程。当系统的可用内存不足时，vmscan 会尝试通过回收各种类型的页面来释放内存，从而为新的分配请求腾出空间。这个过程涉及到扫描和评估系统中的不同页面，以决定哪些页面可以被安全地回收。
+
+vmscan 的主要功能
+
+1. **页面回收**：当物理内存接近耗尽时，vmscan 会启动页面回收进程，从内存中移除不常用的数据页，并将其写回到交换分区（swap）或者文件系统中。
+2. **页面扫描**：vmscan 会扫描不同的页面列表（如活动列表、非活动列表等），以找到可以回收的页面。
+3. **平衡内存使用**：通过调整不同页面列表之间的页面分布，确保系统的内存使用处于最佳状态。
+
+相关事件
+
+在性能监控工具（如 `perf`）或系统监视器中提到的 "vmscan" 事件通常指与上述过程相关的特定内核操作或状态变化。例如：
+
+- **pgscan_kswapd**: kswapd 是负责后台页面回收的守护进程。此计数表示由 kswapd 扫描的页面数量。
+- **pgscan_direct**: 表示直接页面回收过程中扫描的页面数量。
+- **pgsteal**: 表示从页面缓存或其他内存池中实际回收的页面数量。
+- **vmeff** (VM efficiency): 页面盗取率与页面扫描率的比率，反映了页面回收的效率。
+
+[source,bash]
+----
+perf record -e 'vmscan:*' -a -- sleep 10
+# 显示每秒vmscan事件, 1000ms
+perf record -e 'vmscan:*' -a -I 1000
+----
+
+> 请注意，上面的例子可能不会直接工作，因为具体的 vmscan 事件名可能有所不同。你需要根据你的内核版本和架构检查 `perf list` 命令输出，找出正确的事件名称。
+
+====== *kmem* 内核内存分配与释放相关事件
+
+在 Linux 内核性能分析中，`kmem` 相关的事件指的是与内核内存分配和释放相关的操作。这些事件可以帮助开发者和系统管理员了解内核如何管理其内存，识别潜在的性能瓶颈或内存泄漏问题。通过使用性能监控工具如 `perf`，可以记录和分析这些事件。
+
+kmem 事件概述
+
+1. **内核内存分配**：当内核需要为自身操作或其他模块分配内存时触发。
+2. **内核内存释放**：当不再需要某块内存时，内核将其释放回空闲池时触发。
+3. **Slab 分配器活动**：Linux 使用 slab 分配器来高效地管理内核对象的内存分配，相关事件可以展示 slab 分配器的行为。
+
+要使用 `perf` 工具记录 `kmem` 相关事件，首先需要查看你的系统支持哪些具体的 kmem 事件。这可以通过运行 `perf list` 命令来实现。然后，你可以针对特定的 kmem 事件进行采样。下面是一个基本示例流程：
+
+[source,bash]
+----
+perf list kmem
+----
+
+[source,bash]
+----
+sudo perf record -e kmem:kmalloc -a -- sleep 10
+----
+
+这里 `-e kmem:kmalloc` 指定了要监控的 kmem 事件（即内核内存分配），`-a` 表示对所有 CPU 进行采样，`sleep 10` 则表示持续监控 10 秒钟。
+
+示例事件解释
+
+- **kmalloc**: 内核动态分配内存的操作。
+- **kfree**: 内存被释放回内核的过程。
+- **kmalloc_node**: 类似于 kmalloc，但指定了内存节点以优化 NUMA 系统上的性能。
+- **kmem_cache_alloc**: 从特定的 slab 缓存中分配内存。
+- **kmem_cache_free**: 将内存释放回特定的 slab 缓存。
+
+注意事项
+
+- **权限问题**：某些性能事件可能需要超级用户权限才能访问。
+- **性能影响**：长时间或高频率的性能监测可能会对系统性能产生一定影响。
+- **事件名称差异**：不同版本的 Linux 内核支持的事件名称可能有所不同，请根据实际情况调整使用的事件名称。
+
+====== 内存压缩事件 compaction
+
+在 Linux 内核中，内存压缩事件通常与内存管理子系统中的页面回收机制相关。当系统内存紧张时，内核会尝试通过多种方式释放和回收内存，其中之一就是内存压缩（memory compaction）。内存压缩的目标是将分散的空闲页面合并成较大的连续块，以便更有效地分配大块内存。
+
+为了计算所有的内存压缩事件，可以使用 `perf` 工具来监控与内存压缩相关的特定事件。以下是如何进行操作的步骤：
+
+查找可用的内存压缩事件
+
+[source,bash]
+----
+sudo perf list | grep compact
+  compaction:mm_compaction_begin                     [Tracepoint event]
+  compaction:mm_compaction_defer_compaction          [Tracepoint event]
+  compaction:mm_compaction_defer_reset               [Tracepoint event]
+  compaction:mm_compaction_deferred                  [Tracepoint event]
+  compaction:mm_compaction_end                       [Tracepoint event]
+  compaction:mm_compaction_finished                  [Tracepoint event]
+  # 表示隔离了多少个页面以内存申请或者内存迁移使用
+  compaction:mm_compaction_isolate_freepages         [Tracepoint event]
+  compaction:mm_compaction_isolate_migratepages      [Tracepoint event]
+  compaction:mm_compaction_kcompactd_sleep           [Tracepoint event]
+  compaction:mm_compaction_kcompactd_wake            [Tracepoint event]
+  # 表示迁移了多少个页面
+  compaction:mm_compaction_migratepages              [Tracepoint event]
+  compaction:mm_compaction_suitable                  [Tracepoint event]
+  compaction:mm_compaction_try_to_compact_pages      [Tracepoint event]
+  compaction:mm_compaction_wakeup_kcompactd          [Tracepoint event]
+  oom:compact_retry                                  [Tracepoint event]
+  xfs:xfs_attr_leaf_compact                          [Tracepoint event]
+----
+
+.使用perf记录所有内存压缩的事件
+[source,bash]
+----
+sudo perf record -e 'compaction:*' -a -I 1000
+----
+
+
+
+
+
+
+
+
+
 
 
 ==== Counting Events
