@@ -58,6 +58,8 @@ TIME      PID    COMMAND
 
 用于显示块设备I/O的延迟，结果以直方图的形式展示
 
+- biolatency: 以直方图的形式检查I/O延时的分布
+
 [source,bash]
 ----
 # ./biolatency
@@ -104,6 +106,8 @@ TIME      DISK     %RND  %SEQ    COUNT     KBYTES
 ==== biosnoop
 
 用于追踪块设备 I/O（即磁盘 I/O），并为每次 I/O 操作打印一行输出。这对于分析磁盘性能、识别慢速 I/O 操作以及了解系统中磁盘活动的具体细节非常有用。
+
+- biosnoop: 检查单个I/O
 
 ==== biotop
 

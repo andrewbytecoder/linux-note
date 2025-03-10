@@ -90,7 +90,23 @@ print fmt: "%d,%d %s %u (%s) %llu + %u [%s]", ((unsigned int) ((REC->dev) >> 20)
 ----
 # 使用过滤器跟踪sendto调用，但是这里不会给出很具体的信息，如果向概要知到比如套接字类型，IP地址和端口等信息，需要使用bpftrace
 perf trace -e sendto -p  $(pgrep mysql)
+# 跟踪所有大小不小于100KB的块I/O完成事件
+perf record -e block:block_rq_complete --filter 'nr_sector > 200'
+# 跟踪所有块I/O同步写完成事件
+perf record -e block:block_rq_complete --filter 'rwbs == "WS"'
+# 跟踪所有的块I/O写完成事件
+perf record -e block:block_rq_complete --filter 'rwbs ~ "*W*"'
+# 磁盘I／O延时（前面描述为磁盘请求时间）也可以通过记录磁盘发出和完成事件来确定’以便以后分析。下面记录它们60秒’然后将事件写入out.djskO1.mt文件:
+perf record -e block:block_rq_issue,block:block_rq_complete -a sleep 60
+perf script --header > out.disk01.txt
 ----
+
+- biolatency
+- biosnoop
+- iotop
+- biotop
+- biostacks
+- blktrace
 
 ===== 记录exec新进程事件
 

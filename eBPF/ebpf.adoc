@@ -570,8 +570,48 @@ Attaching 1 probe...
 
 # 按照错误码统计read系统调用错误数
 bpftrace -e 'tracepoint:syscalls:sys_exit_read { @ = hist(args->ret); }'
+# 按照错误码统计read系统调用错误数
+bpftrace -e 't:syscalls:sys_exit_read /args->ret < 0/ { @[- args->ret] = count(); }'
+# 统计VFS调用次数
+bpftrace -e 'kprobe:vfs_* { @[probe] = count(); }'
+# 统计指定进程对VFS的调用次数
+bpftrace -e 'kprobe:vfs_* /pid == 181/ { @[probe] = count(); }'
+# 统计ext4的 tracepoints
+bpftrace -e 'tracepoint:ext4:* { @[probe] = count(); }'
+# 统计xfs的 tracepoints
+bpftrace -e 'tracepoint:xfs:* { @[probe] = count(); }'
+# 按照进程名和用户栈统计ext4文件读取数量
+bpftrace -e 'kprobe:ext4_file_read_iter { @[ustack, comm] = count(); }'
+# 追踪 ZFS spa_sunc的调用次数
+bpftrace -e 'kprobe:spa_sync { time("%H:%M:%S ZFS spa_sync()\n"); }'
+# 按照进程名和PID统计dcache的引用
+bpftrace -e 'kprobe:lookup_fast { @[comm, pid] = count(); }'
+----
+
+*使用bpftrace跟踪系统磁盘性能*
+
+[source, bash]
+----
+# 计算块I/O tracepoint事件
+bpftrace -e 'tracepoint:block:* { @[probe] = count(); }'
+# 把块I/O 大小汇总成一张直方图
+bpftrace -e 't:block:block_rq_issue { @bytes = hist(args->bytes); }'
+# 计数块请求的用户栈踪迹
+bpftrace -e 't:block:block_rq_issue { @[ustack] = count(); }'
+bpftrace -e 't:block:block_rq_insert { @[ustack] = count(); }'
+# 跟踪块I/O错误，包括设备和I/O类型
+bpftrace -e 't:block:block_rq_complete /args->error/ {printf("dev %d type %s error %d\n", args->dev, args->rwbs, args->error); }'
+# 计数块I/O类型的标志位
+bpftrace -e 't:block:block_rq_issue { @[args->rwbs] = count(); }'
+# 按照进程细分磁盘I/O大小分布
+bpftrace -e 't:block:block_rq_issue /args->bytes/ { @[comm] = hist(args->bytes); }'
+
+
+
+
 
 ----
+
 
 
 ==== 如何利用内核跟踪点排查短时进程问题？

@@ -589,6 +589,23 @@ Average:        0      1271    2.83    0.00    0.00    0.00    2.83     -  conta
 Average:        0      1300    1.89    1.89    0.00    0.00    3.77     -  systemd
 ----
 
+还可以使用-d选项输出磁盘I/O的统计信息
+
+[source, bash]
+----
+[root@k8smaster ~]# pidstat -d 1
+Linux 5.14.0-503.16.1.el9_5.x86_64 (k8smaster)      03/10/25        _x86_64_        (32 CPU)
+
+14:18:41      UID       PID   kB_rd/s   kB_wr/s kB_ccwr/s iodelay  Command
+14:18:42        0      1271      0.00     18.35      0.00       0  containerd
+14:18:42        0      1289      0.00     14.68      0.00       0  java
+14:18:42        0      1502      0.00     47.71      0.00       0  etcd
+14:18:42        0      1508      0.00     22.02      0.00       0  rsyslogd
+----
+
+
+
+
 ==== time && ptime
 
 time命令可以用来运行程序并报告CPU用量
@@ -705,6 +722,233 @@ strace -ttT -p 854
 # 会输出系统调用的具体耗时
 ----
 
+[options="header"]
+|===
+|工具 |描述
+|syscount |统计包括与文件系统相关的系统调用
+|statsnoop |跟踪对 stat(2) 变种的调用
+|syncsnoop |跟踪对 stat(2) 及其变种的调用，带时间戳
+|mmapfiles |统计 mmap(2) 文件数
+|scread |统计 read(2) 文件数
+|filelife |跟踪短命文件，带生命长度，单位为秒
+|vfscount |统计所有 VFS 操作
+|vfssize |显示 VFS 读 / 写大小
+|fileslower |显示慢的文件读 / 写
+|filetype |按照文件类型和进程显示 VFS 读写
+|ioprofile |统计 I/O 上的栈，显示代码路径
+|writesync |按照同步标志显示普通文件写
+|writeback |显示回写事件和延时
+|dcstat |目录缓存命中统计信息
+|dcsnoop |跟踪目录缓存查找
+|mountsnoop |全系统范围内跟踪挂载和卸载
+|icstat |inode 缓存命中统计信息
+|bufgrow |按照进程和字节数显示缓存高速缓冲区增长
+|readahead |显示预读命中和效率
+|===
+
+
+==== dd
+
+[source, bash]
+----
+# 生成一个1024M大小的文件
+dd if=/dev/zero of=/tmp/test.log bs=1M count=1024
+----
+
+==== fio
+
+[source, bash]
+----
+# fio --runtime=60 --time_based --clocksource=clock_gettime --name=randread numjobs=1 --rw=randread --random_distribution=pareto:0.9 --bs=8k --size=5g filename=fio.tmp
+----
+
+==== blkreplay
+
+块I/O重放工具，在调试难以用微基准测试工具重现的磁盘问题时，非常有用。
+
+
+
+==== 缓存刷新
+
+基准测试之间为了避免相互影响，需要进行缓存刷新
+
+[source, bash]
+----
+To free pagecache:
+echo 1 > /proc/sys/vm/drop_caches
+To gree reclaimable slab objects (includes detries and inodes):
+echo 2 > /proc/sys/vm/drop_caches
+To gree slab objects and pagecache:
+echo 3 > /proc/sys/vm/drop_caches
+----
+
+=== 磁盘
+
+DWT是磁盘等待时间，DST是磁盘服务时间
+
+image::linux/image-2025-03-10-10-07-24-161.png[]
+
+image::linux/image-2025-03-10-10-08-34-523.png[]
+
+==== 时间尺度
+
+磁盘I/O时间千差万别，无法进行统一，但是基本的磁盘操作时间还是能大致估计出，真是场景测试需要参考具体磁盘厂商给出的指标说明
+
+[options="header"]
+|===
+|事件 |延时 |比例
+|磁盘缓存命中 |小于 100 µs¹ |1 秒
+|读闪存 |100 ~ 1000µs (I/O 由小到大) |1 ~ 10 秒
+|旋转磁盘连续读 |约 1ms |10 秒
+|旋转磁盘随机读（7200r/min） |约 8ms |1.3 分钟
+|旋转磁盘随机读（慢，排队） |大于 10ms |1.7 分钟
+|旋转磁盘随机读（队列较长） |大于 100ms |17 分钟
+|最差情况的虚拟磁盘 I/O（硬盘控制器、RAID-5、排队、随机 I/O）|大于 1000msRAID-5、排队、随机 I/O |2.8 小时
+|===
+
+==== 缓存
+
+最好的磁盘I/O就是没有I/O，许多软件栈会通过缓存读和缓存写来避免磁盘I/O抵达磁盘
+
+.应用程序和文件系统的缓存
+[options="header"]
+|===
+|缓存 |示例
+|设备缓存 |ZFS vdev
+|块缓存 |缓冲区高速缓存
+|磁盘控制器缓存 |RAID 卡缓存
+|存储阵列缓存 |阵列缓存
+|磁盘缓存 |磁盘数据控制器（DDC）附带 DRAM
+|===
+
+操作系统软件（软RAID）可以用来创建虚拟磁盘。
+
+image::linux/image-2025-03-10-11-51-31-433.png[]
+
+Linux增强了块I/O，增加了I/O合并和I/O调度器以提高性能，增加了用于对多个设备分组的卷管理器，以及用于创建虚拟设备的设备映射器。
+
+===== I/O合并
+
+当创建I/O请求时，Linux可以对他们进行合并和结合，将相邻地址的操作进行合并，这样可以将I/O进行分组，减少内核存储栈中单次I/O的CPU开销和磁盘上的开销，提高吞吐量。
+
+image::linux/image-2025-03-10-11-52-27-803.png[]
+
+==== 工具法
+
+- iostat: 使用扩展模式寻找繁忙磁盘
+- iotop: 发现哪个进程引发了磁盘I/O
+- biolatency: 以直方图的形式检查I/O延时的分布
+- biosnoop: 检查单个I/O
+
+==== USE 方法
+
+检查磁盘的如下指标：
+
+- 使用率： 设备忙碌的时间
+- 饱和度： I/O在队列里等待的程度
+- 错误： 设备错误
+
+==== 磁盘观测工具
+
+[options="header"]
+|===
+|Linux |描述
+|iostat |单个磁盘的各种统计信息
+|sar |磁盘历史统计信息
+|PSI |磁盘压力滞留信息
+|pidstat |按进程列出磁盘 I/O 使用情况
+|perf |记录块 I/O 跟踪点
+|biolatency |把磁盘 I/O 延时汇总成直方图
+|biosnoop |带 PID 和延时来跟踪磁盘 I/O
+|iotop、biotop |磁盘的 top 程序：按进程汇总磁盘 I/O
+|biostacks |带初始化栈来显示磁盘 I/O
+|blktrace |磁盘 I/O 事件跟踪
+|bpfttrace |自定义磁盘跟踪
+|MegaCli |LSI 控制器统计信息
+|smartctl |磁盘控制器统计信息
+|===
+
+===== iostat
+
+iostat(1)汇总了单个磁盘的统计信息，为负载特征归纳、使用率和饱和度提供了指标。它可以由任何用户执行，通常是在命令行调查磁盘I/O 问题使用的第一个命令。
+
+[source, bash]
+----
+[root@k8smaster-ims ~]# iostat -szx
+Linux 5.14.0-503.16.1.el9_5.x86_64 (k8smaster-ims)      03/10/25        _x86_64_        (32 CPU)
+
+avg-cpu:  %user   %nice %system %iowait  %steal   %idle
+           5.63    0.00    2.60    2.11    0.00   89.66
+
+Device             tps      kB/s    rqm/s   await  areq-sz  aqu-sz  %util
+dm-0            199.34  21489.17     0.00    0.97   107.80    0.19  17.44
+sda             206.71  21489.34    44.46    0.94   103.96    0.19   0.88
+----
+
+由于`areq-sz`（平均请求大小）是在合并之后计算的，8KB或更小的小尺寸指标表明存在无法被合并的随机I/O工作负载。较大的尺寸则可能表示存在大的I/O操作或者是已经合并的顺序工作负载（这可以通过前面的列来指示）。
+
+更详细的中文解释如下：
+
+- 如果这个值较小（8KB或以下），这通常意味着系统处理的是随机I/O工作负载，这些工作负载由于其随机性质而难以被合并。
+- 相反，如果`areq-sz`显示的值较大，则可能表示有两种情况：一是确实存在大尺寸的I/O操作；二是这是由多个可以合并的小I/O请求组成的顺序I/O工作负载。要区分这两种情况，可以参考其他指标或之前的列数据，它们可能会提供关于I/O模式更多的上下文信息。
+
+- tps: 每秒事务数(IOPS)
+- rqm/s： 每秒入队及合并请求数，表明连续的请求再交付给设备之前被合并，以提高性能，是顺序工作负载的一个标志
+- aqu-sz：在驱动请求队列中等待在设备上活动的请求的平均数量
+- `areq-sz`指的是在I/O请求合并之后的平均请求大小。
+
+- -c：显示CPU报告
+- -d：显示磁盘报告
+- -k：使用KB代替(512B)块数目
+- -m：使用MB代替(512B)块数目
+- -p：包括单个分区的统计信息
+- -t：输出时间戳
+- -x：扩展统计信息
+- -s：短窄输出
+- -z：跳过显示零活汇总
+
+
+===== PSI
+
+PSI 提供了一种机制来报告当系统资源紧张时，任务（进程）由于缺乏足够的资源而被延迟或“停滞”的程度。这些资源包括：
+
+- **CPU**：处理器时间。
+- **Memory**：物理内存。
+- **IO**：磁盘或网络 I/O。
+
+通过 PSI，可以更精确地了解系统在高负载情况下如何应对资源瓶颈，以及哪些进程受到了影响。
+
+PSI 的使用场景
+
+PSI 对于以下几种情况特别有用：
+
+1. **容量规划**：帮助识别系统何时接近其处理能力极限，从而为扩展计划提供依据。
+2. **性能调优**：允许深入分析系统性能瓶颈，并据此调整配置或优化代码。
+3. **问题诊断**：快速定位导致系统响应缓慢的根本原因，如是否由于内存不足、CPU过载或I/O阻塞引起的问题。
+
+如何查看 PSI 数据
+
+在 Linux 系统上，可以通过读取 `/proc/pressure/` 目录下的文件来获取 PSI 数据。例如：
+
+- `/proc/pressure/cpu`：显示 CPU 压力信息。
+- `/proc/pressure/memory`：显示内存压力信息。
+- `/proc/pressure/io`：显示 I/O 压力信息。
+
+这些文件包含了关于不同压力级别的统计信息，比如短期（short-term）、中期（medium-term）和长期（long-term）的压力情况。
+
+
+假设你读取了 `/proc/pressure/io` 文件的内容如下：
+
+[source]
+----
+some avg10=0.00 avg60=0.00 avg300=0.00 total=0
+full avg10=0.00 avg60=0.00 avg300=0.00 total=0
+----
+
+- `some` 行表示至少有一些任务因为 I/O 资源紧张而受到某种程度的影响。
+- `full` 行则表示所有任务都因 I/O 资源紧张而完全停滞。
+- `avg10`, `avg60`, 和 `avg300` 分别代表过去 10 秒、60 秒和 300 秒内的平均压力比例（以百分比形式），数值越接近 1 表示压力越大。
+- `total` 则是自系统启动以来受影响的任务累计的时间（以微秒为单位）。
 
 
 
