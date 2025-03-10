@@ -975,11 +975,15 @@ image::linux/image-2025-03-10-20-53-50-180.png[]
 
 image::linux/image-2025-03-10-20-57-29-750.png[]
 
+- *协议栈*
 
+网络是由一组协议栈组成的，其中每一层服务一个特定目标。
 
+image::linux/image-2025-03-10-21-00-40-431.png[]
 
+image::linux/image-2025-03-10-21-04-13-884.png[]
 
-
+image::linux/image-2025-03-10-21-04-40-293.png[]
 
 
 https://github.com/deepflowio/deepflow/blob/main/README-CN.md
