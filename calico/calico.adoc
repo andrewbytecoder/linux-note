@@ -75,11 +75,11 @@ image::calico/image-2025-01-23-20-16-41-799.png[]
 
 ==== 负载均衡器服务
 
-image::image-2025-01-23-19-39-20-407.png[]
+image::calico/image-2025-01-23-19-39-20-407.png[]
 
 大多数网络负载均衡器都会保留客户端源 IP 地址，但由于服务随后会通过一个内部节点(kube-proxy)，因此支持 Pod 本身看不到客户端 IP。
 
-image::image-2025-01-23-20-31-03-560.png[]
+image::calico/image-2025-01-23-20-31-03-560.png[]
 
 ==== Advertising service IPs
 
@@ -89,58 +89,58 @@ Calico supports advertising service Cluster IPs, or External IPs for services co
 
 https://github.com/metallb/metallb?tab=readme-ov-file[metallb和calico一样根据路由提供负载均衡]
 
-image::image-2025-01-23-19-46-52-810.png[]
+image::calico/image-2025-01-23-19-46-52-810.png[]
 
-image::image-2025-01-23-20-23-12-971.png[]
-image::image-2025-01-23-20-24-46-501.png[]
+image::calico/image-2025-01-23-20-23-12-971.png[]
+image::calico/image-2025-01-23-20-24-46-501.png[]
 
 
 ==== externalTrafficPolicy:local
 
 默认情况下，无论是使用服务类型NodePort还是LoadBalancer，还是通过BGP公布服务IP地址，从集群外部访问服务都会在支持该服务的所有 Pod 之间均匀负载平衡，与 Pod 位于哪个节点无关。可以通过使用externalTrafficPolicy:local 配置服务来更改此行为，该配置指定连接应仅负载平衡到本地节点上支持该服务的Pod。
 
-image::image-2025-01-23-19-51-38-831.png[]
+image::calico/image-2025-01-23-19-51-38-831.png[]
 
-image::image-2025-01-23-20-32-35-229.png[]
+image::calico/image-2025-01-23-20-32-35-229.png[]
 
 
-image::image-2025-01-23-20-26-12-008.png[]
+image::calico/image-2025-01-23-20-26-12-008.png[]
 
 
 ==== Calico eBPF本机服务处理
 
 Calico作为kube-proxy的替代方案，支持eBPF本机服务处理，通过eBPF实现服务路由，这可以保留源IP简化网络策略，提供DSR(直接服务返回)以减少流量的网络跳数。
 
-image::image-2025-01-23-19-57-38-107.png[]
+image::calico/image-2025-01-23-19-57-38-107.png[]
 
 
-image::image-2025-01-23-20-29-34-564.png[]
+image::calico/image-2025-01-23-20-29-34-564.png[]
 
 
 ==== Calico网络模型示例
 
 均衡按照节点进行均衡
 
-image::image-2025-01-23-20-27-47-118.png[]
+image::calico/image-2025-01-23-20-27-47-118.png[]
 
 
 
 
-image::../image/image-2025-01-24-10-17-18-714.png[]
+image::calico/image-2025-01-24-10-17-18-714.png[]
 
-image::../image/image-2025-01-24-10-17-35-695.png[]
+image::calico/image-2025-01-24-10-17-35-695.png[]
 
 In-cluster ingress solution exposed as service type LoadBalancer with externalTrafficPolicy:local
 
-image::../image/image-2025-01-24-10-40-18-480.png[]
+image::calico/image-2025-01-24-10-40-18-480.png[]
 
 External ingress solution via node ports
 
-image::../image/image-2025-01-24-10-41-22-363.png[]
+image::calico/image-2025-01-24-10-41-22-363.png[]
 
 External ingress solution direct to pods
 
-image::../image/image-2025-01-24-10-42-26-185.png[]
+image::calico/image-2025-01-24-10-42-26-185.png[]
 
 
 

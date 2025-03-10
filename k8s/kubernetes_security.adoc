@@ -111,7 +111,7 @@ spec:
 
 在RBAC管理体系中， Kubernetes引入了4个资源对象： Role、ClusterRole、 RoleBinding和ClusterRoleBinding。
 
-image::image-2025-02-10-09-42-06-446.png[]
+image::k8s/image-2025-02-10-09-42-06-446.png[]
 
 1. 角色（ Role） 和集群角色（ClusterRole）
 

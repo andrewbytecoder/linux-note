@@ -1,23 +1,30 @@
 
+:toc:
 
+// 保证所有的目录层级都可以正常显示图片
+:path: prometheus/
+:imagesdir: ../image/
 
+// 只有book调用的时候才会走到这里
+ifdef::rootpath[]
+:imagesdir: {rootpath}{path}{imagesdir}
+endif::rootpath[]
 
+// 用于文件跳转
+ifndef::rootpath[]
+:rootpath: ../
+endif::rootpath[]
 
-
-
-
-
-
-
+== kube-state-metrics
 
 
 
 - kube-state-metrics 获取数据
 
-image::../image/image-2025-01-15-11-50-41-061.png[]
+image::prometheus/image-2025-01-15-11-50-41-061.png[]
 
 
 
-image::../image/image-2025-01-15-11-52-26-091.png[]
+image::prometheus/image-2025-01-15-11-52-26-091.png[]
 
-image::../image/image-2025-01-15-11-53-24-998.png[]
+image::prometheus/image-2025-01-15-11-53-24-998.png[]

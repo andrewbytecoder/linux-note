@@ -1,7 +1,7 @@
 :toc:
 
 // 保证所有的目录层级都可以正常显示图片
-:path: study_journal/
+:path: containerd/
 :imagesdir: ../image/
 
 // 只有book调用的时候才会走到这里
@@ -26,7 +26,7 @@ endif::rootpath[]
 环境安装可以参考官方安装指导文档： https://docs.docker.com/engine/install/[Docker 官方安装指南]
 
 .Docker 架构图
-image::c8116066bdbf295a7c9fc25b87755dfe.jpg[docker]
+image::containerd/c8116066bdbf295a7c9fc25b87755dfe.jpg[docker]
 
 ====  **熟悉 Docker 基本命令**
 
@@ -895,7 +895,7 @@ db_data:
 === 常见命令
 
 .docker & docker hub
-image::c8116066bdbf295a7c9fc25b87755dfe.jpg[docker]
+image::containerd/c8116066bdbf295a7c9fc25b87755dfe.jpg[docker]
 
 [cols = "2,3,4", frame = "all", grid = "all"]
 |====
@@ -972,7 +972,7 @@ image::c8116066bdbf295a7c9fc25b87755dfe.jpg[docker]
 容器镜像内部并不是一个平坦的结构，而是由许多的镜像层组成的，每层都是只读不可修改的一组文件，相同的层可以在镜像之间共享，然后多个层像搭积木一样堆叠起来，再使用一种叫“ **Union FS联合文件系统**”的技术把它们合并在一起，就形成了容器最终看到的文件系统
 
 
-image::c750a7795ff4787c6639dd42bf0a473f.png[]
+image::containerd/c750a7795ff4787c6639dd42bf0a473f.png[]
 
 
 *Dockerfile格式*
@@ -1088,13 +1088,13 @@ docker run -d --rm -p 6380:6380 redis:6.0.6 redis-server --port 6380
 `Linux` 提供了命名空间和控制组两大系统功能，它们是容器的基础。但是，要把进程运行在容器中，还需要有便捷的`SDK`或命令来调用`Linux`的系统功能，从而创建出容器。容器的运行时（`runtime`）就是容器进程运行和管理的工具。
 容器运行时分为低层运行时和高层运行时，功能各有侧重。低层运行时主要负责运行容器，可在给定的容器文件系统上运行容器的进程；高层运行时则主要为容器准备必要的运行环境，如容器镜像下载和解压并转化为容器所需的文件系统、创建容器的网络等，然后调用低层运行时启动容器。
 
-image::Pasted image 20250205111925.png[]
+image::containerd/Pasted image 20250205111925.png[]
 
 
 === `CRI` 和 `CRI-O`
 
 
-image::Pasted image 20250205113558.png[]
+image::containerd/Pasted image 20250205113558.png[]
 
 *OCI镜像规范*
 
@@ -1103,7 +1103,7 @@ OCI 定义的镜像包括4个部分：镜像索引（Image Index）、清单 （
 *本地计算机上容器生命周期变化*
 
 .本地计算机上容器生命周期变化
-image::image-2025-02-05-14-54-16-661.png[]
+image::containerd/image-2025-02-05-14-54-16-661.png[]
 
 
 
@@ -1221,11 +1221,11 @@ docker build . -t go_app:v1.0.0.0
 
 image:docker-image.gif[docker-image]
 
-image::image-2025-01-20-21-23-37-300.png[]
+image::containerd/image-2025-01-20-21-23-37-300.png[]
 
 === Docker 总结
 
-image::79f8c75e018e0a82eff432786110ef16.jpg[]
+image::containerd/79f8c75e018e0a82eff432786110ef16.jpg[]
 
 
 
