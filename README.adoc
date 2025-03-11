@@ -13,7 +13,7 @@
 
 [quote, 王亚周, wangyazhoujy@gmail.com;564631192@qq.com;wangyazhoujy@qq.com]
 ____
-开发环境搭建。
+Linux 专家之路。
 ____
 
 

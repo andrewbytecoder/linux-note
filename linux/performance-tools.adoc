@@ -1123,8 +1123,6 @@ ESTAB            0             0                             10.161.30.172:2584 
 ESTAB            0             0                             10.161.30.172:3902                         10.161.30.172:2379    
 ----
 
-
-
 - **nicstat/ip -s link**：检查传输和接收字节的速率。高吞吐量可能受到协商的数据链路速度或外部网络节流的限制。这种限制也可能导致系统中的网络用户之间的争夺和延时。
 - **tcplife**：记录 TCP 会话的进程细节、持续时间（寿命）和吞吐量统计数据。
 - **tcptop**：实时观测速率最高的 TCP 会话。
@@ -1245,21 +1243,171 @@ Icmp:
 ethtool可以使用-i和-k选项来检查网络接口静态配置，也可以使用-S打印驱动程序的统计信息。
 
 
+==== 常用观测工具列表
 
+|===
+|工具               |简介
+|offcpuptime        |CPU 阻塞时间的剖析可以显示网络 I/O 情况
+|sockstat           |高级的套接字统计信息
+|sofamily           |按进程统计新套接字的地址系列
+|soprotocol         |按进程统计新套接字的传输协议
+|soconnect          |跟踪套接字 IP 协议的连接细节
+|soaccept           |跟踪套接字 IP 协议的接受细节
+|socketio           |用 I/O 计数总结套接字的细节
+|socksize           |以直方图显示每个进程的套接字 I/O 大小
+|sormem             |显示套接字接收缓冲的使用和溢出情况
+|soconnlat          |用栈总结 IP 套接字的连接延时
+|solstbyte          |总结 IP 套接字的第一个字节的延时
+|tcpconnect         |跟踪 TCP 主动连接 (connect())
+|tcpaccept          |跟踪 TCP 被动连接 (accept())
+|tcpwin             |跟踪 TCP 发送拥塞窗口参数
+|tcpnagle           |跟踪 TCP Nagle 的使用和发送延时
+|udpconnect         |跟踪来自 localhost 的新 UDP 连接
+|gethostlatency     |通过库调用跟踪 DNS 查询延时
+|ipecn              |跟踪 IP 接入显式拥塞通知
+|superping          |从网络栈测量 ICMP 应答时间
+|qdisc-fq(...)      |显示 FQ qdisc 队列的延时
+|netsize            |显示网络设备 I/O 大小
+|netxlat            |显示网络设备传输延时
+|skbdrop            |用内核栈踪迹跟踪 sk_buff 的丢弃情况
+|skblife            |sk_buff 的寿命作为栈间延时
+|ieee80211scan      |跟踪 IEEE 802.11 WiFi 扫描
+|===
 
+- **strace(1)**：跟踪套接字相关的系统调用并检查其使用的选项（注意，strace(1) 的系统开销较高）。
+- **lsof(8)**：按进程 ID 列出包括套接字细节在内的打开的文件。
+- **nfsstat(8)**：NFS 服务器和客户机统计信息。
+- **ifpps(8)**：top 命令风格的网络和系统统计工具。
+- **iftop(8)**：按主机（嗅探）总结网络接口吞吐量。
+- **perf(1)**：统计和记录网络跟踪点和内核函数。
+- **/proc/net**：包含许多网络统计信息文件。
+- **BPF 迭代器**：允许 BPF 程序在 /sys/fs/bpf 中导出自定义的统计数据。
 
+===== traceroute
 
+发出一系列数据包实验性地探测到一台主机的当前路由，它的实现利用递增每个数据包IP协议的生存时间TTL，从而导致网关顺序的发送ICMP超时响应报文，向主机揭示自己的存在（如果防火墙没有拦截它们）。
 
+===== iperf
 
+测量TCP和UDP吞吐量的开源工具。
 
+===== netperf
 
+微基准测试工具，可以用来测试请求/响应的性能
 
+===== tc
 
+流量控制工具tc，允许选择各种排队规则(qdiscs)来改善或管理性能
 
+[source, bash]
+----
+# 查看设备网络设备的队列规则
+tc qdisc show dev eth0
+# 使用netem将丢包率设置为1%
+tc qdisc add dev eth0 root netem loss 1%
+tc qdisc show dev eth0
+----
 
+==== 调优
 
+可通过配置来对网络性能进行调优，但是在试图调整之前最好先理解网络的使用情况，这样能发现可避免的不需要的操作，以提高更高的性能收益
 
+===== *系统级可调参数*
 
+可以使用 `sysctl -a` 列出所有系统级可调参数
+
+[source, bash]
+----
+[root@k8smaster-ims changeIP]# sysctl -a |grep tcp
+net.ipv4.tcp_abort_on_overflow = 0
+net.ipv4.tcp_adv_win_scale = 1
+net.ipv4.tcp_allowed_congestion_control = reno cubic
+net.ipv4.tcp_app_win = 31
+net.ipv4.tcp_autocorking = 1
+net.ipv4.tcp_available_congestion_control = reno cubic
+net.ipv4.tcp_available_ulp = espintcp mptcp
+net.ipv4.tcp_base_mss = 1024
+net.ipv4.tcp_challenge_ack_limit = 1000
+net.ipv4.tcp_comp_sack_delay_ns = 1000000
+···
+----
+
+那么多调优参数是不是看的眼花缭乱，这么多的可调项，处理好可不是一件容易的事情，tuned项目提供了基于配置文件的自动调优
+
+[source, bash]
+----
+tuned-adm list
+----
+
+激活网络延迟的配置
+
+[source, bash]
+----
+[root@k8smaster-ims changeIP]# tuned-adm profile
+Available profiles:
+- accelerator-performance     - Throughput performance based tuning with disabled higher latency STOP states
+- balanced                    - General non-specialized tuned profile
+- desktop                     - Optimize for the desktop use-case
+- hpc-compute                 - Optimize for HPC compute workloads
+- intel-sst                   - Configure for Intel Speed Select Base Frequency
+- latency-performance         - Optimize for deterministic performance at the cost of increased power consumption
+- network-latency             - Optimize for deterministic performance at the cost of increased power consumption, focused on low latency network performance
+- network-throughput          - Optimize for streaming network throughput, generally only necessary on older CPUs or 40G+ networks
+- optimize-serial-console     - Optimize for serial console use.
+- powersave                   - Optimize for low power consumption
+- self-performance            - Broadly applicable tuning that provides excellent performance across a variety of common server workloads
+- throughput-performance      - Broadly applicable tuning that provides excellent performance across a variety of common server workloads
+- virtual-guest               - Optimize for running inside a virtual guest
+- virtual-host                - Optimize for running KVM guests
+Current active profile: self-performance
+[root@k8smaster-ims changeIP]# tuned-adm profile network-latency
+# 如果想查看具体设置了那些配置，可以通过查看tuned 的源码来查看
+more tuned/profiles/network-latency/tuned.conf
+#
+# tuned configuration
+#
+
+[main]
+summary=Optimize for deterministic performance at the cost of increased power consumption, focused on low latency network performance
+include=latency-performance
+
+[vm]
+transparent_hugepages=never
+
+[sysctl]
+net.core.busy_read=50
+net.core.busy_poll=50
+net.ipv4.tcp_fastopen=3
+kernel.numa_balancing=0
+kernel.hung_task_timeout_secs = 600
+kernel.nmi_watchdog = 0
+vm.stat_interval = 10
+kernel.timer_migration = 0
+
+[bootloader]
+cmdline_network_latency=skew_tick=1 tsc=reliable rcupdate.rcu_normal_after_boot=1
+
+[rtentsk]
+----
+
+===== 套接字选项
+
+应用程序可以通过setsockopt()系统调用对套接字进行单独调优
+
+|===
+|参数名               |说明
+|SO_SNDBUF、SO_RCVBUF  |发送和接收缓冲区的大小（这些可以如前面描述过的那样进行系统层限制；也可以用 SO_SNDBUFFORCE 来覆盖发送限制）
+|SO_REUSEPORT          |允许多个进程或线程绑定到同一个端口，允许内核在它们之间分配负载以实现可伸缩性（从 Linux 3.9 开始）
+|SO_MAX_PACING_RATE    |设置最大速率，以每秒字节数为单位（见 tc-fq(8)）
+|SO_LINGER             |可以用来减少 TIME_WAIT 的延时
+|SO_TXTIME            |请求基于时间的数据包传输，可以提供截止日期（自 Linux 4.19 起）[Corbet 18c]（也能用于 UDP 控速 [Bruijn 18]）
+|TCP_NODELAY          |禁用 Nagle，尽可能快地发送分段。这可能会改善延时，但代价是更高的网络使用率（更多的数据包）
+|TCP_CORK             |暂停传输，直到可以发送完整的数据包，这样可以提高吞吐量。还有一个系统级的设置可以让内核自动尝试分流：net.ipv4.tcp_autocorking）
+|TCP_QUICKACK         |立即发送 ACK（可以增加发送带宽）
+|TCP_CONGESTION       |套接字的一种拥塞控制算法
+|===
+
+=== 云计算
 
 
 

@@ -532,7 +532,7 @@ tracepoint:syscalls:sys_exit_execve
     long ret
 ----
 
-使用bpftrace跟踪文件系统的性能
+===== 使用bpftrace跟踪文件系统的性能
 
 [source, bash]
 ----
@@ -588,7 +588,7 @@ bpftrace -e 'kprobe:spa_sync { time("%H:%M:%S ZFS spa_sync()\n"); }'
 bpftrace -e 'kprobe:lookup_fast { @[comm, pid] = count(); }'
 ----
 
-*使用bpftrace跟踪系统磁盘性能*
+===== *使用bpftrace跟踪系统磁盘性能*
 
 [source, bash]
 ----
@@ -607,12 +607,16 @@ bpftrace -e 't:block:block_rq_issue { @[args->rwbs] = count(); }'
 bpftrace -e 't:block:block_rq_issue /args->bytes/ { @[comm] = hist(args->bytes); }'
 ----
 
-*使用bpftrace跟踪网络接口*
+===== *使用bpftrace跟踪网络接口*
+
+- 通过通配符统计多个函数的调用，这样能够显示哪个函数调用的最频繁
 
 [source, bash]
 ----
 # 按照PID和进程名统计套接字accept的次数
 bpftrace -e 't:syscalls:sys_enter_accept* { @[pid, comm] = count(); }'
+# 增加调用堆栈的显示
+bpftrace -e 't:syscalls:sys_enter_accept* { @[ustack, pid, comm] = count(); }'
 # 按照PID和进程名统计套接字connect的次数
 bpftrace -e 't:syscalls:sys_enter_connect { @[pid, comm] = count(); }'
 # 通过用户栈踪迹统计套接字connect的数量，打印出堆栈信息
@@ -637,6 +641,19 @@ bpftrace -e 'kr:tcp_recvmsg /retval >= 0/ { @recv_bytes = hist(retval); }'
 bpftrace -e 't:tcp:tcp_retransmit_* { @[probe, ntop(2, args->saddr)] = count(); }'
 # 对所有的TCP函数（会给TCP增加高额的开销）进行计数
 bpftrace -e 'k:tcp_* { @[func] = count(); }'
+# 按 on-CPU PID 和进程名统计UDP发送/接收的次数
+bpftrace -e 'k:udp*_sendmsg,k:udp*_recvmsg { @[func, pid, comm] = count(); }'
+bpftrace -e 'kr:udp_sendmsg,kr:udp_recvmsg /(int32)retval > 0/ { @[pid, comm] = sum((int32)retval); }'
+# 统计UDP发送字节直方图
+bpftrace -e 'k:udp_sendmsg { @send_bytes = hist(arg2); }'
+# UDP接收字节直方图
+bpftrace -e 'kr:udp_recvmsg /retval >= 0/ { @recv_bytes = hist(retval); }'
+# 统计内核传输(transmit)相关的内核堆栈信息
+bpftrace -e 't:net:net_dev_xmit { @[kstack] = count(); }'
+# 显示每个设备接收数据的CPU直方图
+bpftrace -e 't:net:netif_receive_skb { @[str(args->name)] = lhist(cpu, 0, 128, 1); }'
+# 统计ieee80211层的函数数量（会给数据包增加高额的开销）
+bpftrace -e 'k:ieee80211_* { @[func] = count(); }'
 ----
 
 
