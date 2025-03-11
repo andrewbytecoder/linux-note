@@ -2018,7 +2018,7 @@ PID   COMM       LADDR           LPORT RADDR           RPORT TX_KB RX_KB MS
 
 ==== tcpretrans
 
-`tcpretrans.py` 是一个用于追踪 TCP 重传（retransmit）事件的工具，它能帮助用户识别和诊断网络健康状况。以下是该工具的主要功能及使用方法总结：
+`tcpretrans.py` 是一个用于追踪TCP重传（retransmit）事件的工具，它能帮助用户识别和诊断网络健康状况。以下是该工具的主要功能及使用方法总结：
 
 [source,bash]
 ----

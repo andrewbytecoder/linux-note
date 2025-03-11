@@ -605,12 +605,57 @@ bpftrace -e 't:block:block_rq_complete /args->error/ {printf("dev %d type %s err
 bpftrace -e 't:block:block_rq_issue { @[args->rwbs] = count(); }'
 # 按照进程细分磁盘I/O大小分布
 bpftrace -e 't:block:block_rq_issue /args->bytes/ { @[comm] = hist(args->bytes); }'
-
-
-
-
-
 ----
+
+*使用bpftrace跟踪网络接口*
+
+[source, bash]
+----
+# 按照PID和进程名统计套接字accept的次数
+bpftrace -e 't:syscalls:sys_enter_accept* { @[pid, comm] = count(); }'
+# 按照PID和进程名统计套接字connect的次数
+bpftrace -e 't:syscalls:sys_enter_connect { @[pid, comm] = count(); }'
+# 通过用户栈踪迹统计套接字connect的数量，打印出堆栈信息
+bpftrace -e 't:syscalls:sys_enter_connect { @[ustack, comm] = count(); }'
+# 通过发送/接受方向、on-CPU的PID和进程名称统计套接字的数量
+bpftrace -e 'k:sock_sendmsg,k:sock_recvmsg { @[func, pid, comm] = count(); }'
+# 按on-CPU的PID和进程名统计套接字的发送/接受字节数
+bpftrace -e 'kr:sock_sendmsg,kr:sock_recvmsg /(int32)retval > 0/ { @[pid, comm] = sum((int32)retval); }'
+# 按on-CPU PID和进程名统计TCP连接数
+bpftrace -e 'k:tcp_v*_connect { @[pid, comm] = count(); }'
+# 按on-CPU PID 和进程名统计TCP接受accept次数
+bpftrace -e 'k:inet_csk_accept { @[pid, comm] = count(); }'
+# 按on-CPU PID和进程名统计TCP发送/接收的次数
+bpftrace -e 'k:sock_sendmsg,k:sock_recvmsg { @[func, pid, comm] = count(); }'
+# 按照直方图形式显示TCP 发送/接收的字节数，通过on-CPU PID和进程名
+bpftrace -e 'kr:sock_sendmsg,kr:sock_recvmsg /(int32)retval > 0/ { @[pid, comm] = sum((int32)retval); }'
+# 统计TCP发送字节数的直方图
+bpftrace -e 'k:tcp_sendmsg { @send_bytes = hist(arg2); }'
+# 统计TCP接收字节数的直方图
+bpftrace -e 'kr:tcp_recvmsg /retval >= 0/ { @recv_bytes = hist(retval); }'
+# 统计TCP重传类型和对端的IP地址
+bpftrace -e 't:tcp:tcp_retransmit_* { @[probe, ntop(2, args->saddr)] = count(); }'
+# 对所有的TCP函数（会给TCP增加高额的开销）进行计数
+bpftrace -e 'k:tcp_* { @[func] = count(); }'
+----
+
+
+- 1. `kprobe:inet_accept`
+* **挂钩函数**: `inet_accept`
+* **功能**: `inet_accept` 是内核中用于接受一个新的连接请求的函数。它通常在 TCP 套接字上调用，负责创建一个新的套接字来表示接受的连接。
+* **调用时机**: 当应用程序调用 `accept()` 系统调用时，内核会调用 `inet_accept` 来处理连接请求。
+* **使用场景**: 如果你想要跟踪所有通过 `accept()` 系统调用接受的连接，可以使用 `kprobe:inet_accept`。
+
+- 2. `kprobe:inet_csk_accept`
+* **挂钩函数**: `inet_csk_accept`
+* **功能**: `inet_csk_accept` 是 `inet_accept` 的一个底层实现，属于内核的 TCP 协议栈的一部分。它负责从已完成连接队列中取出一个连接，并返回一个新的套接字。
+* **调用时机**: `inet_csk_accept` 是在 `inet_accept` 内部调用的，专门用于 TCP 套接字的连接接受。
+* **使用场景**: 如果你想要更深入地了解 TCP 连接接受的过程，或者只对 TCP 连接的接受感兴趣，可以使用 `kprobe:inet_csk_accept`。
+
+- 主要区别
+* **抽象层次**: `inet_accept` 是一个更高层次的函数，适用于所有类型的套接字（如 TCP、UDP 等），而 `inet_csk_accept` 是专门用于 TCP 套接字的底层函数。
+* **调用关系**: `inet_accept` 会调用 `inet_csk_accept` 来处理 TCP 连接的接受。
+* **使用场景**: `inet_accept` 更适合用于跟踪所有类型的连接接受，而 `inet_csk_accept` 更适合用于深入分析 TCP 连接的接受过程。
 
 
 

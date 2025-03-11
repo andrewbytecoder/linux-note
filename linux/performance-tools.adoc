@@ -335,6 +335,55 @@ sar -n TCP 1 5
 |-W |pswpout/s |页面换出（Linux 换出） |页面 / 秒
 |===
 
+[options="header"]
+|===
+|选项 | 统计信息 | 描述 | 单位
+|-n DEV | rxcmp/s | 接收的压缩包 | 数据包数量 / 秒
+|-n DEV | txcmp/s | 传输的压缩包 | 数据包数量 / 秒
+|-n DEV | rxmcst/s | 接收的多播包 | 数据包数量 / 秒
+|-n DEV | %ifutil | 接口使用率；对于全双工，rx 或 tx 的较大值 | 百分比
+|-n EDEV | rxerr/s | 接收的数据包错误 | 数据包数量 / 秒
+|-n EDEV | txerr/s | 传输的数据包错误 | 数据包数量 / 秒
+|-n EDEV | coll/s | 碰撞 | 数据包数量 / 秒
+|-n EDEV | rxdrop/s | 接收的数据包丢包（缓冲溢出） | 数据包数量 / 秒
+|-n EDEV | txdrop/s | 传输的数据包丢包（缓冲溢出） | 数据包数量 / 秒
+|-n EDEV | txcarr/s | 传输载波错误 | 错误 / 秒
+|-n EDEV | rxfram/s | 接收的排列错误 | 错误 / 秒
+|-n EDEV | rxfifo/s | 接收的数据包 FIFO 超限错误 | 数据包数量 / 秒
+|-n EDEV | txfifo/s | 传输的数据包 FIFO 超限错误 | 数据包数量 / 秒
+|-n IP | irec/s | 输入的数据报文（接收） | 数据报文 / 秒
+|-n IP | fwddgm/s | 转发的数据报文 | 数据报文 / 秒
+|-n IP | idel/s | 输入的 IP 数据报文（包括 ICMP） | 数据报文 / 秒
+|-n IP | orq/s | 输出的数据报文请求（传输） | 数据报文 / 秒
+|-n IP | asmrq/s | 接收的 IP 分段 | 分段数量 / 秒
+|-n IP | asmok/s | 重组的 IP 数据报文 | 数据报文 / 秒
+|-n IP | fragok/s | 分段的数据报文 | 数据报文 / 秒
+|-n IP | fragcrt/s | 创建的分段 IP 数据报文 | 分段数量 / 秒
+|-n EIP | ihdrerr/s | IP 头错误 | 数据报文 / 秒
+|-n EIP | iukrerr/s | 无效的 IP 目标地址错误 | 数据报文 / 秒
+|-n EIP | iukwnprt/s | 未知的协议错误 | 数据报文 / 秒
+|-n EIP | idisc/s | 输入的丢弃（例如，缓冲溢满） | 数据报文 / 秒
+|-n EIP | odisc/s | 输出的丢弃（例如，缓冲溢满） | 数据报文 / 秒
+|-n EIP | onort/s | 输入数据报文无路由错误 | 数据报文 / 秒
+|-n EIP | asmf/s | IP 重组失败 | 失败数 / 秒
+|-n EIP | fragf/s | IP 不分段丢弃 | 数据报文 / 秒
+|-n TCP | active/s | 新的主动 TCP 连接（connect(2)） | 连接数 / 秒
+|-n TCP | passive/s | 新的被动 TCP 连接（connect(2)） | 连接数 / 秒
+|-n TCP | iseg/s | 输入的段（接收） | 段 / 秒
+|-n TCP | oseg/s | 输出的段（接收） | 段 / 秒
+|-n ETCP | atmptf/s | 主动 TCP 失败连接 | 连接数 / 秒
+|-n ETCP | estres/s | 建立的重置 | 重置数 / 秒
+|-n ETCP | retrans/s | TCP 段重传 | 段 / 秒
+|-n ETCP | isegerr/s | 分段错误 | 段 / 秒
+|-n ETCP | orsts/s | 发送重置 | 段 / 秒
+|-n SOCK | totsck | 使用中的套接字总数 | 套接字
+|-n SOCK | tcpsck/s | 使用中的 TCP 套接字总数 | 套接字
+|-n SOCK | udpsck/s | 使用中的 UDP 套接字总数 | 套接字
+|-n SOCK | rawsck/s | 使用中的 RAW 套接字总数 | 套接字
+|-n SOCK | ip-frag | 当前队列中的 IP 段 | 段
+|-n SOCK | tcp-tw | TIME_WAIT 中的 TCP 套接字 | 套接字
+|===
+
 ==== strace
 
 strace命令是Linux中系统调用跟踪器，跟踪系统调用，为每个系统调用打印一行摘要信息。
@@ -984,6 +1033,239 @@ image::linux/image-2025-03-10-21-00-40-431.png[]
 image::linux/image-2025-03-10-21-04-13-884.png[]
 
 image::linux/image-2025-03-10-21-04-40-293.png[]
+
+- *TCP连接队列*
+
+突发的连接由积压队列进行处理，一个在TCP握手完成前处理未完成的连接(SYN积压队列)，而另一个处理等待应用程序接受已建立的会话（也称为侦听积压队列）。早期的内核仅使用一个队列，并且易受SYN 洪水攻击。SYN 洪水是一种DoS 攻击类型，它从伪造的IP 地址发送大量的SYN 包到TCP侦听端口。这会在TCP 等待完成握手时填满积压队列，进而阻止真实的客户连接。有两个队列的情况下，第一个可作为潜在的伪造连接的集结地，仅在连接建立后才迁移到第二个队列。第一个队列可以设置得很长以吸收海量SYN 并且优化为仅存放最少的必要元数据。
+
+当然用户可以使用SYN cookie绕过第一个队列，因为它们显示客户端已经被授权。
+
+image::linux/image-2025-03-11-09-12-17-632.png[]
+
+- *缓冲区*
+
+利用套接字的发送和接收缓冲区能够提升数据吞吐量
+
+.TCP的发送与接受缓冲区
+image::linux/image-2025-03-11-09-22-47-239.png[]
+
+- *网络设备驱动*
+
+网络设备驱动通常还有一个附加的缓冲区-环形缓冲区-用于在内核与网卡之间发送和接收数据包。
+
+一个在高速网络中变得越来越普遍的性能特征是利用中断结合模式，一个中断仅在计时器（轮询）激活或者到达一定数量的包时才会被发送，而不是每当有数据包到达就中断内核，这降低了内核与网卡通信的频率，允许缓存更多的发送，从而达到更高的吞吐量。
+
+Linux内核使用一个新API(NAPI)框架，该框架使用中断缓解计数，对于低数据包率使用中断（处理过程通过softirq安排），对于高数据包率中断被禁用，使用轮询来允许结合；使用工作负载来决定工作模式，这提供了低时延和高吞吐的特性。
+
+- *网卡的发送和接收*
+
+对于发送的数据包，网卡收到通知，通常会使用直接内存访问（DMA）从内核内存中读取数据包，以提高效率，网卡提供发送描述符来管理DMA数据包
+
+对于接收的数据包，网卡可以使用DMA将数据包放入内核环形缓冲区内存，然后使用中断通知内核（可以忽略中断，以便进行结合）。中断出发一个softirq，将数据包发送到网络栈进行进一步处理。
+
+- *CPU扩展*
+
+- **RSS**: 接受侧缩放，对于支持多个队列的现代网卡，可以将数据包哈希到不同的队列中，再由不同的 CPU 处理，直接中断它们。这种哈希可能是基于 IP 地址和 TCP 端口号的，所以来自同一连接的数据包最终由同一个 CPU 处理。
+
+- **RPS**：接收端包控制。RSS 的一个软件实现，适用于不支持多队列的网卡。这涉及一个简短的中断服务例程，其将入站数据包映射到 CPU 进行处理。可以用类似的哈希方式将数据包映射到 CPU。
+- **RFS**：接收端流控制。这与 RPS 类似，但对套接字最后在 CPU 上处理的地方有亲和力，这可以提高 CPU 缓存命中率和内存定位。
+- **加速的接收端流控制**。这在硬件上实现了 RFS，适用于支持该功能的网卡。这包括用流量信息更新网卡，以便它能确定哪些 CPU 要中断。
+- **XPS**：发送端包控制。对于具有多个发送队列的网卡来说，它支持多个 CPU 向队列进行传输。
+
+- *内核旁路*
+
+使用诸如数据平面开发工具包 (DPDK) 等技术，应用程序可以绕过内核网络栈，以实现更高的数据包率和性能。这涉及一个应用程序在用户空间实现自己的网络协议，通过 DPDK 库和内核用户空间 I/O (UIO) 或虚拟功能 I/O (VFIO) 驱动向网络驱动写入。通过直接访问网卡的内存，可以避免复制数据包的开销。
+
+eXpress 数据路径 (XDP) 技术为网络数据包提供了另一种路径：一个可编程的快速路径，它使用扩展的 BPF，并集成到现有的内核栈中，而不是绕过它 [Høiland-Jørgensen 18]。(DPDK 现在支持 XDP 来接收数据包，将一些功能移回内核 [DPDK 20])。
+
+在绕过内核网络栈的情况下，使用传统工具和指标的仪器是不可用的，因为它们使用的计数器和跟踪事件也被绕过了，这使得性能分析更加困难。
+
+除了全栈旁路之外，还有一些功能可以避免复制数据的开销：如 MSG_ZEROCOPY send(2) 标志，以及通过 mmap(2) 的零拷贝接收 [Linux 20c][Corbet 18b]。
+
+- *其他优化*
+
+在整个Linux网络栈中，还有其他的一些算法用于提高性能
+
+image::linux/image-2025-03-11-09-47-48-971.png[]
+
+- **控速**：控制何时发送数据包、分散传输，以避免可能损害性能的数据突发（这可能有助于避免 TCP 的微突发，因为它可能导致排队延时，或甚至导致网络交换机丢弃数据包。当许多端点同时向一个端点传输数据时，它也可以帮助解决 incast 问题 [Fritchie 12])。
+- **TCP 小队列 (TSQ)**：它控制（减少）网络栈的排队数量，以避免包括缓冲区膨胀的问题 [Bufferbloat 20]。
+- **字节队列限制 (BQL)**：BQL 自动调整驱动队列的大小，使其足够大，以避免“饥饿”，但也足够小，以减少排队数据包的最大延时，并避免耗尽网卡 TX 描述符 [Hruby 12]。它的工作原理是在必要时暂停向驱动队列添加数据包，这是在 Linux 3.3 [Siemon 13] 中添加的。
+- **最早出发时间 (Earliest Departure Time, EDT)**：它使用计时轮而不是队列来排序发送到网卡的数据包。根据策略和速率配置，在每个数据包上设置时间戳。这是在 Linux 4.20 中加入的，具有类似 BQL 和 TSQ 的功能 [Jacobson 18]。
+
+==== 工具法
+
+
+- **nstat/netstat -s**：查找高重传率的和乱序的数据包。哪些数据包是高重传率的依客户机而不同，面向互联网的系统因具有不稳定的远程客户会比仅拥有同数据中心客户的内部系统具有更高的重传率。
+- **ip -s link/netstat -i**：检查接口错误计数器，包括“错误”、“丢弃”、“超速”。
+- **ss -tiepm**：检查重要套接字的限制器标志，看看它们的瓶颈是什么，以及显示套接字健康状况的其他统计数据。
+** **State**: 当前连接的状态（这里为 ESTAB，表示已建立）。
+** **Recv-Q**: 接收队列中的数据大小（以字节为单位）。0 表示没有未处理的数据。
+** **Send-Q**: 发送队列中的数据大小（以字节为单位）。0 表示没有等待确认的数据。
+** **Local Address:Port**: 本地地址和端口号。
+** **Peer Address:Port**: 对等端地址和端口号。
+** **Process**: 使用该连接的进程信息，包括名称、PID 和文件描述符编号。
+** **timer**: 定时器信息，如 keepalive 的状态和剩余时间。
+** **skmem**: 套接字内存使用情况，包括接收缓冲区大小(rb)、发送缓冲区大小(tb)等。
+** **ts sack cubic wscale**: TCP 窗口缩放选项值，TCP 拥塞控制算法（这里是 cubic），以及时间戳支持。
+** **rto, rtt, ato**: 重传超时时间(RTO)，往返时间(RTT)及其方差，ack 超时(ATO)。
+** **mss pmtu rcvmss advmss**: 最大报文段长度(MSS)，路径最大传输单元(PMTU)，接收MSS(rcvmss)，通告MSS(advmss)。
+** **cwnd bytes_sent bytes_acked bytes_received segs_out segs_in data_segs_out data_segs_in**: 拥塞窗口(cwnd)，已发送字节数(bytes_sent)，已确认字节数(bytes_acked)，已接收字节数(bytes_received)，已发送段数(segs_out)，已接收段数(segs_in)，数据段数(data_segs_out/in)。
+** **send pacing_rate delivery_rate delivered app_limited busy rcv_rtt rcv_space rcv_ssthresh minrtt snd_wnd**: 包括发送速率(send)，调节速率(pacing_rate)，交付速率(delivery_rate)，已交付段数(delivered)，应用限制(app_limited)，忙碌时间(busy)，接收端RTT(rcv_rtt)，接收空间(rcv_space)，接收端慢启动阈值(rcv_ssthresh)，最小RTT(minrtt)，发送窗口大小(snd_wnd)。
+
+[source, bash]
+----
+# -t tcp套接字，-i TCP内部信息，-e显示扩展套接字信息，-p显示进程信息，-m显示内存使用情况
+[root@k8smaster-ims ~]# ss -tiepm
+State            Recv-Q        Send-Q                        Local Address:Port                          Peer Address:Port        Process
+ESTAB            0             0                             10.161.30.172:2584                         10.161.30.172:2379         users:(("kube-apiserver",pid=110805,fd=14)) timer:(keepalive,8.337ms,0) ino:1779099 sk:1 cgroup:/kubepods.slice/kubepods-burstable.slice/kubepods-burstable-podf25a5ad61ab09bb2febf844a32a36dd9.slice/cri-containerd-4fb988fdc6f9cdbaba04bac2ed9e89c229b2f1820699e8f4a23d0f78a9a62ee8.scope <->
+         skmem:(r0,rb2430976,t0,tb2626560,f0,w0,o0,bl0,d1) ts sack cubic wscale:11,11 rto:201 rtt:0.214/0.134 ato:40 mss:65483 pmtu:65535 rcvmss:1558 advmss:65483 cwnd:10 bytes_sent:286099 bytes_acked:286100 bytes_received:309309 segs_out:10959 segs_in:8049 data_segs_out:3760 data_segs_in:6146 send 24.5Gbps lastsnd:21813 lastrcv:21813 lastack:6663 pacing_rate 48.9Gbps delivery_rate 30.8Gbps delivered:3761 app_limited busy:813ms rcv_rtt:164075 rcv_space:36383 rcv_ssthresh:33280 minrtt:0.017 snd_wnd:409600
+ESTAB            0             0                             10.161.30.172:3902                         10.161.30.172:2379    
+----
+
+
+
+- **nicstat/ip -s link**：检查传输和接收字节的速率。高吞吐量可能受到协商的数据链路速度或外部网络节流的限制。这种限制也可能导致系统中的网络用户之间的争夺和延时。
+- **tcplife**：记录 TCP 会话的进程细节、持续时间（寿命）和吞吐量统计数据。
+- **tcptop**：实时观测速率最高的 TCP 会话。
+- **tcpdump**：虽然这在 CPU 和存储成本方面可能很昂贵，但短期内使用 tcpdump(8) 可以帮助你识别不寻常的网络流量或协议头信息。
+- **perf(1)/BCC/bpftrace**：检查应用程序和线缆之间的选定数据包，包括检查内核状态。
+
+=== 网络延时分析
+
+[options="header"]
+|===
+| 延时 | 描述
+
+| 主机名解析延时
+| 一台主机被解析到一个 IP 地址的时间，通常是通过 DNS 解析——性能问题的常见来源。
+
+| Ping 延时
+| 从 ICMP echo 请求到响应的时间。这衡量的是网络和内核栈对每台主机上的数据包的处理。
+
+| TCP 连接初始化延时
+| 从发送 SYN 到收到 SYN ACK 的时间。由于不涉及任何应用程序，所以这测量的是每台主机上的网络和内核栈的延时，类似于 ping 延时，有一些额外用于 TCP 会话的内核处理。TCP 快速打开（TFO）可以用来减少这个延时。
+
+| TCP 首字节延时 (TTFB)
+| 衡量从建立连接到客户端收到第一个数据字节的时间。这包括服务端的 CPU 调度和应用程序处理时间，其是衡量应用性能和当前负载的一个指标，而不是 TCP 连接延时。
+
+| TCP 重传输
+| 如果发送，会为网络 I/O 增加数千毫秒的延时。
+
+| TCP TIME_WAIT 延时
+| 本地关闭的 TCP 会话等待迟来的数据包的时间。
+
+| 连接 / 会话寿命
+| 一个网络连接从初始化到关闭的持续时间。一些协议，如 HTTP，可以使用保持在线的策略，使连接处于开放和空闲状态，以避免重复建立连接所带来的开销和延时。
+
+| 系统调用发送 / 接收延时
+| 套接字读 / 写调用的时间（任何对套接字进行读 / 写的系统调用，包括 read(2)、write(2)、recv(2)、send(2) 和它们的变体）。
+
+| 系统调用连接延时
+| 用于建立连接；请注意，一些应用程序将其作为非阻塞系统调用来执行一个网络请求在端点之间进行往返的时间。内核可以在拥塞控制算法中使用这些测量值。
+
+| 网络往返时间
+| 接收到的数据包从触发网络控制器中断到它开始被内核处理的时间。
+
+| 中断延时
+| 数据包在内核 TCP/IP 栈中移动的时间。
+|===
+
+
+=== 观测工具
+
+[options="header"]
+|===
+|工具 | 描述
+
+|ss | 套接字统计信息
+
+|ip | 网络接口和路由统计信息
+
+|ifconfig | 网络接口统计信息
+
+|nstat | 网络栈统计信息
+
+|netstat | 多种网络栈和接口统计信息
+
+|sar | 历史统计信息
+
+|nicstat | 网络接口吞吐量和使用率
+
+|ethtool | 网络接口驱动程序统计信息
+
+|tcplife | 用连接细节跟踪 TCP 会话的寿命
+
+|tcptop | 按主机和进程显示 TCP 吞吐量
+
+|tcpretrans | 用地址和 TCP 状态跟踪 TCP 重传的情况
+
+|bpfttrace | TCP/IP 栈跟踪；连接、数据包、掉线、延时
+
+|tcpdump | 网络数据包嗅探器
+
+|Wireshark | 图形化网络数据包检查器
+|===
+
+==== ip
+
+ip是一个管理路由，网络设备，接口和隧道的工具
+
+[source, bash]
+----
+ip -s link
+----
+
+==== netstat
+
+- 默认列出连接的套接字
+- -a 列出所有套接字的信息
+- -s 列出网络栈的统计信息
+- -i 列出网络接口的统计信息
+- -r 列出路由表
+
+.各层网络信息统计
+[source, bash]
+----
+[root@k8smaster-ims ~]# netstat -s
+Ip:
+    Forwarding: 1
+    19848192 total packets received
+    2874866 forwarded
+    0 incoming packets discarded
+    14292264 incoming packets delivered
+    13366854 requests sent out
+    4 dropped because of missing route
+    OutTransmits: 18838377
+Icmp:
+----
+
+==== ethtool
+
+ethtool可以使用-i和-k选项来检查网络接口静态配置，也可以使用-S打印驱动程序的统计信息。
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 https://github.com/deepflowio/deepflow/blob/main/README-CN.md
