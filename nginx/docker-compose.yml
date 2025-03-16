@@ -1,0 +1,21 @@
+version: '3.4'
+services:
+  web:
+    image: nginx:latest
+    networks:
+      - mynet
+    ports:
+      - "8080:80"
+    volumes:
+      - ./html:/usr/share/nginx/html
+
+
+# 定义网络（根据需求选择以下两种方式之一）
+# 方式1：让 Docker Compose 自动创建 mynet 网络
+networks:
+  mynet:
+
+# 方式2：使用已存在的 mynet 网络（需提前创建）
+# networks:
+#   mynet:
+#     external: true

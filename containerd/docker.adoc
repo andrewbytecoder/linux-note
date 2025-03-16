@@ -44,7 +44,29 @@ image::containerd/c8116066bdbf295a7c9fc25b87755dfe.jpg[docker]
 |**`docker rmi <image_id>`** |删除一个本地镜像。
 |**`docker pull <image_name>`** |从 Docker Hub 拉取镜像。
 |**`docker build -t <image_name> .`** |从 Dockerfile 构建镜像。
+|**`docker stats`**|查看容器的CPU等资源使用情况。
+|**`docker logs`**|查看容器的日志。
+|**`docker exec`**|进入到容器内部执行命令
 |===
+
+===== `docker commit`
+
+`docker commit` 命令用于将一个容器中的更改提交为一个新的镜像。
+
+这个命令特别是在国内特别有用，国内开发打包镜像比较麻烦，因此可以先将需要的镜像下载到本地，然后运行之后，替换需要替换的文件，然后使用 `docker commit` 命令来提交一个容器的更改为一个新的镜像。
+
+.eg
+[source,bash]
+----
+docker commit -m "commit message" -a "author" <container_id> <image_name>
+----
+
+
+
+
+
+
+
 
 ==== 镜像
 
@@ -883,6 +905,23 @@ db_data:
 - **容器化应用程序**：为每个服务编写 Dockerfile 和 `docker-compose.yml` 文件，确保所有依赖项都正确配置。
 - **部署到生产环境**：将应用程序部署到云平台（如 AWS、Google Cloud、Azure）或本地服务器，使用 Docker Swarm 或 Kubernetes 进行编排。
 - **持续集成/持续部署 (CI/CD)**：集成 CI/CD 工具（如 Jenkins、GitLab CI、GitHub Actions）来自动化构建、测试和部署流程。
+
+
+=== 网络
+
+容器内部可以直接使用容器ip+容器端口(不是映射之后的端口)进行通信
+
+如果想让docker容器之间网络使用域名进行通讯，还需要创建一个新的网络空间，默认启动的docker是在docker0网络空间，但是docker0网络空间不能进行域名通讯。
+
+[source, bash]
+----
+docker network create mynet
+# 在多个容器加入同一个网络空间之后，可以直接通过容器名+端口进行访问
+docker run -d --name web1 --network mynet nginx
+# 可以参考redis主从复制集群的实现
+----
+
+
 
 === 总结
 
