@@ -37,11 +37,14 @@ services:
     command: redis-server --appendonly yes --replicaof redis-master 6379
     restart: unless-stopped
 
+# 使用docker volume ls 查看挂载的卷
 volumes:
   redis-master-data:
   redis-slave1-data:
   redis-slave2-data:
 
+# 只有创建自定义网络之后，各个容器才能使用域名进行通讯
+# 使用doker network create redis-network也能创建自定义网络
 networks:
   redis-network:
     driver: bridge
