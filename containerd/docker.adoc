@@ -47,6 +47,7 @@ image::containerd/c8116066bdbf295a7c9fc25b87755dfe.jpg[docker]
 |**`docker stats`**|查看容器的CPU等资源使用情况。
 |**`docker logs`**|查看容器的日志。
 |**`docker exec`**|进入到容器内部执行命令
+|**`docker volume`**|查看docker生成的持久化挂载卷，这些卷能保证容器重启之后数据依然存在
 |===
 
 ===== `docker commit`
@@ -62,10 +63,103 @@ docker commit -m "commit message" -a "author" <container_id> <image_name>
 ----
 
 
+===== `docker volume`
+
+管理docker生成的卷
+
+- `docker volume ls` 查看卷
+- `docker volume inspect` 查看卷的详细信息
+- `docker volume rm` 删除一个卷
+- `docker volume create` 创建一个卷
+- `docker volume prune` 删除所有未使用的卷
+
+如果 `docker compose` 停止时，想要删除相关的卷，可以使用 `docker-compose down --volumes`
 
 
+==== `docker build`
 
+[source,bash]
+----
+# -t指定镜像名称和标签， .表示在当前目录下构建镜像
+docker build -f Dockerfile -t myappimage:v1.0.0.0 .
+----
 
+===== `docker images`
+
+用于查看镜像列表信息
+
+===== `docker image`
+
+- `docker image history`
+
+对单个镜像的管理，比如查看镜像的详细打包过程
+
+[source,bash]
+----
+andrew in ~ λ docker image history redis
+IMAGE          CREATED        CREATED BY                                       SIZE      COMMENT
+43724892d6db   2 months ago   CMD ["redis-server"]                             0B        buildkit.dockerfile.v0
+<missing>      2 months ago   EXPOSE map[6379/tcp:{}]                          0B        buildkit.dockerfile.v0
+<missing>      2 months ago   ENTRYPOINT ["docker-entrypoint.sh"]              0B        buildkit.dockerfile.v0
+<missing>      2 months ago   COPY docker-entrypoint.sh /usr/local/bin/ # …   661B      buildkit.dockerfile.v0
+<missing>      2 months ago   WORKDIR /data                                    0B        buildkit.dockerfile.v0
+<missing>      2 months ago   VOLUME [/data]                                   0B        buildkit.dockerfile.v0
+<missing>      2 months ago   RUN /bin/sh -c mkdir /data && chown redis:re…   0B        buildkit.dockerfile.v0
+<missing>      2 months ago   RUN /bin/sh -c set -eux;   savedAptMark="$(a…   38.1MB    buildkit.dockerfile.v0
+<missing>      2 months ago   ENV REDIS_DOWNLOAD_SHA=4ddebbf09061cbb589011…   0B        buildkit.dockerfile.v0
+<missing>      2 months ago   ENV REDIS_DOWNLOAD_URL=http://download.redis…   0B        buildkit.dockerfile.v0
+<missing>      2 months ago   ENV REDIS_VERSION=7.4.2                          0B        buildkit.dockerfile.v0
+<missing>      2 months ago   RUN /bin/sh -c set -eux;  savedAptMark="$(ap…   4.12MB    buildkit.dockerfile.v0
+<missing>      2 months ago   ENV GOSU_VERSION=1.17                            0B        buildkit.dockerfile.v0
+<missing>      2 months ago   RUN /bin/sh -c set -eux;  apt-get update;  a…   5.08kB    buildkit.dockerfile.v0
+<missing>      2 months ago   RUN /bin/sh -c set -eux;  groupadd -r -g 999…   4.3kB     buildkit.dockerfile.v0
+<missing>      2 months ago   # debian.sh --arch 'amd64' out/ 'bookworm' '…   74.8MB    debuerreotype 0.15
+----
+
+- `docker image inspect`
+
+查看docker镜像详细的分成信息，以及镜像具体的组成方式。
+
+[source,bash]
+----
+andrew in ~ λ docker image --help
+Usage:  docker image COMMAND
+
+Manage images
+
+Commands:
+  build       Build an image from a Dockerfile
+  history     Show the history of an image
+  import      Import the contents from a tarball to create a filesystem image
+  inspect     Display detailed information on one or more images
+  load        Load an image from a tar archive or STDIN
+  ls          List images
+  prune       Remove unused images
+  pull        Download an image from a registry
+  push        Upload an image to a registry
+  rm          Remove one or more images
+  save        Save one or more images to a tar archive (streamed to STDOUT by default)
+  tag         Create a tag TARGET_IMAGE that refers to SOURCE_IMAGE
+----
+
+===== `docker inspect`
+
+===== `docker ps`
+
+- `docker ps -s`
+
+查看容器读写层大小和原先镜像只读层大小，比如 `21.2MB (virtual 585MB)` 代表容器读写层大小为 21.2MB，原先镜像只读层大小为 585MB
+
+[source,bash]
+----
+andrew in ~ λ docker ps -s
+CONTAINER ID   IMAGE                                         COMMAND                   CREATED          STATUS          PORTS                                         NAMES                       SIZE
+743e978d957b   redis:latest                                  "docker-entrypoint.s…"   44 minutes ago   Up 44 minutes   0.0.0.0:6380->6379/tcp, [::]:6380->6379/tcp   redis-slave1                0B (virtual 117MB)
+7cd38da53362   redis:latest                                  "docker-entrypoint.s…"   44 minutes ago   Up 44 minutes   0.0.0.0:6379->6379/tcp, [::]:6379->6379/tcp   redis-master                0B (virtual 117MB)
+c1f54aad72e0   redis:latest                                  "docker-entrypoint.s…"   44 minutes ago   Up 44 minutes   0.0.0.0:6381->6379/tcp, [::]:6381->6379/tcp   redis-slave2                0B (virtual 117MB)
+9d852ccb43c6   nginx:latest                                  "/docker-entrypoint.…"   5 hours ago      Up 5 hours      0.0.0.0:8080->80/tcp, [::]:8080->80/tcp       nginx_web_1                 1.09kB (virtual 192MB)
+f2764175ad8c   grafana/grafana                               "/run.sh"                 6 hours ago      Up 6 hours                                                    grafana                     21.2MB (virtual 585MB)
+----
 
 
 ==== 镜像
