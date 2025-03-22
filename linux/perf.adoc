@@ -53,7 +53,7 @@ perf list breakpoint
 
 [source,bash]
 ----
-[root@k8smaster-ims cdw-dp]# cat /sys/kernel/debug/tracing/events/block/block_rq_issue/format
+[root@k8smaster-ims cdw-db]# cat /sys/kernel/debug/tracing/events/block/block_rq_issue/format
 name: block_rq_issue
 ID: 1099
 format:

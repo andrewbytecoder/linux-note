@@ -158,7 +158,7 @@ goharbor/prepare                                     v2.12.0            6eb9a653
 [source, bash]
 ----
 [root@k8smaster-73 amd64]# pwd
-/home/dp/packages/YsP-1/BusinessConfig/harbor/image/amd64
+/home/db/packages/YsP-1/BusinessConfig/harbor/image/amd64
 [root@k8smaster-73 amd64]# ls
 harbor.v2.10.2.tar
 ----
@@ -168,7 +168,7 @@ harbor.v2.10.2.tar
 [source, bash]
 ----
 [root@k8smaster-73 shell]# pwd
-/home/dp/packages/YsP-1/BusinessConfig/harbor/shell
+/home/db/packages/YsP-1/BusinessConfig/harbor/shell
 [root@k8smaster-73 shell]# ls
 clean_harbor.sh  connect_remote_harbor.sh  harbor_pg_recover.sh     install_harbor.sh  upgrade_harbor.sh
 common.sh        harbor_backup_crontab.sh  harbor_redis_recover.sh  scale_harbor.sh
