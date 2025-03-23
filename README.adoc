@@ -22,3 +22,11 @@ v1.0.0.1, 2024-11-25
 // utils
 // include::utils/TODO.adoc[TODO]
 
+[source, bash]
+----
+# 查看内存逃逸分析，查看那些内存从栈上会逃逸到堆上
+# 比如闭包就可以利用逃逸分析查看内存到底在栈上还是在堆上
+go build -gcflags '-m -l' demo.go
+# 或者再加个 -m 查看更详细信息
+go build -gcflags '-m -m -l' demo.go
+----
