@@ -13,8 +13,15 @@ services:
       - "3306:3306" # 宿主机的3306端口映射到容器的3306端口
     volumes:
       - db_data:/var/lib/mysql
-    restart: always
+#    restart: always
 
 # 使用doker volume进行数据持久化
 volumes:
   db_data:
+
+
+
+
+
+
+

@@ -1,0 +1,26 @@
+version: '3.4'
+
+services:
+  postgres:
+    image: postgres  # 使用 PostgreSQL 15 版本
+    container_name: postgres_container
+    environment:
+      POSTGRES_USER: admin           # 设置数据库用户名
+      POSTGRES_PASSWORD: admin    # 设置数据库密码
+      POSTGRES_DB: mydatabase        # 初始化时创建的数据库名称
+    ports:
+      - "5432:5432"                  # 映射容器端口到主机端口
+    volumes:
+      - postgres_db_data:/var/lib/postgresql/data  # 数据卷挂载，用于持久化数据
+#    restart: always                  # 容器自动重启策略
+
+# 使用doker volume进行数据持久化
+volumes:
+  postgres_db_data:
+
+
+
+
+
+
+
