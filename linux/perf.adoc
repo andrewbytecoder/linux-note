@@ -11,6 +11,13 @@ endif::rootpath[]
 
 == perf
 
+perf能回答以下问题：
+
+- 哪些代码路径在消耗CPU资源
+- CPU是否被滞留在内存的负载/存储上
+- 线程因为什么原因离开CPU？ 是主动让出还是被动调度
+- 磁盘I/O的模式是什么？
+
 - trace system calls faster than trace
 - profile your C, Go, C++, node.js, Rust, and Java/JVM programs really easily
 - trace or count almost `any` kernel event
@@ -284,13 +291,6 @@ sudo perf record -e 'compaction:*' -a -I 1000
 
 
 
-
-
-
-
-
-
-
 ==== Counting Events
 
 [source,bash]
@@ -418,6 +418,7 @@ perf top -F 49 -ns comm,dso
 [source,bash]
 ----
 # Trace new processes, until Ctrl-C:
+# 跟踪新的进程，知道按下Ctrl-C组合键
 perf record -e sched:sched_process_exec -a
 
 # Sample (take a subset of) context-switches, until Ctrl-C:
@@ -495,6 +496,7 @@ perf record -e sdt_node:http__server__request -a
 [source,bash]
 ----
 # Add a tracepoint for the kernel tcp_sendmsg() function entry ("--add" is optional):
+# 为内核函数 tcp_sendmsg() 函数入口添加一个tracepoint，可以忽略 --add
 perf probe --add tcp_sendmsg
 
 # Remove the tcp_sendmsg() tracepoint (or use "--del"):
@@ -550,12 +552,24 @@ perf probe 'myfunc%return +0($retval):string'
 
 # Add a tracepoint for the user-level malloc() function from libc:
 perf probe -x /lib64/libc.so.6 malloc
+perf probe -x /lib64/libc.so.6 --add fopen
+perf probe --del probe_libc:fopen --del probe_libc:malloc
 
 # Add a tracepoint for this user-level static probe (USDT, aka SDT event):
 perf probe -x /usr/lib64/libpthread-2.24.so %sdt_libpthread:mutex_entry
 
 # List currently available dynamic probes:
 perf probe -l
+----
+
+
+.eg 内核函数 do_nanosleep 跟踪
+[source, bash]
+----
+perf probe --add do_nanosleep
+perf record -e probe:do_nanosleep -a sleep 5
+perf script
+perf probe --del do_nanosleep
 ----
 
 
@@ -752,6 +766,16 @@ perf record和perf top收集的信息一样，但是perf record会将收集的�
 - perf record [COMMAND] : 运行命令，知道命令退出
 - perf record PID : 监控指定进程，知道CTRL+C退出
 - perf record -a : 监控所有进程，知道CTRL+C退出
+- -e event记录指定的事件
+- --filter 对一个事件设置一个布尔过滤器表达式
+- -p PID 仅仅记录这个PID的进程
+- -t TID仅仅记录这个TID的线程
+- -G cgroup 仅记录这个cgroup
+- -g 记录栈踪迹
+- --call-graph mode:使用指定的方法记录栈踪迹 (fp、dwarf或者lbr)
+- -o file设置输出文件
+- -v 显示详细信息，使用-vv可以输出更多信息
+
 
 当然perf也能够支持定时任务，比如：
 
