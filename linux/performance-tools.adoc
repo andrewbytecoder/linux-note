@@ -1295,6 +1295,12 @@ ethtool可以使用-i和-k选项来检查网络接口静态配置，也可以使
 
 微基准测试工具，可以用来测试请求/响应的性能
 
+[source, bash]
+----
+netserver -D -p 7001
+netperf -v 100 -H 100.66.63.99 -t TCP_RR -p 7001
+----
+
 ===== tc
 
 流量控制工具tc，允许选择各种排队规则(qdiscs)来改善或管理性能
@@ -1305,8 +1311,16 @@ ethtool可以使用-i和-k选项来检查网络接口静态配置，也可以使
 tc qdisc show dev eth0
 # 使用netem将丢包率设置为1%
 tc qdisc add dev eth0 root netem loss 1%
-tc qdisc show dev eth0
+# 使用-s显示网卡丢包的统计数据
+tc -s qdisc show dev eth0
 ----
+
+
+
+
+
+
+
 
 ==== 调优
 
@@ -1407,7 +1421,58 @@ cmdline_network_latency=skew_tick=1 tsc=reliable rcupdate.rcu_normal_after_boot=
 |TCP_CONGESTION       |套接字的一种拥塞控制算法
 |===
 
+
+==== 命令工具
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 === 云计算
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 

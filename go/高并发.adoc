@@ -109,6 +109,53 @@ IO多路复用 + 单进（线）程有个好处，就是不会有并发编程的
 
 ==== pprof工具的简单使用
 
+- 分析cpu
+
+[source, go]
+----
+func main() {
+  f, _ := os.OpenFile("cpu.profile", os.O_CREATE|os.O_RDWR, 0644)
+  defer f.Close()
+  pprof.StartCPUProfile(f)
+  defer pprof.StopCPUProfile()
+
+  n := 10
+  for i := 1; i <= 5; i++ {
+    fmt.Printf("fib(%d)=%d\n", n, fib(n))
+    n += 3 * i
+  }
+}
+----
+
+- 分析内存比较简单，随时可以进行采样
+
+[source, go]
+----
+func main() {
+  f, _ := os.OpenFile("mem.profile", os.O_CREATE|os.O_RDWR, 0644)
+  defer f.Close()
+  for i := 0; i < 100; i++ {
+    repeat(generate(100), 100)
+  }
+
+  pprof.Lookup("heap").WriteTo(f, 0)
+}
+----
+
+当让在profile中对上述操作进行了简化，可以采用如下一行实现pprof采样
+
+[source, go]
+----
+# 默认CPU采样
+defer profile.Start().Stop()
+# 如果需要对内存进行采样
+defer profile.Start(profile.MemProfile).Stop()
+# 使用浏览器查看
+go tool pprof -http :8080 cpu.profile
+----
+
+
+
 
 
 https://darjun.github.io/2021/06/09/youdontknowgo/pprof/[pprof 性能分析工具]
