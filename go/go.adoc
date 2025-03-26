@@ -510,6 +510,7 @@ func main() {
     fmt.Println("x 的值：", x)
 }
 ----
+
 输出如下
 
 x 的值：1000
@@ -1271,6 +1272,15 @@ $ gdb -tui demo
 
 # 如果你跟我一样不喜欢不习惯用界面，就使用这个命令
 $ gdb demo
+----
+
+如果使用gdb有一些报错需要在gdbinit中添加如下配置来去除安全保护措施
+
+[source, bash]
+----
+line to your configuration file "/home/andrew/.config/gdb/gdbinit".
+To completely disable this security protection add
+        set auto-load safe-path /
 ----
 
 
