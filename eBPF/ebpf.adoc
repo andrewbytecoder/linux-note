@@ -794,11 +794,6 @@ bpftrace -l 't:kmem:*'
 bpftrace -l 't:*:mm_*'
 ----
 
-
-
-
-
-
 - 1. `kprobe:inet_accept`
 * **挂钩函数**: `inet_accept`
 * **功能**: `inet_accept` 是内核中用于接受一个新的连接请求的函数。它通常在 TCP 套接字上调用，负责创建一个新的套接字来表示接受的连接。
@@ -815,7 +810,6 @@ bpftrace -l 't:*:mm_*'
 * **抽象层次**: `inet_accept` 是一个更高层次的函数，适用于所有类型的套接字（如 TCP、UDP 等），而 `inet_csk_accept` 是专门用于 TCP 套接字的底层函数。
 * **调用关系**: `inet_accept` 会调用 `inet_csk_accept` 来处理 TCP 连接的接受。
 * **使用场景**: `inet_accept` 更适合用于跟踪所有类型的连接接受，而 `inet_csk_accept` 更适合用于深入分析 TCP 连接的接受过程。
-
 
 
 === PMCs (硬件事件)
