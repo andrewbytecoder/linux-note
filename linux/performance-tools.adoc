@@ -15,11 +15,80 @@ endif::rootpath[]
 
 ==== USE 方法
 
-utilization、saturation、errors，就是对所有的资源，查看它的使用率、饱和度和错误
+USE方法全称"Utilization Saturation and Errors Method"，主要用于分析系统性能问题，可以指导用户快速识别资源瓶颈以及错误的方法。正如USE方法的名字所表示的含义，USE方法主要关注与资源的：使用率(Utilization)、饱和度(Saturation)以及错误(Errors)。
+
+- 使用率：关注系统资源的使用情况。 这里的资源主要包括但不限于：CPU，内存，网络，磁盘等等。100%的使用率通常是系统性能瓶颈的标志。
+- 饱和度：例如CPU的平均运行排队长度，这里主要是针对资源的饱和度(注意，不同于4大黄金信号)。任何资源在某种程度上的饱和都可能导致系统性能的下降。
+- 错误：错误计数。例如：“网卡在数据包传输过程中检测到的以太网网络冲突了14次”。
+
+
+===== 物理资源
+
+|===
+|模块 |类型 |指标
+|CPU |使用率 |每个 CPU: mpstat -P ALL 1, CPU 消耗列中的值的总和（%usr、%nice、%sys、%i rq、%soft、%guest、%gnice）或者空闲列中的值的倒数（%iowait、%steal、%idle）; sar -P ALL, CPU 消耗列中的值的总和（%user、%nice、%system）或者空闲列中的值的倒数（%iowait、%steal、%idle）<br>系统范围：vmstat 1, us + sy ; sar -u, %user + %nice + %system<br>每个进程：top, %CPU ; htop, CPU%; ps -o pcpu ; pidstat 1, %CPU<br>每个内核线程：top/htop（按 K 转换显示），找到 VIRT==0（启发式）
+|CPU |饱和度 |系统范围：vmstat 1, r > CPU 数量<sup>1</sup> ; sar -q, runq-sz > CPU 数量 ; runqlat ; runqlen<br>每个进程：/proc/PID/schedstat 第二个字段（sched_info.run_delay）; getdelays.c, CPU<sup>2</sup> ; perf sched latency（显示每次调度的平均和最大延时<sup>3</sup>）
+|CPU |错误 |在 dmesg、rasdaemon 和 ras-mc-ctl --summary 中出现的机器检查异常（Machine Check Exception, MCE）；如果处理器特定错误事件（PMC）可用，使用 perf(1)；例如，AMD64 的“04Ah Single-bit ECC Errors Recorded by Scrubber”<sup>1</sup>（也可以被当成内存设备错误）；ipmitool sel list；ipmitool sdr list
+|内存容量 |使用率 |系统范围：free -m Mem:（主存）, Swap:（虚存）; vmstat 1, free（主存）, swap（虚存）; sar -r, %memused; slabtop -s c 检查 kmem slab 使用情况<br>每个进程：top/htop, RES（驻留主存），VIRT（虚存），Mem 为系统范围内的总计
+|内存容量 |饱和度 |系统范围：vmstat 1, si/so（交换）; sar -B, pgscank+pgscand（扫描）; sar -W<br>每个进程：getdelays.c, SWAP2 ; /proc/PID/stat 中的第 10 项（min_flt）可以得到次要缺页率，或者使用动态跟踪<sup>2</sup>; dmesg \| grep killed（OOM 终结者）
+|内存容量 |错误 |dmesg 可以得到物理失效，或者使用 rasdaemon 加上 ras-mc-ctl --summary，抑或使用 edac-util；dmidecode 可能也会展示物理失效；ipmitool sel list；impitool sdr list；动态检测，例如，使用 uprobe 获得失败的 malloc() 数量（bpfrace）
+|网络接口 |使用率 |ip -s link, RX/TX 吞吐量除以最大带宽; sar -n DEV, rx/tx kB/s 除以最大带宽; /proc/net/dev, RX/TX 吞吐量字节数除以最大值
+|网络接口 |饱和度 |netstat, TcpRetransSegs；sar -n EDEV, *drop/s, *fifo/s<sup>3</sup>；/proc/net/dev, RX/TX 丢包；动态跟踪其他 TCP/IP 栈排队情况
+|网络接口 |错误 |ip -s link, errors, sar -n EDEV all；/proc/net/dev, errs, drop6；其他计数器可能可以在 /sys/class/net/*/statistics/*error* 下找到；动态检测驱动函数的返回值
+|存储设备 I/O |使用率 |系统范围：iostat -xz 1, %util；sar -d %util；<br>每个进程：iotop, biotop；/proc/PID/sched se.statistics.iowait_sum
+|存储设备 I/O |饱和度 |iostat -xnz 1, avgqu-sz > 1，或者较高的 await；sar -d 的相同项；perf(1) 块 tracepoint 获得队列长度 / 延时；biolatency
+|存储设备 I/O |错误 |/sys/devices/.../ioerr_cnt；smartctl；动态 / 静态检测 I/O 子系统响应代码<sup>4</sup>
+|存储容量 |使用率 |swap：swapon -s；free；/proc/meminfo SwapFree/SwapTotal；文件系统：df -h
+|存储容量 |饱和度 |不太确定这项是否有意义——一旦爆满会返回 ENOSPC（在接近爆满的时候，取决于文件系统空闲块算法，性能有可能会下降）
+|存储容量 |文件系统：错误 |strace 跟踪 ENOSPC；动态检测 ENOSPC；/var/log/messages errs，取决于文件系统；应用程序日志错误
+|存储控制器 |使用率 |iostat -xz 1，把设备的数值加起来与已知的每张卡的 IOPS/ 吞吐量进行对比
+|存储控制器 |饱和度 |参见存储设备 I/O 的饱和度
+|存储控制器 |错误 |参见存储设备 I/O 的错误
+|网络控制器 |使用率 |从 ip -s link（或者 sar，或者 /proc/net/dev）和已知控制器的最大吞吐量推断出接口类型
+|网络控制器 |饱和度 |参见网络接口的饱和度
+|网络控制器 |错误 |参见网络接口的错误
+|CPU 互联 |使用率 |带 PMC 的 perf stat 获得 CPU 互联端口，用吞吐量除以最大值
+|CPU 互联 |饱和度 |带 PMC 的 perf stat 获得停滞周期
+|CPU 互联 |错误 |带 PMC 的 perf stat 得到的所有信息
+|内存互联 |使用率 |带 PMC 的 perf stat 获得内存总线，用吞吐量除以最大值；例如，Intel uncore_imc/data_reads, uncore_imc / data_writes；或者小于 0.2 的 IPC；PMC 可能有本地和远程计数器的对比
+|内存互联 |饱和度 |带 PMC 的 perf stat 获得停滞周期
+|内存互联 |错误 |带 PMC 的 perf stat 得到的所有信息；dmidecode 可能也有其他信息
+|I/O 互联 |使用率 |带 PMC 的 perf stat 获得吞吐量除以最大值（如果能够获得）；通过 iostat/ip/…获得的已知吞吐量进行推断
+|I/O 互联 |饱和度 |带 PMC 的 perf stat 获得停滞周期
+|I/O 互联 |错误 |带 PMC 的 perf stat 得到的所有信息
+|===
+
+===== 软件资源
+
+|===
+|模块 |类型 |指标
+
+|内核态互斥量 |使用率 |在内核编译带 CONFIG_LOCK_STAT=y 的情况下，使用 /proc/lock_stat 里的 holdtime-total 项除以 acquisitions 项（另外可参考 holdtime-min、holdtime-max）；对锁函数或者指令（可能有）进行动态检测
+|内核态互斥量 |饱和度 |在内核编译带 CONFIG_LOCK_STAT=y 的情况下，使用 /proc/lock_stat 里的 waittime-total 项除以 contentions 项（另外可参考 waittime-min、waittime-max）；对锁函数，如 mlock.bt 进行动态检测 [Gregg 19]；自旋情况也可以通过剖析显示出来（perf record -a -g -F 99 ...）
+|内核态互斥量 |错误 |动态检测（例如，递归进入互斥量）；其他错误可能会造成内核锁起 / 恐慌，可以使用 kdump/crash 进行调试
+|用户态互斥量 |使用率 |valgrind --tool=drd --exclusive-threshold=……（持有时间）；对加锁到解锁这段的函数时间进行动态检测
+|用户态互斥量 |饱和度 |valgrind --tool=drd 可以根据持有时间推断竞争的情况；对同步函数进行动态跟踪得到等待时间，例如，pmlock.bt；剖析（perf(1)）用户栈踪迹，得到自旋等待的情况
+|用户态互斥量 |错误 |valgrind --tool=drd 提示的各种错误；动态检测 pthread_mutex_lock() 的返回值，如 EAGAIN、EINVAL、EPERM、EDEADLK、ENOMEM、EOWNERDEAD 等
+|任务容量 |使用率 |top/htop，Tasks（当前）；sysctl kernel.threads-max，/proc/sys/kernel/threads-max（最大值）
+|任务容量 |饱和度 |被阻塞在内存分配上的线程数；这个时候页面扫描器应该正在运行（sar -B, pgscan*），或者使用动态跟踪检查
+|任务容量 |错误 |“can’t fork()” 错误；用户级线程：pthread_create() 错误返回值，如 EAGAIN、EINVAL……；内核级：动态跟踪 kernel_thread() 函数的 ENOMEM 返回值
+|文件描述符 |使用率 a|系统范围：sar -v, file-nr 和 /proc/sys/fs/file-max 相比较；或者是 /proc/sys/fs/file-nr<br>每个线程：`echo /proc/PID/fd/* \| wc -w` 与 ulimit -n 的对比
+|文件描述符 |饱和度 |这一项没有意义
+|文件描述符 |错误 |在返回文件描述符的系统调用上（例如 open()、accept()……）使用 strace errno == EMFILE；opensnoop -x
+|===
+
+
+
+
+
 
 ==== RED方法
 
 对于每个服务，检查请求率、错误和持续时间
+
+- (请求)速率：服务每秒接收的请求数。
+- (请求)错误：每秒失败的请求数。
+- (请求)耗时：每个请求的耗时。
 
 ==== 工作负载归纳
 
@@ -275,115 +344,6 @@ image::linux/image-2025-02-27-15-32-21-502.png[]
 .追踪数据来源
 image::linux/image-2025-02-27-15-40-08-564.png[]
 
-==== sar 命令
-
-sar命令提供了对内核和设备非常广泛的覆盖，甚至对风扇也能进行观测，选项 `-m` (电源管理)
-
-- -B: 换页统计信息
-- -H: 巨型页统计信息
-- -r: 内存使用率
-- -S: 交换空间统计信息
-- -W: 交换统计信息
-
-.sar 命令覆盖范围
-image::linux/image-2025-02-28-19-28-53-811.png[]
-
-[source, bash]
-----
-# 1秒为时间间隔，采集5次TCP数据
-sar -n TCP 1 5
-----
-
-[options="header"]
-|===
-|选项 |统计信息 |描述 |单位
-
-|-B |pgpgin/s |页面换入 |千字节 / 秒
-|-B |pgpgout/s |页面换出 |千字节 / 秒
-|-B |fault/s |严重及轻微缺页 |次数 / 秒
-|-B |majflt/s |严重缺页 |次数 / 秒
-|-B |pgfree/s |将页面加入空闲链表 |次数 / 秒
-|-B |pgscank/s |被后台页面换出守护进程扫描过的页面（kswapd） |次数 / 秒
-|-B |pgscand/s |直接页面扫描 |次数 / 秒
-|-B |pgsteal/s |页面及交换缓存回收 |次数 / 秒
-|-B |%vmeff |页面盗取 / 页面扫描的比率，其显示页面回收的效率 |百分比
-|-H |hbhugfree |空闲巨型页内存（大页面尺寸） |千字节
-|-H |hbhugused |占用的巨型页内存 |千字节
-|-H |%hugused |巨型页使用率 |百分比
-|-r |kbmemfree |空闲内存（完全未使用的） |千字节
-|-r |kbavail |可用的内存，包括可以随时从页面缓存中释放的页 |千字节
-|-r |kbmemused |使用的内存（包括内核） |千字节
-|-r |%memused |内存使用率 |百分比
-|-r |kbbuffers |缓冲高速缓存尺寸 |千字节
-|-r |kbcached |页面高速缓存尺寸 |千字节
-|-r |kbcommit |提交的主存：服务当前工作负载需要量的估计 |千字节
-|-r |%commit |为当前工作负载提交的主存，估计值 |百分比
-|-r |kbactive |活动列表内存尺寸 |千字节
-|-r |kbinact |未活动列表内存尺寸 |千字节
-|-r |kbdirtyw |将被写入磁盘的修改过的内存 |千字节
-|-r ALL |kbanonpg |进程匿名内存 |千字节
-|-r ALL |kbslab |内核 slab 缓存大小 |千字节
-|-r ALL |kbbkstack |内核栈空间大小 |千字节
-|-r ALL |kbpgtbl |最低级别的页表大小 |千字节
-|-r ALL |kbvmused |已使用的虚拟内存地址空间 |千字节
-|-S |kbswpfree |释放的交换空间 |千字节
-|-S |kbswpused |占用的交换空间 |千字节
-|-S |%swpused |占用的交换空间的百分比 |百分比
-|-S |kbswpcad |高速缓存的交换空间：它同时保存在主存和交换设备中，因此不需要磁盘 I/O 就能被页面换出 |千字节
-|-S |%swpcad |缓存的交换空间大小和使用的交换空间的比例 |百分比
-|-W |pswpin/s |页面换入（Linux 换入） |页面 / 秒
-|-W |pswpout/s |页面换出（Linux 换出） |页面 / 秒
-|===
-
-[options="header"]
-|===
-|选项 | 统计信息 | 描述 | 单位
-|-n DEV | rxcmp/s | 接收的压缩包 | 数据包数量 / 秒
-|-n DEV | txcmp/s | 传输的压缩包 | 数据包数量 / 秒
-|-n DEV | rxmcst/s | 接收的多播包 | 数据包数量 / 秒
-|-n DEV | %ifutil | 接口使用率；对于全双工，rx 或 tx 的较大值 | 百分比
-|-n EDEV | rxerr/s | 接收的数据包错误 | 数据包数量 / 秒
-|-n EDEV | txerr/s | 传输的数据包错误 | 数据包数量 / 秒
-|-n EDEV | coll/s | 碰撞 | 数据包数量 / 秒
-|-n EDEV | rxdrop/s | 接收的数据包丢包（缓冲溢出） | 数据包数量 / 秒
-|-n EDEV | txdrop/s | 传输的数据包丢包（缓冲溢出） | 数据包数量 / 秒
-|-n EDEV | txcarr/s | 传输载波错误 | 错误 / 秒
-|-n EDEV | rxfram/s | 接收的排列错误 | 错误 / 秒
-|-n EDEV | rxfifo/s | 接收的数据包 FIFO 超限错误 | 数据包数量 / 秒
-|-n EDEV | txfifo/s | 传输的数据包 FIFO 超限错误 | 数据包数量 / 秒
-|-n IP | irec/s | 输入的数据报文（接收） | 数据报文 / 秒
-|-n IP | fwddgm/s | 转发的数据报文 | 数据报文 / 秒
-|-n IP | idel/s | 输入的 IP 数据报文（包括 ICMP） | 数据报文 / 秒
-|-n IP | orq/s | 输出的数据报文请求（传输） | 数据报文 / 秒
-|-n IP | asmrq/s | 接收的 IP 分段 | 分段数量 / 秒
-|-n IP | asmok/s | 重组的 IP 数据报文 | 数据报文 / 秒
-|-n IP | fragok/s | 分段的数据报文 | 数据报文 / 秒
-|-n IP | fragcrt/s | 创建的分段 IP 数据报文 | 分段数量 / 秒
-|-n EIP | ihdrerr/s | IP 头错误 | 数据报文 / 秒
-|-n EIP | iukrerr/s | 无效的 IP 目标地址错误 | 数据报文 / 秒
-|-n EIP | iukwnprt/s | 未知的协议错误 | 数据报文 / 秒
-|-n EIP | idisc/s | 输入的丢弃（例如，缓冲溢满） | 数据报文 / 秒
-|-n EIP | odisc/s | 输出的丢弃（例如，缓冲溢满） | 数据报文 / 秒
-|-n EIP | onort/s | 输入数据报文无路由错误 | 数据报文 / 秒
-|-n EIP | asmf/s | IP 重组失败 | 失败数 / 秒
-|-n EIP | fragf/s | IP 不分段丢弃 | 数据报文 / 秒
-|-n TCP | active/s | 新的主动 TCP 连接（connect(2)） | 连接数 / 秒
-|-n TCP | passive/s | 新的被动 TCP 连接（connect(2)） | 连接数 / 秒
-|-n TCP | iseg/s | 输入的段（接收） | 段 / 秒
-|-n TCP | oseg/s | 输出的段（接收） | 段 / 秒
-|-n ETCP | atmptf/s | 主动 TCP 失败连接 | 连接数 / 秒
-|-n ETCP | estres/s | 建立的重置 | 重置数 / 秒
-|-n ETCP | retrans/s | TCP 段重传 | 段 / 秒
-|-n ETCP | isegerr/s | 分段错误 | 段 / 秒
-|-n ETCP | orsts/s | 发送重置 | 段 / 秒
-|-n SOCK | totsck | 使用中的套接字总数 | 套接字
-|-n SOCK | tcpsck/s | 使用中的 TCP 套接字总数 | 套接字
-|-n SOCK | udpsck/s | 使用中的 UDP 套接字总数 | 套接字
-|-n SOCK | rawsck/s | 使用中的 RAW 套接字总数 | 套接字
-|-n SOCK | ip-frag | 当前队列中的 IP 段 | 段
-|-n SOCK | tcp-tw | TIME_WAIT 中的 TCP 套接字 | 套接字
-|===
-
 ==== strace
 
 strace命令是Linux中系统调用跟踪器，跟踪系统调用，为每个系统调用打印一行摘要信息。
@@ -620,9 +580,146 @@ Linux 5.14.0-503.16.1.el9_5.x86_64 (k8smaster-ims)      03/04/25        _x86_64_
 
 ==== sar
 
+sar命令提供了对内核和设备非常广泛的覆盖，甚至对风扇也能进行观测，选项 `-m` (电源管理)
+
+- -B: 换页统计信息
+- -H: 巨型页统计信息
+- -r: 内存使用率
+- -S: 交换空间统计信息
+- -W: 交换统计信息
+
+.sar 命令覆盖范围
+image::linux/image-2025-02-28-19-28-53-811.png[]
+
 系统活动报告器，可以用来观测当前活动，以及配置归档和报告历史系统信息。
 
 - sar -q : 包括运行队列长度runq-sz(等待加上运行，与vmstat的r列相同)和平均负载值
+
+[source, bash]
+----
+# 1秒为时间间隔，采集5次TCP数据
+sar -n TCP 1 5
+----
+
+[options="header"]
+|===
+|选项 |统计信息 |描述 |单位
+
+|-B |pgpgin/s |页面换入 |千字节 / 秒
+|-B |pgpgout/s |页面换出 |千字节 / 秒
+|-B |fault/s |严重及轻微缺页 |次数 / 秒
+|-B |majflt/s |严重缺页 |次数 / 秒
+|-B |pgfree/s |将页面加入空闲链表 |次数 / 秒
+|-B |pgscank/s |被后台页面换出守护进程扫描过的页面（kswapd） |次数 / 秒
+|-B |pgscand/s |直接页面扫描 |次数 / 秒
+|-B |pgsteal/s |页面及交换缓存回收 |次数 / 秒
+|-B |%vmeff |页面盗取 / 页面扫描的比率，其显示页面回收的效率 |百分比
+|-H |hbhugfree |空闲巨型页内存（大页面尺寸） |千字节
+|-H |hbhugused |占用的巨型页内存 |千字节
+|-H |%hugused |巨型页使用率 |百分比
+|-r |kbmemfree |空闲内存（完全未使用的） |千字节
+|-r |kbavail |可用的内存，包括可以随时从页面缓存中释放的页 |千字节
+|-r |kbmemused |使用的内存（包括内核） |千字节
+|-r |%memused |内存使用率 |百分比
+|-r |kbbuffers |缓冲高速缓存尺寸 |千字节
+|-r |kbcached |页面高速缓存尺寸 |千字节
+|-r |kbcommit |提交的主存：服务当前工作负载需要量的估计 |千字节
+|-r |%commit |为当前工作负载提交的主存，估计值 |百分比
+|-r |kbactive |活动列表内存尺寸 |千字节
+|-r |kbinact |未活动列表内存尺寸 |千字节
+|-r |kbdirtyw |将被写入磁盘的修改过的内存 |千字节
+|-r ALL |kbanonpg |进程匿名内存 |千字节
+|-r ALL |kbslab |内核 slab 缓存大小 |千字节
+|-r ALL |kbbkstack |内核栈空间大小 |千字节
+|-r ALL |kbpgtbl |最低级别的页表大小 |千字节
+|-r ALL |kbvmused |已使用的虚拟内存地址空间 |千字节
+|-S |kbswpfree |释放的交换空间 |千字节
+|-S |kbswpused |占用的交换空间 |千字节
+|-S |%swpused |占用的交换空间的百分比 |百分比
+|-S |kbswpcad |高速缓存的交换空间：它同时保存在主存和交换设备中，因此不需要磁盘 I/O 就能被页面换出 |千字节
+|-S |%swpcad |缓存的交换空间大小和使用的交换空间的比例 |百分比
+|-W |pswpin/s |页面换入（Linux 换入） |页面 / 秒
+|-W |pswpout/s |页面换出（Linux 换出） |页面 / 秒
+|===
+
+[options="header"]
+|===
+|选项 | 统计信息 | 描述 | 单位
+|-n DEV | rxcmp/s | 接收的压缩包 | 数据包数量 / 秒
+|-n DEV | txcmp/s | 传输的压缩包 | 数据包数量 / 秒
+|-n DEV | rxmcst/s | 接收的多播包 | 数据包数量 / 秒
+|-n DEV | %ifutil | 接口使用率；对于全双工，rx 或 tx 的较大值 | 百分比
+|-n EDEV | rxerr/s | 接收的数据包错误 | 数据包数量 / 秒
+|-n EDEV | txerr/s | 传输的数据包错误 | 数据包数量 / 秒
+|-n EDEV | coll/s | 碰撞 | 数据包数量 / 秒
+|-n EDEV | rxdrop/s | 接收的数据包丢包（缓冲溢出） | 数据包数量 / 秒
+|-n EDEV | txdrop/s | 传输的数据包丢包（缓冲溢出） | 数据包数量 / 秒
+|-n EDEV | txcarr/s | 传输载波错误 | 错误 / 秒
+|-n EDEV | rxfram/s | 接收的排列错误 | 错误 / 秒
+|-n EDEV | rxfifo/s | 接收的数据包 FIFO 超限错误 | 数据包数量 / 秒
+|-n EDEV | txfifo/s | 传输的数据包 FIFO 超限错误 | 数据包数量 / 秒
+|-n IP | irec/s | 输入的数据报文（接收） | 数据报文 / 秒
+|-n IP | fwddgm/s | 转发的数据报文 | 数据报文 / 秒
+|-n IP | idel/s | 输入的 IP 数据报文（包括 ICMP） | 数据报文 / 秒
+|-n IP | orq/s | 输出的数据报文请求（传输） | 数据报文 / 秒
+|-n IP | asmrq/s | 接收的 IP 分段 | 分段数量 / 秒
+|-n IP | asmok/s | 重组的 IP 数据报文 | 数据报文 / 秒
+|-n IP | fragok/s | 分段的数据报文 | 数据报文 / 秒
+|-n IP | fragcrt/s | 创建的分段 IP 数据报文 | 分段数量 / 秒
+|-n EIP | ihdrerr/s | IP 头错误 | 数据报文 / 秒
+|-n EIP | iukrerr/s | 无效的 IP 目标地址错误 | 数据报文 / 秒
+|-n EIP | iukwnprt/s | 未知的协议错误 | 数据报文 / 秒
+|-n EIP | idisc/s | 输入的丢弃（例如，缓冲溢满） | 数据报文 / 秒
+|-n EIP | odisc/s | 输出的丢弃（例如，缓冲溢满） | 数据报文 / 秒
+|-n EIP | onort/s | 输入数据报文无路由错误 | 数据报文 / 秒
+|-n EIP | asmf/s | IP 重组失败 | 失败数 / 秒
+|-n EIP | fragf/s | IP 不分段丢弃 | 数据报文 / 秒
+|-n TCP | active/s | 新的主动 TCP 连接（connect(2)） | 连接数 / 秒
+|-n TCP | passive/s | 新的被动 TCP 连接（connect(2)） | 连接数 / 秒
+|-n TCP | iseg/s | 输入的段（接收） | 段 / 秒
+|-n TCP | oseg/s | 输出的段（接收） | 段 / 秒
+|-n ETCP | atmptf/s | 主动 TCP 失败连接 | 连接数 / 秒
+|-n ETCP | estres/s | 建立的重置 | 重置数 / 秒
+|-n ETCP | retrans/s | TCP 段重传 | 段 / 秒
+|-n ETCP | isegerr/s | 分段错误 | 段 / 秒
+|-n ETCP | orsts/s | 发送重置 | 段 / 秒
+|-n SOCK | totsck | 使用中的套接字总数 | 套接字
+|-n SOCK | tcpsck/s | 使用中的 TCP 套接字总数 | 套接字
+|-n SOCK | udpsck/s | 使用中的 UDP 套接字总数 | 套接字
+|-n SOCK | rawsck/s | 使用中的 RAW 套接字总数 | 套接字
+|-n SOCK | ip-frag | 当前队列中的 IP 段 | 段
+|-n SOCK | tcp-tw | TIME_WAIT 中的 TCP 套接字 | 套接字
+|===
+
+
+|===
+|选项 |指标 |描述
+|-u |%user %nice %system %iowait %steal %idle |每个 CPU 的使用率（-u 可选）
+|-P ALL |%user %nice %system %iowait %steal %idle |CPU 的使用率
+|-u ALL |... %irq %soft %guest %gnice |CPU 的扩展使用率
+|-m CPU |MHz |每个 CPU 的频率
+|-P ALL | |
+|-q |runq-sz plist-sz ldavg-1 ldavg-5 ldavg-15 blocked |CPU 运行队列长度
+|-w |proc/s cswch/s |CPU 调度器事件
+|-B |pgpgin/s pgpgout/s fault/s majflt/s pgfree/s pgscank/s pgscand/s pgsteal/s %vmeff |换页统计
+|-H |kbbhugfree kbbhugused %bhugused |巨型页
+|-r |kbmemfree kbavail kbmemused %memused kbbuffers kbcached kbbcommit %commit kactive kbinact kbdirty |内存使用率
+|-S |kbswpfree kbswpuused %swpused kbswpcad %swpcad |交换使用率
+|-W |pswpin/s pswpout/s |交换统计信息
+|-v |dentunusd file-nr inode-nr pty-nr |内核表
+|-d |tps rKB/s wKB/s areq-sz aqu-sz await svcctm %util |磁盘统计信息
+|-n DEV |rxpck/s txpck/s rxkB/s txxkB/s rxcmp/s txcmp/s rxmcst/s %ifutil |网卡接口统计信息
+|-n EDEV |rxerr/s txerr/s coll/s rxdrop/s txdrop/s txcarr/s rxfram/s rxfifo/ s txfifo/s |网卡接口错误
+|-n IP |irec/s fwddgm/s idel/s orq/s asmrq/s asmok/s fragok/s fragcrt/s |IP 统计信息
+|-n EIP |ihdrerr/s iadrerr/s iukwnpr/s idisc/s odisc/s onort/s asmf/s fragf/s |IP 错误
+|-n TCP |active/s passive/s iseg/s oseg/s |TCP 统计信息
+|-n ETCP |atmptf/s estres/s retrans/s isegerr/s orsts/s |TCP 错误
+|-n SOCK |totsck tcpsck udpsck rawsck ip-frag tcp-tw |套接字统计信息
+|===
+
+
+
+
 
 ==== pidstat
 

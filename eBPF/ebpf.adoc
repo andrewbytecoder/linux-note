@@ -480,6 +480,79 @@ image::eBPF/image-2025-02-11-17-30-37-703.png[]
 
 安装好 bpftrace 之后，你就可以执行 bpftrace -l 来查询内核插桩和跟踪点了
 
+- bpftrace内置变量精选
+
+|===
+|内置变量 |类型 |说明
+|pid |integer |进程 ID（内核 tgid）
+|tid |integer |线程 ID（内核 pid）
+|uid |integer |用户 ID
+|username |string |用户名称
+|nsecs |integer |时间戳，以纳秒为单位
+|elapsed |integer |时间戳，以纳秒为单位，从 bpfrace 初始化开始
+|cpu |integer |处理器 ID
+|comm |string |进程名称
+|kstack |string |内核栈踪迹
+|ustack |string |用户级栈踪迹
+|arg0, ..., argN |integer |某些探针类型的参数
+|args |struct |某些探针类型的参数
+|sarg0, ..., sargN |integer |某些探针类型的栈参数
+|retval |integer |某些探针类型的返回值
+|func |string |被跟踪函数的名称
+|probe |string |当前探针的完整名称
+|curtask |struct/integer |内核 task_struct（可以是 task_struct 或无符号 64 位整数，取决于类型信息的可用性）
+|cgroup |integer |当前进程的默认 cgroup v2 ID（用于与 cgroupid() 做比较）
+|$1, ..., $N |int, char * |bpfrace 程序的位置参数
+|===
+
+- bpftrace内置函数精选
+
+|===
+|函数 |说明
+|printf(char *fmt [, ...]) |格式化打印
+|time(char *fmt) |打印格式化的时间
+|join(char *arr[]) |打印字符串数组，用空格字符连接
+|str(char *s [, int len]) |返回来自指针 s 的字符串，有一个可选的长度限制
+|buf(void *d [, int length]) |返回十六进制字符串版本的数据指针
+|strncmp(char *s1, char *s2, int length) |限定长度比较两个字符串
+|sizeof(expression) |返回表达式或数据类型的大小
+|kstack([int limit]) |返回一个深度不超过限制帧的内核栈
+|ustack([int limit]) |返回一个深度不超过限制帧的用户栈
+|ksym(void *p) |解析内核地址并返回地址的字符串标识
+|usym(void *p) |解析用户空间地址并返回地址的字符串标识
+|kaddr(char *name) |将内核标识名称解析为一个地址
+|uaddr(char *name) |将用户空间的标识名称解析为一个地址
+|reg(char *name) |返回存储在已命名的寄存器中的值
+|ntop([int af,] int addr) |返回一个 IPv4/IPv6 地址的字符串表示
+|cgroupid(char *path) |返回给定路径（/sys/fs/cgroup/...）的 cgroup ID
+|system(char *fmt [, ...]) |执行 shell 命令
+|cat(char *filename) |打印文件的内容
+|signal(char[] sig \| u32 sig) |向当前任务发送信号（例如，SIGTERM）
+|override(u64 rc) |覆盖一个 kprobe 的返回值
+|exit() |退出 bpfrace
+|===
+
+- bpftrace内置的map函数
+
+map是BPF特殊的哈希表存储对象，有多种不同的用途。例如可以作为哈希表存储键/值对或者用于统计汇总，bpftrace为map的赋值和操作提供了内置函数，多数内置函数用来支持统计汇总map的。
+
+|===
+|函数| 说明
+|count()| 计算出现的次数
+|sum(int n)|数值求和
+|min(int n)|记录最小值
+|avg(int n)|求平均值
+|max(int n) |记录最大值
+|stats(int n) |返回计数、平均值和总数
+|hist(int n) |打印数值的 2 的幂级直方图
+|lhist(int n, const int min, const int max, int step) |打印数值的线性直方图
+|delete(@m[key]) |删除 map 中指定的键 / 值对
+|print(@m [, top [, div]]) |打印 map，包括可选的限制（只输出最高的 top 个）和除数（将数值整除后再输出）
+|clear(@m) |删除 map 上的所有键
+|zero(@m) |将 map 的所有值设为零
+|===
+
+
 [source, bash]
 ----
 # 查询所有内核插桩和跟踪点
@@ -656,6 +729,75 @@ bpftrace -e 't:net:netif_receive_skb { @[str(args->name)] = lhist(cpu, 0, 128, 1
 bpftrace -e 'k:ieee80211_* { @[func] = count(); }'
 ----
 
+===== 利用bpftrace跟踪CPU
+
+[source, bash]
+----
+#跟踪带有参数的新进程：
+bpftrace -e 'tracepoint:syscalls:sys_enter_execve { join(args->argv); }'
+#按进程对系统调用计数：
+bpftrace -e 'tracepoint:raw_syscalls:sys_enter { @[pid, comm] = count(); }'
+#按系统调用的探针名对系统调用计数：
+bpftrace -e 'tracepoint:syscalls:sys_enter_* { @[probe] = count(); }'
+#以 99Hz 的频率对运行中的进程名采样：
+bpftrace -e 'profile:hz:99 { @[comm] = count(); }'
+#以 49Hz 的频率按进程名称对用户栈和内核栈进行系统级别的采样：
+bpftrace -e 'profile:hz:49 { @[kstack, ustack, comm] = count(); }'
+#以 49Hz 对 PID 为 189 的用户级栈进行采样：
+bpftrace -e 'profile:hz:49 /pid == 189/ { @[ustack] = count(); }'
+#以 49Hz 对 PID 为 189 的用户级栈进行 5 帧的采样：
+bpftrace -e 'profile:hz:49 /pid == 189/ { @[ustack(5)] = count(); }'
+#对名为 “mysqld” 的进程，以 49Hz 对用户级栈采样：
+bpftrace -e 'profile:hz:49 /comm == "mysqld"/ { @[ustack] = count(); }'
+#对内核 CPU 调度器的 tracepoint 计数：
+bpftrace -e 'tracepoint:sched:* { @[probe] = count(); }'
+#统计上下文切换事件的 off-CPU 的内核栈：
+bpftrace -e 'tracepoint:sched:sched_switch { @[kstack] = count(); }'
+#统计以 “vfs_” 开头的内核函数调用：
+bpftrace -e 'kprobe:vfs_* { @[func] = count(); }'
+#通过 pthread_create() 跟踪新线程：
+bpftrace -e 'u:/lib/x86_64-linux-gnu/libpthread-2.27.so:pthread_create { printf("%s by %s (%d)\n", probe, comm, pid); }'
+----
+
+
+===== 利用bpftrace跟踪内存
+
+[source, bash]
+----
+#按用户栈和进程计算 libc malloc() 请求字节数的总和（高开销）：
+bpftrace -e 'u:/lib/x86_64-linux-gnu/libc.so.6:malloc { @[ustack, comm] = sum(arg0); }'
+#按用户栈计算 PID 181 的 libc malloc() 请求字节数的总和（高开销）：
+bpftrace -e 'u:/lib/x86_64-linux-gnu/libc.so.6:malloc /pid == 181/ { @[ustack] = sum(arg0); }'
+#将 PID 181 的 libc malloc() 请求字节数按用户栈生成 2 的幂级直方图（高开销）：
+bpftrace -e 'u:/lib/x86_64-linux-gnu/libc.so.6:malloc /pid == 181/ { @[ustack] = hist(pow2(arg0)); }'
+#按内核栈踪迹对内核 kmem 缓存分配的字节数求和：
+bpftrace -e 't:kmem:kmem_cache_alloc { @[kstack] = sum(args->bytes_alloc); }'
+#按代码路径统计进程堆扩展（brk(2)）：
+bpftrace -e 'tracepoint:syscalls:sys_enter_brk { @[ustack, comm] = count(); }'
+#按进程统计缺页故障：
+bpftrace -e 'software:page-fault:1 { @[comm, pid] = count(); }'
+#按用户级栈踪迹统计用户缺页故障：
+bpftrace -e 't:exceptions:page_fault_user { @[ustack, comm] = count(); }'
+#按 tracepoint 统计 vmscan 操作
+bpftrace -e 'tracepoint:vmscan:* { @[probe]++; }'
+#按进程统计交换
+bpftrace -e 'kprobe:swap_readpage { @[comm, pid] = count(); }'
+#统计页面迁移
+bpftrace -e 'tracepoint:migrate:mm_migrate_pages { @ = count(); }'
+# 跟踪内存压缩事件
+bpftrace -e 't:compaction:mm_compaction_begin { time(); }'
+#列出 libc 中的 USDT 探针
+bpftrace -l 'usdt:/lib/x86_64-linux-gnu/libc.so.6:*'
+#列出内核的 kmem tracepoint
+bpftrace -l 't:kmem:*'
+#列出所有内存子系统 (mm) 的 tracepoint
+bpftrace -l 't:*:mm_*'
+----
+
+
+
+
+
 
 - 1. `kprobe:inet_accept`
 * **挂钩函数**: `inet_accept`
@@ -673,6 +815,65 @@ bpftrace -e 'k:ieee80211_* { @[func] = count(); }'
 * **抽象层次**: `inet_accept` 是一个更高层次的函数，适用于所有类型的套接字（如 TCP、UDP 等），而 `inet_csk_accept` 是专门用于 TCP 套接字的底层函数。
 * **调用关系**: `inet_accept` 会调用 `inet_csk_accept` 来处理 TCP 连接的接受。
 * **使用场景**: `inet_accept` 更适合用于跟踪所有类型的连接接受，而 `inet_csk_accept` 更适合用于深入分析 TCP 连接的接受过程。
+
+
+
+=== PMCs (硬件事件)
+
+PMCs（Performance Monitoring Counters）是性能检测计数器，可以解释CPU周期性能
+
+.github地址: https://github.com/brendangregg/pmc-cloud-tools/tree/master[PMC]
+
+.可分别在容器和虚拟机中执行
+[source, bash]
+----
+serverA# ./pmcarch -p 4093 10
+K_CYCLES   K_INSTR    IPC BR_RETIRED     BR_MISPRED BMR% LLCCREF LLCMISS LLC%
+982412660  575706336  0.59  126424862460  2416880487  1.91  15724006692  10872315070  30.86
+999621309  555043627  0.56  120449284756  2317302514  1.92  15378257714  11121882510  27.68
+991146940  558145849  0.56  126350181501  2530383860  2.00  15965082710  11464682655  28.19
+996314688  562276830  0.56  122215605985  2348638980  1.92  15558286345  10835594199  30.35
+979890037  560268707  0.57  125609807909  2386085660  1.90  15828820588  11038597030  30.26
+----
+
+K_INSTR：指示处理器周期数
+K_INSTR：指示处理器上执行的指令数
+IPC：每周期指令执行次数
+
+IPC越高说明执行效率越好，性能也越好，一般是1.0以上，这偏低只有1.59左右，观察后面可以得出结论，LLC也就是虚拟机最后一级的缓存(LLC)命中率只有30%左右，因此导致指令在访问主存时经常停滞。
+
+通常是如下原因导致的：
+
+- 较小的LLC大小 （33MB对45MB）
+- CPU饱和度高会导致更多上下文切换，以及更多的代码路径之间的跳跃(包括用户和内核)，从而增加了缓存压力
+
+研究完硬件事件PMCs可以看下软件事件，我们可以使用perf命令查看计算机系统的上下文切换率。
+
+.每秒钟上下文切换的次数
+[source, bash]
+----
+serverA# perf stat -e cs -a -I 1000
+
+#       time           counts unit events
+1.000411740   2,063,105    cs
+2.000977435   2,065,354    cs
+3.001537756   1,527,297    cs
+4.002028407   515,509      cs
+5.002538455   2,447,126    cs
+6.003114251   2,021,182    cs
+7.003665091   2,329,157    cs
+8.004093520   1,740,898    cs
+9.004533912   1,235,641    cs
+10.005106500  2,340,443    cs
+^C
+10.513632795  1,496,555    cs
+----
+
+如果上下文切换过多会导致性能下降
+
+如果需要进一步跟踪可以使用bcc工具中的 cpudist,cpuwalk,runqlen,runqslower,cpuunclaimed
+
+
 
 
 
@@ -863,6 +1064,40 @@ image::eBPF/image-2025-02-12-11-46-24-356.png[]
 image::eBPF/image-2025-02-12-11-49-17-694.png[]
 
 
+=== 以下工具部分来自 perf-tools
+
+https://github.com/brendangregg/perf-tools/tree/master[perf-tools]
+
+=== funccount
+
+funccount 是一个用于统计函数调用次数的工具，它使用 eBPF 技术来统计函数调用次数，并输出统计结果。
+
+
+[source, bash]
+----
+#对VFS内核调用进行计数
+funcgraph 'vfs_*'
+# 堆TCP内核调用计数
+funccount 'tcp_*'
+# 对每秒的TCP发送调用计数
+funccount -i 1 'tcp_send*'
+# 显示每秒块I/O事件的次数
+funccount -i 1 't:block_*'
+# 每秒libc的getaddrinfo 名字解析 执行次数
+funccount -i 1 c:getaddrinfo
+----
+
+=== stackcount
+
+[source, bash]
+----
+# 对创建块I/O的栈踪迹进行计数
+stackcount -i 1 't:block:block_rq_insert'
+# 对发送IP包的栈踪迹进行计数带对应PID
+stackcount -p ip_output
+# 针对导致线程阻塞并切换到off-CPU的栈踪迹进行计数
+stackcount t:sched:sched_switch
+----
 
 
 

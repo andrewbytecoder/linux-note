@@ -18,4 +18,10 @@ endif::rootpath[]
 
 
 
+=== CPU
 
+如果处理器每个CPU有连个超线程，当超过50%的使用率意味着超线程核心存在争夺，会降低性能。
+
+可以使用 `lscpu` 或者
+
+`cat /proc/cpuinfo` 查看CPU信息
