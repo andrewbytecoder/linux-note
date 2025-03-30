@@ -725,6 +725,8 @@ sar -n TCP 1 5
 
 按照进程或者线程打印CPU使用量，包括用户时间和系统时间的细分
 
+> 这里的wait并不是I/O wait，和top里面的不一样，这里面的wait是等待执行的时间， %wait  Percentage of CPU spent by the task while waiting to run
+
 [source, bash]
 ----
 # pidstat 1

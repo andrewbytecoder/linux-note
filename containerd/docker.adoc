@@ -47,6 +47,7 @@ image::containerd/c8116066bdbf295a7c9fc25b87755dfe.jpg[docker]
 |**`docker stats`**|查看容器的CPU等资源使用情况。
 |**`docker logs`**|查看容器的日志。
 |**`docker exec`**|进入到容器内部执行命令
+|**`docker history`**|查看镜像的打包过程
 |**`docker volume`**|查看docker生成的持久化挂载卷，这些卷能保证容器重启之后数据依然存在
 |===
 
