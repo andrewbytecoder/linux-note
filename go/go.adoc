@@ -1174,7 +1174,13 @@ func main()  {}
 
 
 
+=== 编译
 
+[source, bash]
+----
+# 将go编译成汇编代码
+go tool compile -S pkg.go
+----
 
 
 

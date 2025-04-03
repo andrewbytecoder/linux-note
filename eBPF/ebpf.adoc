@@ -250,7 +250,7 @@ BPF 系统调用中并没有删除映射的命令，这是因为 BPF 映射会�
 ----
 #创建一个哈希表映射，并挂载到/sys/fs/bpf/stats_map(Key和Value的大小都是8字节)
 $ bpftool map create pinned /sys/fs/bpf/my_map type hash key 8 value 8 entries 1024
-//查询系统中的所有映射
+# 查询系统中的所有映射
 $ bpftool map
 # 示例输出
 # 340: hash name stats_map flags 0x0
