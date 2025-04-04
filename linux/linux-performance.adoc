@@ -25,3 +25,25 @@ endif::rootpath[]
 可以使用 `lscpu` 或者
 
 `cat /proc/cpuinfo` 查看CPU信息
+
+
+==== pcstat
+
+用来查看一个文件当前在内核中的缓存情况，以及缓存的命中率，通常用于排查那些需要读取文件频繁的程序，这些程序经常因为文件缓存命中率低而产生性能问题。
+
+[source,bash]
+----
+pcstat /tmp/test.txt
+----
+
+
+
+
+
+
+
+
+
+
+
+

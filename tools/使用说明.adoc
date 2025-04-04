@@ -1,0 +1,23 @@
+
+
+
+
+
+=== 性能调优工具
+
+==== `smem.py`
+
+结合watch命令，可以看出内存的变化情况，如果有一个进程在运行中使用的内存一直在增长那么就需要进行重点关注了。
+
+[source, bash]
+----
+# 使用watch命令结合smem.py查看内存使用情况，每隔一秒刷新一次
+watch -n 1 -d "python3 smem.py -s rss"
+# 每隔一秒刷新一次，只显示使用内存最多的后10条
+watch -n 1 -d "python3 smem.py -s rss| tail -n 10"
+----
+
+
+
+
+

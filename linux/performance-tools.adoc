@@ -156,7 +156,7 @@ image::linux/image-2025-02-27-11-42-32-481.png[]
 
 |4
 |mpstat -P ALL 1
-|CPU情况：单个CPU很繁忙，意味着西安城扩展性糟糕
+|CPU情况：单个CPU很繁忙，意味着现在程序性能糟糕
 
 |5
 |pidstat 1
