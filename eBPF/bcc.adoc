@@ -11,7 +11,7 @@ endif::rootpath[]
 
 == bcc
 
-image::../image/eBPF/image-2025-02-21-15-49-53-474.png[]
+image::eBPF/image-2025-02-21-15-49-53-474.png[]
 
 === 命令
 
@@ -105,9 +105,19 @@ TIME      DISK     %RND  %SEQ    COUNT     KBYTES
 
 ==== biosnoop
 
-用于追踪块设备 I/O（即磁盘 I/O），并为每次 I/O 操作打印一行输出。这对于分析磁盘性能、识别慢速 I/O 操作以及了解系统中磁盘活动的具体细节非常有用。
+用于追踪块设备 I/O（即磁盘 I/O），并为每次 I/O 操作打印一行输出。这对于分析磁盘性能、识别慢速 I/O 操作以及了解系统中磁盘活动的具体细节非常有用。进程的每次操作都会打印一次，这样就能根据延时来查看具体进程的I/O性能。
 
 - biosnoop: 检查单个I/O
+
+[source,bash]
+----
+[root@k8smaster-ims tools]# ./biosnoop
+TIME(s)     COMM           PID     DISK      T SECTOR     BYTES  LAT(ms)
+0.000000    etcd           13383   sda       W 2206026528 8192      0.52
+0.000965    jbd2/dm-0-8    551     sda       W 1259008848 86016     0.70
+0.001762    kworker/1:2    3671312 sda       W 1259009016 4096      0.47
+0.008779    etcd           13383   sda       W 42709832   4096      0.41
+----
 
 ==== biotop
 
