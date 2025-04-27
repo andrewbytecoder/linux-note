@@ -1,0 +1,48 @@
+
+:toc:
+
+// 保证所有的目录层级都可以正常显示图片
+:path: prometheus/
+:imagesdir: ../image/
+
+// 只有book调用的时候才会走到这里
+ifdef::rootpath[]
+:imagesdir: {rootpath}{path}{imagesdir}
+endif::rootpath[]
+
+// 用于文件跳转
+ifndef::rootpath[]
+:rootpath: ../
+endif::rootpath[]
+
+== kube-prometheus
+
+
+
+
+
+
+
+
+
+
+
+
+
+=== prometheus特性列表
+
+==== pod停止之后还是能采集到数据
+
+这是因为prometheus为了能够聚合数据，会对原先的数据进行聚合，默认会进行5分钟的聚合，也就是小时5分钟之后还有虚假数据
+
+如果需要修改可以通过以下参数进行修改：
+
+[source, bash]
+----
+--query.lookback-delta
+----
+
+https://github.com/prometheus/prometheus/discussions/11825[discussions:11825]
+
+
+
