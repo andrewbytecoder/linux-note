@@ -124,7 +124,7 @@ static bool sig_task_ignored(struct task_struct *t, int sig, bool force)
 
 #### 容器中的僵尸进程
 
-自己的容器运行久了之后，运行 ps 命令会看到一些进程，进程名后面加了 <defunct> 标识。
+自己的容器运行久了之后，运行 ps 命令会看到一些进程，进程名后面加了 defunct 标识。
 
 ```bash
 # ps aux
@@ -132,6 +132,7 @@ USER       PID %CPU %MEM    VSZ   RSS TTY      STAT START   TIME COMMAND
 root         1  0.0  0.0   4324  1436 ?        Ss   01:23   0:00 /app-test 1000
 root         6  0.0  0.0      0     0 ?        Z    01:23   0:00 [app-test] <defunct>
 ```
+
 
 在进程“活着”的时候就只有两个状态：运行态（TASK_RUNNING）和睡眠态（TASK_INTERRUPTIBLE，TASK_UNINTERRUPTIBLE）
 

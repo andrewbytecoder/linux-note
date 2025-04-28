@@ -1,8 +1,5 @@
 
 
-## go module
-
-
 
 
 ### context
@@ -485,7 +482,7 @@ func main() {
 }
 ```
 
-===== 执行多个命令，请使用管道进行组合
+#### 执行多个命令，请使用管道进行组合
 
 ```go
 func main() {
@@ -543,4 +540,11 @@ func main() {
     fmt.Printf("output: %s", out2)
 }
 ```
+
+
+## binary
+
+
+
+
 

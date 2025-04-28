@@ -1,0 +1,212 @@
+{
+  "main": {
+    "id": "fa60888132233ae0",
+    "type": "split",
+    "children": [
+      {
+        "id": "421a6f98e39acfd4",
+        "type": "tabs",
+        "children": [
+          {
+            "id": "1aed87474199d038",
+            "type": "leaf",
+            "state": {
+              "type": "markdown",
+              "state": {
+                "file": "eBPF/ebpf专家.md",
+                "mode": "source",
+                "source": false
+              },
+              "icon": "lucide-file",
+              "title": "ebpf专家"
+            }
+          }
+        ]
+      }
+    ],
+    "direction": "vertical"
+  },
+  "left": {
+    "id": "984ded355ab1126f",
+    "type": "split",
+    "children": [
+      {
+        "id": "b68cb3808bf8406e",
+        "type": "tabs",
+        "children": [
+          {
+            "id": "5c8b7f1f1f2346fa",
+            "type": "leaf",
+            "state": {
+              "type": "file-explorer",
+              "state": {
+                "sortOrder": "alphabetical",
+                "autoReveal": false
+              },
+              "icon": "lucide-folder-closed",
+              "title": "文件列表"
+            }
+          },
+          {
+            "id": "eb71ac99f702581a",
+            "type": "leaf",
+            "state": {
+              "type": "search",
+              "state": {
+                "query": "image",
+                "matchingCase": false,
+                "explainSearch": false,
+                "collapseAll": false,
+                "extraContext": false,
+                "sortOrder": "alphabetical"
+              },
+              "icon": "lucide-search",
+              "title": "搜索"
+            }
+          },
+          {
+            "id": "f6e422ca2c0d2f52",
+            "type": "leaf",
+            "state": {
+              "type": "bookmarks",
+              "state": {},
+              "icon": "lucide-bookmark",
+              "title": "书签"
+            }
+          }
+        ]
+      }
+    ],
+    "direction": "horizontal",
+    "width": 300
+  },
+  "right": {
+    "id": "e7caec816f7dccec",
+    "type": "split",
+    "children": [
+      {
+        "id": "6dda2822eaf66a8c",
+        "type": "tabs",
+        "children": [
+          {
+            "id": "f5d424bebab9d9a4",
+            "type": "leaf",
+            "state": {
+              "type": "backlink",
+              "state": {
+                "file": "linux/perf.adoc",
+                "collapseAll": false,
+                "extraContext": false,
+                "sortOrder": "alphabetical",
+                "showSearch": false,
+                "searchQuery": "",
+                "backlinkCollapsed": false,
+                "unlinkedCollapsed": true
+              },
+              "icon": "links-coming-in",
+              "title": "perf 的反向链接列表"
+            }
+          },
+          {
+            "id": "3dc59a469e16eeb3",
+            "type": "leaf",
+            "state": {
+              "type": "outgoing-link",
+              "state": {
+                "file": "linux/perf.adoc",
+                "linksCollapsed": false,
+                "unlinkedCollapsed": true
+              },
+              "icon": "links-going-out",
+              "title": "perf 的出链列表"
+            }
+          },
+          {
+            "id": "27717574aa086f28",
+            "type": "leaf",
+            "state": {
+              "type": "tag",
+              "state": {
+                "sortOrder": "frequency",
+                "useHierarchy": true,
+                "showSearch": false,
+                "searchQuery": ""
+              },
+              "icon": "lucide-tags",
+              "title": "标签"
+            }
+          },
+          {
+            "id": "c65fbe9a811375ef",
+            "type": "leaf",
+            "state": {
+              "type": "outline",
+              "state": {
+                "file": "linux/perf.adoc",
+                "followCursor": false,
+                "showSearch": false,
+                "searchQuery": ""
+              },
+              "icon": "lucide-list",
+              "title": "perf 的大纲"
+            }
+          }
+        ]
+      }
+    ],
+    "direction": "horizontal",
+    "width": 300,
+    "collapsed": true
+  },
+  "left-ribbon": {
+    "hiddenItems": {
+      "switcher:打开快速切换": false,
+      "graph:查看关系图谱": false,
+      "canvas:新建白板": false,
+      "daily-notes:打开/创建今天的日记": false,
+      "templates:插入模板": false,
+      "command-palette:打开命令面板": false
+    }
+  },
+  "active": "1aed87474199d038",
+  "lastOpenFiles": [
+    "eBPF/ebpf.md",
+    "eBPF/bpftrace.md",
+    "eBPF/bcc.md",
+    "containerd/containerd.md",
+    "containerd/docker.md",
+    "go/network.md",
+    "go/memory.md",
+    "go/gRPC.md",
+    "go/go_package.md",
+    "go/go_module.md",
+    "go/高并发.md",
+    "calico/calico.md",
+    "calico/calico架构.md",
+    "k8s/components/attachments/image-2025-02-26-16-53-42-621.png",
+    "k8s/components/attachments/image-2025-02-26-16-39-00-423.png",
+    "k8s/components/attachments/image-2025-02-26-16-34-16-493.png",
+    "k8s/components/attachments/image-2025-02-26-16-47-33-139.png",
+    "k8s/components/attachments/image-2025-02-08-17-49-21-502.png",
+    "k8s/components/attachments/image-2025-02-08-17-47-59-675.png",
+    "k8s/components/attachments/Pasted image 20250207111351.png",
+    "k8s/components/attachments/image-2025-02-08-15-45-21-963.png",
+    "k8s/components/service.md~",
+    "k8s/components/pod.md~",
+    "harbor/harbor.md~",
+    "containerd/containerd.md~",
+    "k8s/components/attachments/image-2025-02-08-14-16-30-278.png",
+    "k8s/components/ingress.md~",
+    "k8s/components/attachments/image-2025-02-14-00-29-25-831.png",
+    "k8s/components/cadvisor.md~",
+    "k8s/components/controller-manager.md~",
+    "k8s/components/attachments",
+    "k8s/prometheus.md~",
+    "k8s/kube_prometheus.md~",
+    "doc/readme.md",
+    "containerd/OverlayFS.md",
+    "calico/calicoctl.md",
+    "go/go.md",
+    "cache.md"
+  ]
+}
