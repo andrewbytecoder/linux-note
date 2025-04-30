@@ -48,13 +48,32 @@ https://www.somethingsimilar.com/2013/01/14/notes-on-distributed-systems-for-you
 
 
 
+## 算法
+
+### Paxos
+
+- zookeeper
+ZooKeeper 有和 Paxos 非常相似的一些特征，比如领导选举、提案号等，但是它本质上不是 Paxos 协议，而是自己发明的 Zab 协议，具体实现可以参考论文：[Zab: High-performance broadcast for primary-backup systems](https://www.semanticscholar.org/paper/Zab%3A-High-performance-broadcast-for-primary-backup-Junqueira-Reed/b02c6b00bd5dbdbd951fddb00b906c82fa80f0b3?p2df)
+
+
+- paxos 动画演示paxos算法实现
+[neat-algorithms-paxos](https://harry.me/blog/2014/12/27/neat-algorithms-paxos/)
+
+
+### raft算法
 
 
 
+[raft算法实现论文](chrome-extension://efaidnbmnnnibpcajpcglclefindmkaj/https://raft.github.io/raft.pdf)
+[thesecretlivesofdata动画演示](https://thesecretlivesofdata.com/raft/)
+[raft.github各种实现搜集](https://raft.github.io/)
+[kanaka.github数据同步演示](https://kanaka.github.io/raft.js/)
 
 
+### Gossip 协议
+Gossip 算法也是 Cassandra 使用的数据复制协议。这个协议就像八卦和谣言传播一样，可以 “一传十、十传百”传播开来。但是这个协议看似简单，细节上却非常麻烦。
 
-
+[Efficient Reconciliation and Flow Control for Anti-Entropy Protocols](chrome-extension://efaidnbmnnnibpcajpcglclefindmkaj/https://www.cs.cornell.edu/home/rvr/papers/flowgossip.pdf)
 
 
 
@@ -69,3 +88,16 @@ Cloud Spanner 为代表）等知识点
 
 
 在关于集群的可用性（ availability） 这一点上， etcd 认为一致性比可用性更加重要。这意味着 etcd 在出现脑裂的情况时，会停止为集群提供更新能力，来保证存储数据的一致性。
+
+
+
+
+
+
+
+
+## 附录
+
+[allthingsdistributed搜集和分布式系统相关的事件和论文](https://www.allthingsdistributed.com/)
+[Spanner: Google’s Globally-Distributed Database](chrome-extension://efaidnbmnnnibpcajpcglclefindmkaj/https://static.googleusercontent.com/media/research.google.com/zh-CN//archive/spanner-osdi2012.pdf)
+目前，基于 Spanner 论文的开源实现有两个，一个是 Google 公司自己的人出来做的CockroachDB，另一个是国人做的TiDB

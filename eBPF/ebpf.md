@@ -103,9 +103,9 @@ b'         kubelet-24746   [013] ....2.1 72579.780845: bpf_trace_printk: Hello, 
 
 
 
-=== 运行原理：eBPF 是一个新的虚拟机吗？
+## 运行原理：eBPF 是一个新的虚拟机吗？
 
-==== eBPF 虚拟机是如何工作的？
+### eBPF 虚拟机是如何工作的？
 
 eBPF 是一个运行在内核中的虚拟机，很多人在初次接触它时，会把它跟系统虚拟化（比如kvm）中的虚拟机弄混。其实，虽然都被称为“虚拟机”，系统虚拟化和 eBPF 虚拟机还是有着本质不同的。
 
@@ -114,17 +114,11 @@ eBPF 是一个运行在内核中的虚拟机，很多人在初次接触它时，
 .eBPF 在内核中的运行时主要由 5 个模块组成
 ![[image-2025-02-11-14-49-01-687.png]]
 
-- 第一个模块是 eBPF 辅助函数。它提供了一系列用于 eBPF 程序与内核其他模块进行交互
-的函数。
-- 第二个模块是 eBPF 验证器。它用于确保 eBPF 程序的安全。验证器会将待执行的指令创
-建为一个有向无环图（DAG），确保程序中不包含不可达指令；接着再模拟指令的执行过
-程，确保不会执行无效指令。
-- 第三个模块是由 11 个 64 位寄存器、一个程序计数器和一个 512 字节的栈组成的存储模
-块。这个模块用于控制 eBPF 程序的执行。
-- 第四个模块是即时编译器，它将 eBPF 字节码编译成本地机器指令，以便更高效地在内核
-中执行。
-- 第五个模块是 BPF 映射（map），它用于提供大块的存储。这些存储可被用户空间程序用
-来进行访问，进而控制 eBPF 程序的运行状态。
+- 第一个模块是 eBPF 辅助函数。它提供了一系列用于 eBPF 程序与内核其他模块进行交互的函数。
+- 第二个模块是 eBPF 验证器。它用于确保 eBPF 程序的安全。验证器会将待执行的指令创建为一个有向无环图（DAG），确保程序中不包含不可达指令；接着再模拟指令的执行过程，确保不会执行无效指令。
+- 第三个模块是由 11 个 64 位寄存器、一个程序计数器和一个 512 字节的栈组成的存储模块。这个模块用于控制 eBPF 程序的执行。
+- 第四个模块是即时编译器，它将 eBPF 字节码编译成本地机器指令，以便更高效地在内核中执行。
+- 第五个模块是 BPF 映射（map），它用于提供大块的存储。这些存储可被用户空间程序用来进行访问，进而控制 eBPF 程序的运行状态。
 
 ```bash
 # 查看系统中运行的 BPF 程序
@@ -154,10 +148,9 @@ int hello_world(void * ctx):
 11: (b7) r0 = 0
 12: (95) exit
 # 这些指令先通过 R1 和 R2 寄存器设置了 bpf_trace_printk 的参数，然后调用bpf_trace_printk 函数输出字符串，最后再通过 R0 寄存器返回成功
-
 ```
 
-=== 编程接口：eBPF 程序是怎么跟内核进行交互的？
+## 编程接口：eBPF 程序是怎么跟内核进行交互的？
 
 对于用户态程序来说，与内核进行交互时必须要通过系统调用来完成。而对应到 eBPF 程序中，我们最常用到的就是bpf系统调用
 
@@ -176,7 +169,7 @@ int bpf(int cmd, union bpf_attr *attr, unsigned int size);
 ![[2023-03-13-16-01-55-d8ec91bff9d070bd6c9af1306dd74a4.jpg]]
 
 
-==== BPF 辅助函数
+### BPF 辅助函数
 
 eBPF 程序并不能随意调用内核函数，因此，内核定义了一系列的辅助函数，用于 eBPF 程序与内核其他模块进行交互。比如，上一讲的 Hello World 示例中使用的 bpf_trace_printk() 就是最常用的一个辅助函数，用于向调试文件系统（/sys/kernel/debug/tracing/trace_pipe）写入调试信息。
 
@@ -186,7 +179,7 @@ eBPF 程序并不能随意调用内核函数，因此，内核定义了一系列
 
 ![[image-2025-02-11-15-24-55-535.png]]
 
-==== BPF 映射
+### BPF 映射
 
 BPF 映射用于提供大块的键值存储，这些存储可被用户空间程序访问，进而获取 eBPF 程序的运行状态。eBPF 程序最多可以访问 64 个不同的 BPF 映射，并且不同的 eBPF 程序也可以通过相同的 BPF 映射来共享它们的状态。
 
@@ -259,10 +252,9 @@ $ rm /sys/fs/bpf/stats_map
 $ bpftool map dump id 386
 ```
 
-=== 事件触发：各类 eBPF 程序的触发机制及其应用场景
+## 事件触发：各类 eBPF 程序的触发机制及其应用场景
 
-根据内核头文件include/uapi/linux/bpf.h 中 bpf_prog_type 的定义，Linux 内核 v5.13 已
-经支持 30 种不同类型的 eBPF 程序。对于具体的内核来说，因为不同内核的版本和编译配置选项不同，一个内核并不会支持所有的程序类型。你可以在命令行中执行下面的命令，来查询当前系统支持的程序类型
+根据内核头文件include/uapi/linux/bpf.h 中 bpf_prog_type 的定义，Linux 内核 v5.13 已经支持 30 种不同类型的 eBPF 程序。对于具体的内核来说，因为不同内核的版本和编译配置选项不同，一个内核并不会支持所有的程序类型。你可以在命令行中执行下面的命令，来查询当前系统支持的程序类型
 
 ```bash
 [root@k8smaster-40-170 ~]# bpftool feature probe | grep program_type
@@ -306,13 +298,13 @@ eBPF program_type netfilter is available
 - 第二类是网络，即对网络数据包进行过滤和处理，以便了解和控制网络数据包的收发过程。
 - 第三类是除跟踪和网络之外的其他类型，包括安全控制、BPF 扩展等等
 
-==== 跟踪类 eBPF 程序
+### 跟踪类 eBPF 程序
 
 跟踪类 eBPF 程序主要用于从系统中提取跟踪信息，进而为监控、排错、性能优化等提供数据支撑。
 
 ![[image-2025-02-11-16-25-03-308.png]]
 
-==== 网络类 eBPF 程序
+### 网络类 eBPF 程序
 
 网络类 eBPF 程序主要用于对网络数据包进行过滤和处理，进而实现网络的观测、过滤、流量控制以及性能优化等各种丰富的功能。
 
@@ -424,7 +416,7 @@ if (bpf(BPF_PROG_ATTACH, &attr, sizeof(attr)) < 0) {
 .图中黄色部分即为 Cilium eBPF 程序
 ![[image-2025-02-11-17-13-09-207.png]]
 
-==== 其他类 eBPF 程序
+### 其他类 eBPF 程序
 
 除了上面的跟踪和网络 eBPF 程序之外，Linux 内核还支持很多其他的类型。这些类型的eBPF 程序虽然不太常用，但在需要的时候也可以帮你解决很多特定的问题
 
@@ -439,9 +431,9 @@ if (bpf(BPF_PROG_ATTACH, &attr, sizeof(attr)) < 0) {
 虽然每个 eBPF 程序都有特定的类型和触发事件，但这并不意味着它们都是完全独立的。通过BPF 映射提供的状态共享机制，各种不同类型的 eBPF 程序完全可以相互配合，不仅可以绕过单个 eBPF 程序指令数量的限制，还可以实现更为复杂的控制逻辑。
 
 
-=== 内核跟踪（上）：如何查询内核中的跟踪点？
+## 内核跟踪（上）：如何查询内核中的跟踪点？
 
-==== 利用调试信息查询跟踪点
+### 利用调试信息查询跟踪点
 
 为了方便调试，内核把所有函数以及非栈变量的地址都抽取到了 /proc/kallsyms中，这样调试器就可以根据地址找出对应的函数和变量名称。对内核插桩类的 eBPF 程序来说，它们要挂载的内核函数就可以从 /proc/kallsyms 这个文件中查到
 
@@ -455,7 +447,7 @@ eBPF 程序的执行也依赖于调试文件系统，有了调试文件系统，
 sudo perf list [hw|sw|cache|tracepoint|pmu|sdt|metric|metricgroup]
 ```
 
-==== 利用 bpftrace 查询跟踪点
+### 利用 bpftrace 查询跟踪点
 
 bpftrace 在 eBPF 和 BCC 之上构建了一个简化的跟踪语言，通过简单的几行脚本，就可以实现复杂的跟踪功能。并且，多行的跟踪指令也可以放到脚本文件中执行（脚本后缀通常为 .bt)
 
@@ -467,75 +459,72 @@ bpftrace 会把你开发的脚本借助BCC编译加载到内核中执行，再�
 
 - bpftrace内置变量精选
 
-|===
-|内置变量 |类型 |说明
-|pid |integer |进程 ID（内核 tgid）
-|tid |integer |线程 ID（内核 pid）
-|uid |integer |用户 ID
-|username |string |用户名称
-|nsecs |integer |时间戳，以纳秒为单位
-|elapsed |integer |时间戳，以纳秒为单位，从 bpfrace 初始化开始
-|cpu |integer |处理器 ID
-|comm |string |进程名称
-|kstack |string |内核栈踪迹
-|ustack |string |用户级栈踪迹
-|arg0, ..., argN |integer |某些探针类型的参数
-|args |struct |某些探针类型的参数
-|sarg0, ..., sargN |integer |某些探针类型的栈参数
-|retval |integer |某些探针类型的返回值
-|func |string |被跟踪函数的名称
-|probe |string |当前探针的完整名称
-|curtask |struct/integer |内核 task_struct（可以是 task_struct 或无符号 64 位整数，取决于类型信息的可用性）
-|cgroup |integer |当前进程的默认 cgroup v2 ID（用于与 cgroupid() 做比较）
-|$1, ..., $N |int, char * |bpfrace 程序的位置参数
-|===
+| 内置变量              | 类型             | 说明                                                      |
+| ----------------- | -------------- | ------------------------------------------------------- |
+| pid               | integer        | 进程 ID（内核 tgid）                                          |
+| tid               | integer        | 线程 ID（内核 pid）                                           |
+| uid               | integer        | 用户 ID                                                   |
+| username          | string         | 用户名称                                                    |
+| nsecs             | integer        | 时间戳，以纳秒为单位                                              |
+| elapsed           | integer        | 时间戳，以纳秒为单位，从 bpfrace 初始化开始                              |
+| cpu               | integer        | 处理器 ID                                                  |
+| comm              | string         | 进程名称                                                    |
+| kstack            | string         | 内核栈踪迹                                                   |
+| ustack            | string         | 用户级栈踪迹                                                  |
+| arg0, ..., argN   | integer        | 某些探针类型的参数                                               |
+| args              | struct         | 某些探针类型的参数                                               |
+| sarg0, ..., sargN | integer        | 某些探针类型的栈参数                                              |
+| retval            | integer        | 某些探针类型的返回值                                              |
+| func              | string         | 被跟踪函数的名称                                                |
+| probe             | string         | 当前探针的完整名称                                               |
+| curtask           | struct/integer | 内核 task_struct（可以是 task_struct 或无符号 64 位整数，取决于类型信息的可用性） |
+| cgroup            | integer        | 当前进程的默认 cgroup v2 ID（用于与 cgroupid() 做比较）                |
+| $1, ..., $N       | int, char *    | bpfrace 程序的位置参数                                         |
 
 - bpftrace内置函数精选
 
-|===
-|函数 |说明
-|printf(char *fmt [, ...]) |格式化打印
-|time(char *fmt) |打印格式化的时间
-|join(char *arr]]) |打印字符串数组，用空格字符连接
-|str(char *s [, int len]) |返回来自指针 s 的字符串，有一个可选的长度限制
-|buf(void *d [, int length]) |返回十六进制字符串版本的数据指针
-|strncmp(char *s1, char *s2, int length) |限定长度比较两个字符串
-|sizeof(expression) |返回表达式或数据类型的大小
-|kstack([int limit]) |返回一个深度不超过限制帧的内核栈
-|ustack([int limit]) |返回一个深度不超过限制帧的用户栈
-|ksym(void *p) |解析内核地址并返回地址的字符串标识
-|usym(void *p) |解析用户空间地址并返回地址的字符串标识
-|kaddr(char *name) |将内核标识名称解析为一个地址
-|uaddr(char *name) |将用户空间的标识名称解析为一个地址
-|reg(char *name) |返回存储在已命名的寄存器中的值
-|ntop([int af,] int addr) |返回一个 IPv4/IPv6 地址的字符串表示
-|cgroupid(char *path) |返回给定路径（/sys/fs/cgroup/...）的 cgroup ID
-|system(char *fmt [, ...]) |执行 shell 命令
-|cat(char *filename) |打印文件的内容
-|signal(char]] sig \| u32 sig) |向当前任务发送信号（例如，SIGTERM）
-|override(u64 rc) |覆盖一个 kprobe 的返回值
-|exit() |退出 bpfrace
-|===
+| 函数                                      | 说明                                    |
+| --------------------------------------- | ------------------------------------- |
+| printf(char *fmt [, ...])               | 格式化打印                                 |
+| time(char *fmt)                         | 打印格式化的时间                              |
+| join(char *arr]])                       | 打印字符串数组，用空格字符连接                       |
+| str(char *s [, int len])                | 返回来自指针 s 的字符串，有一个可选的长度限制              |
+| buf(void *d [, int length])             | 返回十六进制字符串版本的数据指针                      |
+| strncmp(char *s1, char *s2, int length) | 限定长度比较两个字符串                           |
+| sizeof(expression)                      | 返回表达式或数据类型的大小                         |
+| kstack([int limit])                     | 返回一个深度不超过限制帧的内核栈                      |
+| ustack([int limit])                     | 返回一个深度不超过限制帧的用户栈                      |
+| ksym(void *p)                           | 解析内核地址并返回地址的字符串标识                     |
+| usym(void *p)                           | 解析用户空间地址并返回地址的字符串标识                   |
+| kaddr(char *name)                       | 将内核标识名称解析为一个地址                        |
+| uaddr(char *name)                       | 将用户空间的标识名称解析为一个地址                     |
+| reg(char *name)                         | 返回存储在已命名的寄存器中的值                       |
+| ntop([int af,] int addr)                | 返回一个 IPv4/IPv6 地址的字符串表示               |
+| cgroupid(char *path)                    | 返回给定路径（/sys/fs/cgroup/...）的 cgroup ID |
+| system(char *fmt [, ...])               | 执行 shell 命令                           |
+| cat(char *filename)                     | 打印文件的内容                               |
+| signal(char]] sig \| u32 sig)           | 向当前任务发送信号（例如，SIGTERM）                 |
+| override(u64 rc)                        | 覆盖一个 kprobe 的返回值                      |
+| exit()                                  | 退出 bpfrace                            |
 
 - bpftrace内置的map函数
 
 map是BPF特殊的哈希表存储对象，有多种不同的用途。例如可以作为哈希表存储键/值对或者用于统计汇总，bpftrace为map的赋值和操作提供了内置函数，多数内置函数用来支持统计汇总map的。
 
-|===
-|函数| 说明
-|count()| 计算出现的次数
-|sum(int n)|数值求和
-|min(int n)|记录最小值
-|avg(int n)|求平均值
-|max(int n) |记录最大值
-|stats(int n) |返回计数、平均值和总数
-|hist(int n) |打印数值的 2 的幂级直方图
-|lhist(int n, const int min, const int max, int step) |打印数值的线性直方图
-|delete(@m[key]) |删除 map 中指定的键 / 值对
-|print(@m [, top [, div]]) |打印 map，包括可选的限制（只输出最高的 top 个）和除数（将数值整除后再输出）
-|clear(@m) |删除 map 上的所有键
-|zero(@m) |将 map 的所有值设为零
-|===
+| 函数                                                   | 说明                                         |
+| ---------------------------------------------------- | ------------------------------------------ |
+| count()                                              | 计算出现的次数                                    |
+| sum(int n)                                           | 数值求和                                       |
+| min(int n)                                           | 记录最小值                                      |
+| avg(int n)                                           | 求平均值                                       |
+| max(int n)                                           | 记录最大值                                      |
+| stats(int n)                                         | 返回计数、平均值和总数                                |
+| hist(int n)                                          | 打印数值的 2 的幂级直方图                             |
+| lhist(int n, const int min, const int max, int step) | 打印数值的线性直方图                                 |
+| delete(@m[key])                                      | 删除 map 中指定的键 / 值对                          |
+| print(@m [, top [, div]])                            | 打印 map，包括可选的限制（只输出最高的 top 个）和除数（将数值整除后再输出） |
+| clear(@m)                                            | 删除 map 上的所有键                               |
+| zero(@m)                                             | 将 map 的所有值设为零                              |
 
 
 ```bash
@@ -588,7 +577,7 @@ tracepoint:syscalls:sys_exit_execve
     long ret
 ```
 
-===== 使用bpftrace跟踪文件系统的性能
+#### 使用bpftrace跟踪文件系统的性能
 
 ```bash
 # 跟踪openat打开的文件，带进程名
@@ -643,7 +632,7 @@ bpftrace -e 'kprobe:spa_sync { time("%H:%M:%S ZFS spa_sync()\n"); }'
 bpftrace -e 'kprobe:lookup_fast { @[comm, pid] = count(); }'
 ```
 
-===== *使用bpftrace跟踪系统磁盘性能*
+#### *使用bpftrace跟踪系统磁盘性能*
 
 ```bash
 # 计算块I/O tracepoint事件
@@ -661,7 +650,7 @@ bpftrace -e 't:block:block_rq_issue { @[args->rwbs] = count(); }'
 bpftrace -e 't:block:block_rq_issue /args->bytes/ { @[comm] = hist(args->bytes); }'
 ```
 
-===== *使用bpftrace跟踪网络接口*
+#### *使用bpftrace跟踪网络接口*
 
 - 通过通配符统计多个函数的调用，这样能够显示哪个函数调用的最频繁
 
@@ -709,7 +698,7 @@ bpftrace -e 't:net:netif_receive_skb { @[str(args->name)] = lhist(cpu, 0, 128, 1
 bpftrace -e 'k:ieee80211_* { @[func] = count(); }'
 ```
 
-===== 利用bpftrace跟踪CPU
+#### 利用bpftrace跟踪CPU
 
 ```bash
 #跟踪带有参数的新进程：
@@ -739,7 +728,7 @@ bpftrace -e 'u:/lib/x86_64-linux-gnu/libpthread-2.27.so:pthread_create { printf(
 ```
 
 
-===== 利用bpftrace跟踪内存
+#### 利用bpftrace跟踪内存
 
 ```bash
 #按用户栈和进程计算 libc malloc() 请求字节数的总和（高开销）：
@@ -790,7 +779,7 @@ bpftrace -l 't:*:mm_*'
 * **使用场景**: `inet_accept` 更适合用于跟踪所有类型的连接接受，而 `inet_csk_accept` 更适合用于深入分析 TCP 连接的接受过程。
 
 
-=== PMCs (硬件事件)
+## PMCs (硬件事件)
 
 PMCs（Performance Monitoring Counters）是性能检测计数器，可以解释CPU周期性能
 
@@ -847,7 +836,7 @@ serverA# perf stat -e cs -a -I 1000
 
 
 
-==== 如何利用内核跟踪点排查短时进程问题？
+### 如何利用内核跟踪点排查短时进程问题？
 
 在排查系统 CPU 使用率高的问题时，我想你很可能遇到过这样的困惑：明明通过 top 命令发现系统的 CPU 使用率（特别是用户 CPU 使用率）特别高，但通过 ps、pidstat 等工具都找不出 CPU 使用率高的进程。这是什么原因导致的呢？
 
@@ -886,9 +875,9 @@ tracepoint:syscalls:sys_exit_execveat
 - BCC 通常用在开发复杂的 eBPF 程序中，其内置的各种小工具也是目前应用最为广泛的 eBPF 小程序。不过，BCC 也不是完美的，它依赖于 LLVM 和内核头文件才可以动态编译和加载 eBPF 程序。
 - libbpf 是从内核中抽离出来的标准库，用它开发的 eBPF 程序可以直接分发执行，这样就不需要每台机器都安装 LLVM 和内核头文件了。不过，它要求内核开启 BTF 特性
 
-=== 内核跟踪（下）：开发内核跟踪程序的进阶方法
+## 内核跟踪（下）：开发内核跟踪程序的进阶方法
 
-==== libbpf 方法
+### libbpf 方法
 
 使用 libbpf 开发eBPF 程序也是分为两部分：第一，内核态的 eBPF 程序；第二，用户态的加载、挂载、映射
 读取以及输出程序等。
@@ -915,7 +904,7 @@ vmlinux:
     $(bpftool) btf dump file /sys/kernel/btf/vmlinux format c > vmlinux.h
 ```
 
-=== 用户态跟踪：如何使用 eBPF 排查应用程序？
+## 用户态跟踪：如何使用 eBPF 排查应用程序？
 
 在静态语言的编译过程中，通常你可以加上 -g 选项保留调试信息。这样，源代码中的函数、变量以及它们对应的代码行号等信息，就以 DWARF（Debugging With AttributedRecord Formats，Linux 和类 Unix 平台最主流的调试信息格式）格式存储到了编译后的二进制文件中。
 
@@ -939,11 +928,11 @@ bpftrace -l 'usdt:/usr/lib/x86_64-linux-gnu/libc.so.6:*'
 
 uprobe 是基于文件的。当文件中的某个函数被跟踪时，除非对进程PID 进行了过滤，默认所有使用到这个文件的进程都会被插桩。
 
-=== 网络跟踪：如何使用 eBPF 排查网络问题？
+## 网络跟踪：如何使用 eBPF 排查网络问题？
 
 网络不仅是 eBPF 应用最早的领域，也是目前 eBPF 应用最为广泛的一个领域。随着分布式系统、云计算和云原生应用的普及，网络已经成为了大部分应用最核心的依赖，随之而来的网络问题也是最难排查的问题之一。
 
-==== eBPF 提供了哪些网络功能？
+### eBPF 提供了哪些网络功能？
 
 ![[image-2025-02-12-09-04-25-434.png]]
 
@@ -951,7 +940,7 @@ uprobe 是基于文件的。当文件中的某个函数被跟踪时，除非对�
 
 eBPF 提供了大量专用于网络的 eBPF 程序类型，包括XDP 程序、TC 程序、套接字程序以及 cgroup 程序等。这些类型的程序涵盖了从网卡（如卸载到硬件网卡中的 XDP 程序）到网卡队列（如 TC 程序）、封装路由（如轻量级隧道程序）、TCP 拥塞控制、套接字（如 sockops 程序）等内核协议栈，再到同属于一个 cgroup 的一组进程的网络过滤和控制，而这些都是内核协议栈的核心组成部分
 
-==== 如何跟踪内核网络协议栈？
+### 如何跟踪内核网络协议栈？
 
 根据调用栈回溯路径，找出导致某个网络事件发生的整个流程，进而就可以再根据这些流程中的内核函数进一步跟踪。
 
@@ -981,13 +970,13 @@ perf trace --no-syscalls -e 'net:*' curl -s time.geekbang.org > /dev/null
 
 
 
-=== 容器安全：如何使用 eBPF 增强容器安全？
+## 容器安全：如何使用 eBPF 增强容器安全？
 
 故障诊断、网络优化、安全控制、性能监控等，都已是 eBPF 的主战场
 
 随着容器和云原生技术的普及，由于容器天生共享内核的特性，容器的安全和隔离就是所有容器平台头上的“紧箍咒”。因此，如何快速定位容器安全问题，如何确保容器的隔离，以及如何预防容器安全漏洞等，是每个容器平台都需要解决的头号问题。
 
-==== eBPF 都有哪些安全能力？
+### eBPF 都有哪些安全能力？
 
 对于安全问题的分析与诊断，eBPF 无需修改并重新编译内核和应用就可以动态分析内核及应用的行为。这在很多需要保留安全问题现场的情况下非常有用。特别是在紧急安全事件的处理过程中，eBPF 可以实时探测进程或内核中的可疑行为，进而帮你更快地定位安全问题的根源。
 
@@ -1000,14 +989,14 @@ Aqua Security 开源的 Tracee 项目就利用 eBPF，动态跟踪系统和�
 
 曾使用过 sysdig，老版本通过插入内核模块的方式进行安全审计。后来 sysdig 支持了 eBPF driver，主要通过追踪系统调用分析可能的安全隐患。sysdig eBPF driver 实现比较简单，一共十几个 program，统一放在 probe.c 源文件，里面的思路借鉴下还是不错的。
 
-=== 高性能网络实战（上）：如何开发一个负载均衡器
+## 高性能网络实战（上）：如何开发一个负载均衡器
 
 - XDP 程序在网络驱动程序刚刚收到数据包的时候触发执行，支持卸载到网卡硬件，常用于防火墙和四层负载均衡
 - TC 程序在网卡队列接收或发送的时候触发执行，运行在内核协议栈中，常用于流量控制；
 - 套接字程序在套接字发生创建、修改、收发数据等变化的时候触发执行，运行在内核协议栈中，常用于过滤、观测或重定向套接字网络包。其中，BPF_PROG_TYPE_SOCK_OPS、BPF_PROG_TYPE_SK_SKB、BPF_PROG_TYPE_SK_MSG 等都可以用于套接字重定向
 - cgroup 程序在 cgroup 内所有进程的套接字创建、修改选项、连接等情况下触发执行，常用于过滤和控制 cgroup 内多个进程的套接字。
 
-=== 高性能网络实战（下）：如何完善负载均衡器
+## 高性能网络实战（下）：如何完善负载均衡器
 
 对于网络优化来说，除了套接字 eBPF 程序，XDP 程序和 TC 程序也可以用来优化网络的性能。特别是 XDP 程序，由于它在 Linux 内核协议栈之前就可以处理网络包，在负载均衡、防火墙等需要高性能网络的场景中已经得到大量的应用
 
@@ -1017,7 +1006,7 @@ SEC("xdp") 表示程序的类型为 XDP 程序。你可以在 libbpf 中 sect
 
 在 Linux 内核的 conntrack 机制里，如果收到了乱序的包，在缺省配置的情况下（这里提示下，可以去了解一下内核 ip_conntrack_tcp_be_liberal 这个参数），就是会放过这个包而不去做 NAT 的，这是一个很常见的问题了
 
-=== 实用 eBPF 工具及最新开源项目总结
+## 实用 eBPF 工具及最新开源项目总结
 
 ![[image-2025-02-12-11-39-19-354.png]]
 
@@ -1028,11 +1017,11 @@ SEC("xdp") 表示程序的类型为 XDP 程序。你可以在 libbpf 中 sect
 ![[image-2025-02-12-11-49-17-694.png]]
 
 
-=== 以下工具部分来自 perf-tools
+## 以下工具部分来自 perf-tools
 
 https://github.com/brendangregg/perf-tools/tree/master[perf-tools]
 
-=== funccount
+## funccount
 
 funccount 是一个用于统计函数调用次数的工具，它使用 eBPF 技术来统计函数调用次数，并输出统计结果。
 
@@ -1069,9 +1058,7 @@ stackcount t:sched:sched_switch
 
 
 
-
-
-=== 参考
+## 参考
 
 https://arthurchiao.art/blog/cilium-bpf-xdp-reference-guide-zh/#bpf_helper[bpf-helper]
 

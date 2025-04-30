@@ -4,21 +4,21 @@
     "type": "split",
     "children": [
       {
-        "id": "421a6f98e39acfd4",
+        "id": "5838d1b0ce11f8e6",
         "type": "tabs",
         "children": [
           {
-            "id": "1aed87474199d038",
+            "id": "c7d295aae712f97f",
             "type": "leaf",
             "state": {
               "type": "markdown",
               "state": {
-                "file": "eBPF/ebpf专家.md",
+                "file": "eBPF/ebpf.md",
                 "mode": "source",
                 "source": false
               },
               "icon": "lucide-file",
-              "title": "ebpf专家"
+              "title": "ebpf"
             }
           }
         ]
@@ -53,7 +53,7 @@
             "state": {
               "type": "search",
               "state": {
-                "query": "image",
+                "query": "弹力",
                 "matchingCase": false,
                 "explainSearch": false,
                 "collapseAll": false,
@@ -94,7 +94,7 @@
             "state": {
               "type": "backlink",
               "state": {
-                "file": "linux/perf.adoc",
+                "file": "eBPF/ebpf.md",
                 "collapseAll": false,
                 "extraContext": false,
                 "sortOrder": "alphabetical",
@@ -104,7 +104,7 @@
                 "unlinkedCollapsed": true
               },
               "icon": "links-coming-in",
-              "title": "perf 的反向链接列表"
+              "title": "ebpf 的反向链接列表"
             }
           },
           {
@@ -142,21 +142,21 @@
             "state": {
               "type": "outline",
               "state": {
-                "file": "linux/perf.adoc",
+                "file": "eBPF/ebpf.md",
                 "followCursor": false,
                 "showSearch": false,
                 "searchQuery": ""
               },
               "icon": "lucide-list",
-              "title": "perf 的大纲"
+              "title": "ebpf 的大纲"
             }
           }
-        ]
+        ],
+        "currentTab": 3
       }
     ],
     "direction": "horizontal",
-    "width": 300,
-    "collapsed": true
+    "width": 300
   },
   "left-ribbon": {
     "hiddenItems": {
@@ -165,48 +165,57 @@
       "canvas:新建白板": false,
       "daily-notes:打开/创建今天的日记": false,
       "templates:插入模板": false,
-      "command-palette:打开命令面板": false
+      "command-palette:打开命令面板": false,
+      "obsidian-excalidraw-plugin:新建绘图文件": false
     }
   },
-  "active": "1aed87474199d038",
+  "active": "c7d295aae712f97f",
   "lastOpenFiles": [
-    "eBPF/ebpf.md",
     "eBPF/bpftrace.md",
     "eBPF/bcc.md",
+    "calico/calico.md",
+    "calico/calico架构.md",
+    "calico/calicoctl.md",
+    "k8s/kubernetes.md",
+    "k8s/attachments/Pasted image 20250430202140.png",
+    "k8s/attachments/Pasted image 20250430202042.png",
+    "k8s/attachments/Pasted image 20250430201959.png",
+    "k8s/attachments/Pasted image 20250430201347.png",
+    "k8s/attachments/Pasted image 20250430201322.png",
+    "k8s/attachments/Pasted image 20250430201223.png",
+    "k8s/attachments/Pasted image 20250430201154.png",
+    "k8s/attachments/Pasted image 20250430201152.png",
+    "k8s/attachments/Pasted image 20250430201106.png",
+    "架构/架构设计.md",
+    "k8s/others.md",
+    "go/高并发.md",
+    "go/go.md",
+    "go/go_module.md",
+    "go/go_package.md",
+    "go/gRPC.md",
+    "README.md",
+    "架构/attachments/Pasted image 20250430151319.png",
+    "架构/attachments",
+    "linux/algorithm.md",
+    "架构",
+    "linux/Pasted image 20250430140606.png.md",
+    "k8s/harbor.md",
+    "linux/network.md",
+    "middleware/etcd.md",
+    "eBPF/ebpf专家.md",
+    "eBPF/ebpf.md",
     "containerd/containerd.md",
     "containerd/docker.md",
     "go/network.md",
     "go/memory.md",
-    "go/gRPC.md",
-    "go/go_package.md",
-    "go/go_module.md",
-    "go/高并发.md",
-    "calico/calico.md",
-    "calico/calico架构.md",
-    "k8s/components/attachments/image-2025-02-26-16-53-42-621.png",
-    "k8s/components/attachments/image-2025-02-26-16-39-00-423.png",
-    "k8s/components/attachments/image-2025-02-26-16-34-16-493.png",
-    "k8s/components/attachments/image-2025-02-26-16-47-33-139.png",
-    "k8s/components/attachments/image-2025-02-08-17-49-21-502.png",
-    "k8s/components/attachments/image-2025-02-08-17-47-59-675.png",
-    "k8s/components/attachments/Pasted image 20250207111351.png",
-    "k8s/components/attachments/image-2025-02-08-15-45-21-963.png",
     "k8s/components/service.md~",
     "k8s/components/pod.md~",
     "harbor/harbor.md~",
     "containerd/containerd.md~",
-    "k8s/components/attachments/image-2025-02-08-14-16-30-278.png",
     "k8s/components/ingress.md~",
-    "k8s/components/attachments/image-2025-02-14-00-29-25-831.png",
     "k8s/components/cadvisor.md~",
     "k8s/components/controller-manager.md~",
     "k8s/components/attachments",
-    "k8s/prometheus.md~",
-    "k8s/kube_prometheus.md~",
-    "doc/readme.md",
-    "containerd/OverlayFS.md",
-    "calico/calicoctl.md",
-    "go/go.md",
-    "cache.md"
+    "doc/readme.md"
   ]
 }

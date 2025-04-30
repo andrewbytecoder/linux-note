@@ -1,5 +1,7 @@
 {
   "newFileLocation": "current",
   "attachmentFolderPath": "./attachments",
-  "livePreview": true
+  "livePreview": true,
+  "showLineNumber": false,
+  "readableLineLength": false
 }
