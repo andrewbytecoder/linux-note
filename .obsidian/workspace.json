@@ -4,21 +4,21 @@
     "type": "split",
     "children": [
       {
-        "id": "5838d1b0ce11f8e6",
+        "id": "529306f70998dfba",
         "type": "tabs",
         "children": [
           {
-            "id": "c7d295aae712f97f",
+            "id": "cafc4e2d41906217",
             "type": "leaf",
             "state": {
               "type": "markdown",
               "state": {
-                "file": "go/高并发.md",
+                "file": "linux/memory.md",
                 "mode": "source",
                 "source": false
               },
               "icon": "lucide-file",
-              "title": "高并发"
+              "title": "memory"
             }
           }
         ]
@@ -94,7 +94,7 @@
             "state": {
               "type": "backlink",
               "state": {
-                "file": "go/高并发.md",
+                "file": "linux/memory.md",
                 "collapseAll": false,
                 "extraContext": false,
                 "sortOrder": "alphabetical",
@@ -104,7 +104,7 @@
                 "unlinkedCollapsed": true
               },
               "icon": "links-coming-in",
-              "title": "高并发 的反向链接列表"
+              "title": "memory 的反向链接列表"
             }
           },
           {
@@ -142,13 +142,13 @@
             "state": {
               "type": "outline",
               "state": {
-                "file": "go/高并发.md",
+                "file": "linux/memory.md",
                 "followCursor": false,
                 "showSearch": false,
                 "searchQuery": ""
               },
               "icon": "lucide-list",
-              "title": "高并发 的大纲"
+              "title": "memory 的大纲"
             }
           }
         ],
@@ -169,14 +169,18 @@
       "obsidian-excalidraw-plugin:新建绘图文件": false
     }
   },
-  "active": "c7d295aae712f97f",
+  "active": "cafc4e2d41906217",
   "lastOpenFiles": [
+    "linux/linux.md",
+    "linux/memory.md",
+    "linux/Pasted image 20250430140606.png.md",
+    "linux/perf.md",
+    "go/高并发.md",
     "架构/架构设计.md",
     "k8s/kubernetes.md",
     "k8s/kube_state_metirc.md",
     "k8s/kube_prometheus.md",
     "k8s/harbor.md",
-    "go/高并发.md",
     "go/go.md",
     "eBPF/ebpf.md",
     "eBPF/bpftrace.md",
@@ -202,13 +206,9 @@
     "架构/attachments",
     "linux/algorithm.md",
     "架构",
-    "linux/Pasted image 20250430140606.png.md",
     "linux/network.md",
     "middleware/etcd.md",
     "eBPF/ebpf专家.md",
-    "containerd/containerd.md",
-    "containerd/docker.md",
-    "go/network.md",
     "k8s/components/service.md~",
     "k8s/components/pod.md~",
     "harbor/harbor.md~",
