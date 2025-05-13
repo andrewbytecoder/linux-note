@@ -13,12 +13,12 @@
             "state": {
               "type": "markdown",
               "state": {
-                "file": "middleware/nginx.md",
+                "file": "架构/架构设计.md",
                 "mode": "source",
                 "source": false
               },
               "icon": "lucide-file",
-              "title": "nginx"
+              "title": "架构设计"
             }
           }
         ]
@@ -142,13 +142,13 @@
             "state": {
               "type": "outline",
               "state": {
-                "file": "middleware/nginx.md",
+                "file": "架构/架构设计.md",
                 "followCursor": false,
                 "showSearch": false,
                 "searchQuery": ""
               },
               "icon": "lucide-list",
-              "title": "Outline of nginx"
+              "title": "Outline of 架构设计"
             }
           }
         ],
@@ -169,8 +169,10 @@
       "command-palette:Open command palette": false
     }
   },
-  "active": "c7d295aae712f97f",
+  "active": "5c8b7f1f1f2346fa",
   "lastOpenFiles": [
+    "k8s/kubernetes.md",
+    "calico/calico.md",
     "架构/架构设计.md",
     "middleware/nginx.md",
     "linux/algorithm.md",
@@ -183,10 +185,8 @@
     "eBPF/ebpf.md",
     "eBPF/bpftrace.md",
     "eBPF/bcc.md",
-    "calico/calico.md",
     "calico/calico架构.md",
     "calico/calicoctl.md",
-    "k8s/kubernetes.md",
     "k8s/attachments/Pasted image 20250430202140.png",
     "k8s/attachments/Pasted image 20250430202042.png",
     "k8s/attachments/Pasted image 20250430201959.png",
