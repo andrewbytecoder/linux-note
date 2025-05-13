@@ -13,15 +13,44 @@
             "state": {
               "type": "markdown",
               "state": {
-                "file": "linux/memory.md",
+                "file": "架构/架构设计.md",
                 "mode": "source",
                 "source": false
               },
               "icon": "lucide-file",
-              "title": "memory"
+              "title": "架构设计"
+            }
+          },
+          {
+            "id": "20d96e3062f4291e",
+            "type": "leaf",
+            "state": {
+              "type": "markdown",
+              "state": {
+                "file": "架构/架构设计.md",
+                "mode": "source",
+                "source": false
+              },
+              "icon": "lucide-file",
+              "title": "架构设计"
+            }
+          },
+          {
+            "id": "b7d07db209d422b0",
+            "type": "leaf",
+            "state": {
+              "type": "markdown",
+              "state": {
+                "file": "k8s/kubernetes.md",
+                "mode": "source",
+                "source": false
+              },
+              "icon": "lucide-file",
+              "title": "kubernetes"
             }
           }
-        ]
+        ],
+        "currentTab": 2
       }
     ],
     "direction": "vertical"
@@ -53,7 +82,7 @@
             "state": {
               "type": "search",
               "state": {
-                "query": "弹力",
+                "query": "https://microservices.io/",
                 "matchingCase": false,
                 "explainSearch": false,
                 "collapseAll": false,
@@ -94,7 +123,7 @@
             "state": {
               "type": "backlink",
               "state": {
-                "file": "linux/memory.md",
+                "file": "k8s/kubernetes.md",
                 "collapseAll": false,
                 "extraContext": false,
                 "sortOrder": "alphabetical",
@@ -104,7 +133,7 @@
                 "unlinkedCollapsed": true
               },
               "icon": "links-coming-in",
-              "title": "memory 的反向链接列表"
+              "title": "kubernetes 的反向链接列表"
             }
           },
           {
@@ -142,13 +171,13 @@
             "state": {
               "type": "outline",
               "state": {
-                "file": "linux/memory.md",
+                "file": "k8s/kubernetes.md",
                 "followCursor": false,
                 "showSearch": false,
                 "searchQuery": ""
               },
               "icon": "lucide-list",
-              "title": "memory 的大纲"
+              "title": "kubernetes 的大纲"
             }
           }
         ],
@@ -169,15 +198,26 @@
       "obsidian-excalidraw-plugin:新建绘图文件": false
     }
   },
-  "active": "cafc4e2d41906217",
+  "active": "b7d07db209d422b0",
   "lastOpenFiles": [
-    "linux/linux.md",
+    "containerd/docker.md",
+    "k8s/kubernetes.md",
+    "架构/架构设计.md",
+    "calico/calico.md",
+    "go/go_module.md",
+    "架构/().md",
+    "go/高并发.md",
+    "go/go_package.md",
+    "go/gRPC.md",
+    "go/memory.md",
+    "架构/分布式.md",
+    "calico/calico架构.md",
+    "middleware/etcd.md",
+    "db/DBA(Database administrator).md",
     "linux/memory.md",
+    "linux/linux.md",
     "linux/Pasted image 20250430140606.png.md",
     "linux/perf.md",
-    "go/高并发.md",
-    "架构/架构设计.md",
-    "k8s/kubernetes.md",
     "k8s/kube_state_metirc.md",
     "k8s/kube_prometheus.md",
     "k8s/harbor.md",
@@ -185,8 +225,6 @@
     "eBPF/ebpf.md",
     "eBPF/bpftrace.md",
     "eBPF/bcc.md",
-    "calico/calico.md",
-    "calico/calico架构.md",
     "calico/calicoctl.md",
     "k8s/attachments/Pasted image 20250430202140.png",
     "k8s/attachments/Pasted image 20250430202042.png",
@@ -197,18 +235,9 @@
     "k8s/attachments/Pasted image 20250430201154.png",
     "k8s/attachments/Pasted image 20250430201152.png",
     "k8s/attachments/Pasted image 20250430201106.png",
-    "k8s/others.md",
-    "go/go_module.md",
-    "go/go_package.md",
-    "go/gRPC.md",
-    "README.md",
     "架构/attachments/Pasted image 20250430151319.png",
     "架构/attachments",
-    "linux/algorithm.md",
     "架构",
-    "linux/network.md",
-    "middleware/etcd.md",
-    "eBPF/ebpf专家.md",
     "k8s/components/service.md~",
     "k8s/components/pod.md~",
     "harbor/harbor.md~",

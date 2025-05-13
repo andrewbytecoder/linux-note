@@ -1412,3 +1412,21 @@ Service Mesh 不像 Sidecar 需要和 Service 一起打包一起部署，Service
 
 ![[Pasted image 20250430202140.png]]
 
+
+
+## 文章
+
+[How to Monitor Kubernetes](https://sysdig.com/blog/monitoring-kubernetes/)
+[Logging in Kubernetes with Fluentd and Elasticsearch](https://www.dasblinkenlichten.com/logging-in-kubernetes-with-fluentd-and-elasticsearch/)
+[Kubernetes Monitoring: Best Practices, Methods, and Existing Solutions](https://dzone.com/articles/kubernetes-monitoring-best-practices-methods-and-e)
+[# Kubernetes 101 – Networking](https://www.dasblinkenlichten.com/kubernetes-101-networking/)
+[# Kubernetes networking 101 – Pods](https://www.dasblinkenlichten.com/kubernetes-networking-101-pods/)
+[# Kubernetes networking 101 – Services](https://www.dasblinkenlichten.com/kubernetes-networking-101-services/)
+[# Kubernetes networking 101 – (Basic) External access into the cluster](https://www.dasblinkenlichten.com/kubernetes-networking-101-basic-external-access-into-the-cluster/)
+[# Kubernetes Networking 101 – Ingress resources](https://www.dasblinkenlichten.com/kubernetes-networking-101-ingress-resources/)
+[# Getting started with Calico on Kubernetes](https://www.dasblinkenlichten.com/getting-started-with-calico-on-kubernetes/)
+[借助 GKE 实现现代 CI/CD：应用开发者工作流](https://cloud.google.com/kubernetes-engine/docs/tutorials/modern-cicd-gke-developer-workflow?hl=zh-cn#kubernetes_architecture)
+[**[continuous-deployment-on-kubernetes](https://github.com/GoogleCloudPlatform/continuous-deployment-on-kubernetes)**](https://github.com/GoogleCloudPlatform/continuous-deployment-on-kubernetes)
+[# Kubernetes Best Practices  Kubernetes 最佳实践](https://sachinarote.medium.com/kubernetes-best-practices-9b1435a4cb53)
+[kubernetes-best-practices](https://speakerdeck.com/thesandlord/kubernetes-best-practices?slide=1)
+[awesome-kubernetes](https://github.com/ramitsurana/awesome-kubernetes)

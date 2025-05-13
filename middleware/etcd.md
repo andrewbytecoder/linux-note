@@ -101,3 +101,14 @@ Cloud Spanner 为代表）等知识点
 [allthingsdistributed搜集和分布式系统相关的事件和论文](https://www.allthingsdistributed.com/)
 [Spanner: Google’s Globally-Distributed Database](chrome-extension://efaidnbmnnnibpcajpcglclefindmkaj/https://static.googleusercontent.com/media/research.google.com/zh-CN//archive/spanner-osdi2012.pdf)
 目前，基于 Spanner 论文的开源实现有两个，一个是 Google 公司自己的人出来做的CockroachDB，另一个是国人做的TiDB
+
+[Distributed Systems for fun and profit](https://book.mixu.net/distsys/single-page.html)
+[设计数据密集型应用](https://book.douban.com/subject/27154352/)
+[Distributed Systems: Principles and Paradigms](http://barbie.uta.edu/~jli/Resources/MapReduce&Hadoop/Distributed%20Systems%20Principles%20and%20Paradigms.pdf)
+[Scalable Web Architecture and Distributed Systems](https://aosabook.org/en/v2/distsys.html)
+[可扩展的 Web 架构和分布式系统](https://nettee.github.io/posts/2016/Scalable-Web-Architecture-and-Distributed-Systems/)
+
+
+
+[日志：每个软件工程师都应该知道的有关实时数据的统一抽象](https://github.com/oldratlee/translations/blob/master/log-what-every-software-engineer-should-know-about-real-time-datas-unifying/README.md)
+
