@@ -138,5 +138,11 @@ External ingress solution direct to pods
 
 
 
+## 文章
+- 容器网络解决方案的性能对比
+[Battlefield: Calico, Flannel, Weave and Docker Overlay Network](http://chunqi.li/2015/11/15/Battlefield-Calico-Flannel-Weave-and-Docker-Overlay-Network/)
+[Comparison of Networking Solutions for Kubernetes](https://machinezone.github.io/research/networking-solutions-for-kubernetes/)
+
+
 
 

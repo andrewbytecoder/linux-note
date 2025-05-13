@@ -1,15 +1,5 @@
-:toc:
 
-// 保证所有的目录层级都可以正常显示图片
-:path: eBPF/
-:imagesdir: ../image/
-
-// 只有book调用的时候才会走到这里
-ifdef::rootpath]]
-:imagesdir: {rootpath}{path}{imagesdir}
-endif::rootpath]]
-
-== eBPF
+## eBPF
 
 ![[image-2025-02-11-09-36-02-105.png]]
 
@@ -41,7 +31,7 @@ eBPF 并不是万能的，它也有很多的局限性。下面是一些最常见
 .通过BCC学习eBPF
 ![[image-2025-02-11-10-47-16-135.png]]
 
-=== 开发一个eBPF程序
+### 开发一个eBPF程序
 
 - 第一步，使用 C 语言开发一个 eBPF 程序；
 - 第二步，借助 LLVM 把 eBPF 程序编译成 BPF 字节码；
@@ -966,7 +956,6 @@ bpftrace -e 'tracepoint:net:* { printf("%s(%d): %s %s\n", comm, pid, probe, ksta
 # 使用 perf trace 也比较方便
 perf trace --no-syscalls -e 'net:*' curl -s time.geekbang.org > /dev/null
 ```
-
 
 
 

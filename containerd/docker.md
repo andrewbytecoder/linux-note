@@ -1239,12 +1239,13 @@ image:docker-image.gif[docker-image]
 ![[79f8c75e018e0a82eff432786110ef16.jpg]]
 
 
+## 文章
 
-
-
-
-
-
+[IBM Research Report: An Updated Performance Comparison of Virtual Machines and Linux Containers](https://domino.research.ibm.com/library/cyberdig.nsf/papers/0929052195DD819C85257D2300681E7B/%3Czeuschar%3EMY_ZUES_CHAR%3C/zeuschar%3EFile/rc25482.pdf)
+[An Introduction to Docker and Analysis of its Performance](http://paper.ijcsns.org/07_book/201703/20170327.pdf)
+[Docker Monitoring with the ELK Stack: A Step-by-Step Guide](https://logz.io/learn/docker-monitoring-elk-stack/)
+[Eight Docker Development Patterns](https://hokstad.com/docker/patterns) 八个 Docker 的开发模式：共享基础容器、共享同一个卷的多个开发容器、开发工具专用容器、测试环境容器、编译构建容器、防手误的安装容器、默认服务容器、胶黏容器。
+[awesome-docker](https://github.com/veggiemonk/awesome-docker)
 
 
 
