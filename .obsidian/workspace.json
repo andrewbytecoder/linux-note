@@ -41,12 +41,12 @@
             "state": {
               "type": "markdown",
               "state": {
-                "file": "k8s/kubernetes.md",
+                "file": "eBPF/ebpf.md",
                 "mode": "source",
                 "source": false
               },
               "icon": "lucide-file",
-              "title": "kubernetes"
+              "title": "ebpf"
             }
           }
         ],
@@ -123,7 +123,7 @@
             "state": {
               "type": "backlink",
               "state": {
-                "file": "k8s/kubernetes.md",
+                "file": "eBPF/ebpf.md",
                 "collapseAll": false,
                 "extraContext": false,
                 "sortOrder": "alphabetical",
@@ -133,7 +133,7 @@
                 "unlinkedCollapsed": true
               },
               "icon": "links-coming-in",
-              "title": "kubernetes 的反向链接列表"
+              "title": "ebpf 的反向链接列表"
             }
           },
           {
@@ -171,13 +171,13 @@
             "state": {
               "type": "outline",
               "state": {
-                "file": "k8s/kubernetes.md",
+                "file": "eBPF/ebpf.md",
                 "followCursor": false,
                 "showSearch": false,
                 "searchQuery": ""
               },
               "icon": "lucide-list",
-              "title": "kubernetes 的大纲"
+              "title": "ebpf 的大纲"
             }
           }
         ],
@@ -200,8 +200,10 @@
   },
   "active": "b7d07db209d422b0",
   "lastOpenFiles": [
-    "containerd/docker.md",
+    "eBPF/bpftrace.md",
+    "eBPF/ebpf.md",
     "k8s/kubernetes.md",
+    "containerd/docker.md",
     "架构/架构设计.md",
     "calico/calico.md",
     "go/go_module.md",
@@ -222,8 +224,6 @@
     "k8s/kube_prometheus.md",
     "k8s/harbor.md",
     "go/go.md",
-    "eBPF/ebpf.md",
-    "eBPF/bpftrace.md",
     "eBPF/bcc.md",
     "calico/calicoctl.md",
     "k8s/attachments/Pasted image 20250430202140.png",
