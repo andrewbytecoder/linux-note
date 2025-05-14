@@ -1028,7 +1028,7 @@ funccount -i 1 't:block_*'
 funccount -i 1 c:getaddrinfo
 ```
 
-=== stackcount
+### stackcount
 
 ```bash
 # 对创建块I/O的栈踪迹进行计数
@@ -1049,9 +1049,9 @@ stackcount t:sched:sched_switch
 
 ## 参考
 
-https://arthurchiao.art/blog/cilium-bpf-xdp-reference-guide-zh/#bpf_helper[bpf-helper]
+https://arthurchiao.art/blog/cilium-bpf-xdp-reference-guide-zh/#bpf_helper[bpf-helper
 
-https://mp.weixin.qq.com/s/25mhUrNhF3HW8H6-ES7waA[epbf-st]
+https://mp.weixin.qq.com/s/25mhUrNhF3HW8H6-ES7waA[epbf-st
 
 https://gist.github.com/BruceChen7/8b15bdc26d2831e91983b3b52f114e60?permalink_comment_id=3263483[bcc-understand]
 
