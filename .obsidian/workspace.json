@@ -1,89 +1,41 @@
 {
   "main": {
-    "id": "fa60888132233ae0",
+    "id": "f7473c8bec0af0c0",
     "type": "split",
     "children": [
       {
-        "id": "5838d1b0ce11f8e6",
+        "id": "633f016402ca10fc",
         "type": "tabs",
         "children": [
           {
-            "id": "c7d295aae712f97f",
+            "id": "f01a2ddcd6c4d1bb",
             "type": "leaf",
             "state": {
               "type": "markdown",
               "state": {
-                "file": "架构/架构设计.md",
+                "file": "middleware/nginx.md",
                 "mode": "source",
                 "source": false
               },
               "icon": "lucide-file",
-              "title": "架构设计"
+              "title": "nginx"
             }
-<<<<<<< HEAD
           }
         ]
-=======
-          },
-          {
-            "id": "20d96e3062f4291e",
-            "type": "leaf",
-            "state": {
-              "type": "markdown",
-              "state": {
-                "file": "架构/架构设计.md",
-                "mode": "source",
-                "source": false
-              },
-              "icon": "lucide-file",
-              "title": "架构设计"
-            }
-          },
-          {
-            "id": "b7d07db209d422b0",
-            "type": "leaf",
-            "state": {
-              "type": "markdown",
-              "state": {
-                "file": "架构/分布式.md",
-                "mode": "source",
-                "source": false
-              },
-              "icon": "lucide-file",
-              "title": "分布式"
-            }
-          },
-          {
-            "id": "420f6196d6d3217b",
-            "type": "leaf",
-            "state": {
-              "type": "markdown",
-              "state": {
-                "file": "go/go_package.md",
-                "mode": "source",
-                "source": false
-              },
-              "icon": "lucide-file",
-              "title": "go_package"
-            }
-          }
-        ],
-        "currentTab": 3
->>>>>>> 4c6aa2b40d938ef60263e8b0a1d6253dc40d00d4
       }
     ],
     "direction": "vertical"
   },
   "left": {
-    "id": "984ded355ab1126f",
+    "id": "abd5d96bf24d0f65",
     "type": "split",
     "children": [
       {
-        "id": "b68cb3808bf8406e",
+        "id": "5b4ab387230b9df4",
         "type": "tabs",
         "children": [
           {
-            "id": "5c8b7f1f1f2346fa",
+            "id": "8c80d93c8dfd9929",
             "type": "leaf",
             "state": {
               "type": "file-explorer",
@@ -96,12 +48,12 @@
             }
           },
           {
-            "id": "eb71ac99f702581a",
+            "id": "a4d96fea35df1148",
             "type": "leaf",
             "state": {
               "type": "search",
               "state": {
-                "query": "弹力",
+                "query": "",
                 "matchingCase": false,
                 "explainSearch": false,
                 "collapseAll": false,
@@ -109,17 +61,17 @@
                 "sortOrder": "alphabetical"
               },
               "icon": "lucide-search",
-              "title": "搜索"
+              "title": "Search"
             }
           },
           {
-            "id": "f6e422ca2c0d2f52",
+            "id": "f439de2486b8910b",
             "type": "leaf",
             "state": {
               "type": "bookmarks",
               "state": {},
               "icon": "lucide-bookmark",
-              "title": "书签"
+              "title": "Bookmarks"
             }
           }
         ]
@@ -129,20 +81,20 @@
     "width": 300
   },
   "right": {
-    "id": "e7caec816f7dccec",
+    "id": "fbec81e268026dc0",
     "type": "split",
     "children": [
       {
-        "id": "6dda2822eaf66a8c",
+        "id": "5c8b9d0e95241a93",
         "type": "tabs",
         "children": [
           {
-            "id": "f5d424bebab9d9a4",
+            "id": "f5c18f865b7a3d8f",
             "type": "leaf",
             "state": {
               "type": "backlink",
               "state": {
-                "file": "go/go_package.md",
+                "file": "middleware/nginx.md",
                 "collapseAll": false,
                 "extraContext": false,
                 "sortOrder": "alphabetical",
@@ -152,25 +104,25 @@
                 "unlinkedCollapsed": true
               },
               "icon": "links-coming-in",
-              "title": "go_package 的反向链接列表"
+              "title": "Backlinks for nginx"
             }
           },
           {
-            "id": "3dc59a469e16eeb3",
+            "id": "fcc31de05f69e6a9",
             "type": "leaf",
             "state": {
               "type": "outgoing-link",
               "state": {
-                "file": "linux/perf.adoc",
+                "file": "middleware/nginx.md",
                 "linksCollapsed": false,
                 "unlinkedCollapsed": true
               },
               "icon": "links-going-out",
-              "title": "perf 的出链列表"
+              "title": "Outgoing links from nginx"
             }
           },
           {
-            "id": "27717574aa086f28",
+            "id": "29d859957f2f2d61",
             "type": "leaf",
             "state": {
               "type": "tag",
@@ -181,128 +133,44 @@
                 "searchQuery": ""
               },
               "icon": "lucide-tags",
-              "title": "标签"
+              "title": "Tags"
             }
           },
           {
-            "id": "c65fbe9a811375ef",
+            "id": "72219f064c10dfb9",
             "type": "leaf",
             "state": {
               "type": "outline",
               "state": {
-<<<<<<< HEAD
-                "file": "架构/架构设计.md",
-=======
-                "file": "go/go_package.md",
->>>>>>> 4c6aa2b40d938ef60263e8b0a1d6253dc40d00d4
+                "file": "middleware/nginx.md",
                 "followCursor": false,
                 "showSearch": false,
                 "searchQuery": ""
               },
               "icon": "lucide-list",
-<<<<<<< HEAD
-              "title": "Outline of 架构设计"
-=======
-              "title": "go_package 的大纲"
->>>>>>> 4c6aa2b40d938ef60263e8b0a1d6253dc40d00d4
+              "title": "Outline of nginx"
             }
           }
-        ],
-        "currentTab": 3
+        ]
       }
     ],
     "direction": "horizontal",
-    "width": 300
+    "width": 300,
+    "collapsed": true
   },
   "left-ribbon": {
     "hiddenItems": {
-      "obsidian-excalidraw-plugin:New drawing": false,
       "switcher:Open quick switcher": false,
       "graph:Open graph view": false,
       "canvas:Create new canvas": false,
       "daily-notes:Open today's daily note": false,
       "templates:Insert template": false,
-      "command-palette:Open command palette": false
+      "command-palette:Open command palette": false,
+      "obsidian-excalidraw-plugin:New drawing": false
     }
   },
-<<<<<<< HEAD
-  "active": "5c8b7f1f1f2346fa",
+  "active": "f01a2ddcd6c4d1bb",
   "lastOpenFiles": [
-    "架构/分布式.md",
-    "linux/memory.md",
-    "db/DBA(Database administrator).md",
-    "k8s/kubernetes.md",
-    "calico/calico.md",
-    "架构/架构设计.md",
-    "middleware/nginx.md",
-    "linux/algorithm.md",
-    "doc/readme.md",
-    "containerd/OverlayFS.md",
-    "containerd/docker.md",
-    "containerd/containerd.md",
-    "go/go.md",
-    "go/高并发.md",
-    "eBPF/ebpf.md",
-    "eBPF/bpftrace.md",
-    "eBPF/bcc.md",
-    "calico/calico架构.md",
-    "calico/calicoctl.md",
-=======
-  "active": "420f6196d6d3217b",
-  "lastOpenFiles": [
-    "go/go_module.md",
-    "go/go.md",
-    "架构/知识学习模板.md",
-    "架构/分布式.md",
-    "middleware/redis.md",
-    "eBPF/ebpf.md",
-    "eBPF/bpftrace.md",
-    "k8s/kubernetes.md",
-    "containerd/docker.md",
-    "架构/架构设计.md",
-    "calico/calico.md",
-    "架构/().md",
-    "go/高并发.md",
-    "go/go_package.md",
-    "go/gRPC.md",
-    "go/memory.md",
-    "calico/calico架构.md",
-    "middleware/etcd.md",
-    "db/DBA(Database administrator).md",
-    "linux/memory.md",
-    "linux/linux.md",
-    "linux/Pasted image 20250430140606.png.md",
-    "linux/perf.md",
-    "k8s/kube_state_metirc.md",
-    "k8s/kube_prometheus.md",
-    "k8s/harbor.md",
->>>>>>> 4c6aa2b40d938ef60263e8b0a1d6253dc40d00d4
-    "k8s/attachments/Pasted image 20250430202140.png",
-    "k8s/attachments/Pasted image 20250430202042.png",
-    "k8s/attachments/Pasted image 20250430201959.png",
-    "k8s/attachments/Pasted image 20250430201347.png",
-    "k8s/attachments/Pasted image 20250430201322.png",
-    "k8s/attachments/Pasted image 20250430201223.png",
-    "k8s/attachments/Pasted image 20250430201154.png",
-    "k8s/attachments/Pasted image 20250430201152.png",
-    "k8s/attachments/Pasted image 20250430201106.png",
-    "k8s/others.md",
-    "go/go_module.md",
-    "go/go_package.md",
-    "go/gRPC.md",
-    "README.md",
-    "架构/attachments/Pasted image 20250430151319.png",
-    "架构/attachments",
-    "架构",
-    "linux/Pasted image 20250430140606.png.md",
-    "k8s/harbor.md",
-    "k8s/components/service.md~",
-    "k8s/components/pod.md~",
-    "harbor/harbor.md~",
-    "containerd/containerd.md~",
-    "k8s/components/ingress.md~",
-    "k8s/components/cadvisor.md~",
-    "k8s/components/controller-manager.md~",
-    "k8s/components/attachments"
+    "架构/知识学习模板.md"
   ]
 }

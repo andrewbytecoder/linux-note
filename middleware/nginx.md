@@ -310,13 +310,37 @@ location @other {
 }
 ```
 
+### 内存及磁盘资源的分配
 
-
-
-
-
-
-
+*HTTP包体只存储到磁盘文件中*
+```bash
+client_body_in_file_only on|clean|off;
+```
+当值为非off时，用户请求中的HTTP包体一律存储到磁盘文件中，即使只有0字节也会存储为文件。当请求结束时，如果配置为on，则这个文件不会被删除（该配置一般用于调试、
+定位问题），但如果配置为clean，则会删除该文件。
+*HTTP包体尽量写入到一个内存buffer中*
+```bash
+client_body_in_single_buffer on|off;
+```
+用户请求中的HTTP包体一律存储到内存buffer中。当然，如果HTTP包体的大小超过了下面client_body_buffer_size设置的值
+*存储HTTP头部的内存buffer大小*
+```bash
+client_header_buffer_size size;
+# eg
+client_header_buffer_size 1k;
+```
+*存储超大HTTP头部的内存buffer大小*
+```bash
+large_client_header_buffers number size;
+```
+*存储HTTP包体的内存buffer大小*
+```bash
+client_body_buffer_size size;
+```
+*HTTP包体的临时存放目录*
+```bash
+client_body_temp_path dir-path[level1[level2[level3]]]
+```
 
 
 
