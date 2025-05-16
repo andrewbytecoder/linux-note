@@ -342,10 +342,287 @@ client_body_buffer_size size;
 client_body_temp_path dir-path[level1[level2[level3]]]
 ```
 
+*reset_timeout_connection*
+```bash
+reset_timeout_connection on|off;
+```
+连接超时后将通过向客户端发送RST包来直接重置连接。这个选项打开后，Nginx会在某个连接超时后，不是使用正常情形下的四次握手关闭TCP连接，而是直接向用户发送RST重
+置包，不再等待用户的应答，直接释放Nginx服务器上关于这个套接字使用的所有缓存（如TCP滑动窗口）。相比正常的关闭方式，它使得服务器避免产生许多处于FIN_WAIT_1、
+FIN_WAIT_2、TIME_WAIT状态的TCP连接。
+*keepalive_disable[msie6|safari|none]...*
+```bash
+keepalive_disablemsie6 safari
+```
+*tcp_nodelay*
 
+```bash
+tcp_nodelay on;
+```
+### 文件操作的优化
+*sendfile系统调用*
+```bash
+sendfile on|off;
+```
+可以启用Linux上的sendfile系统调用来发送文件，它减少了内核态与用户态之间的两次内存复制，这样就会从磁盘中读取文件后直接在内核态发送到网卡设备，提高了发送文件的
+效率。
+*AIO系统调用*
+```bash
+aio on|off;
+```
+此配置项表示是否在FreeBSD或Linux系统上启用内核级别的异步文件I/O功能。注意，
+它与sendfile功能是互斥的。
 
+*directio*
+```bash
+directio size|off;
+```
+此配置项在FreeBSD和Linux系统上使用O_DIRECT选项去读取文件，缓冲区大小为size，通常对大文件的读取速度有优化作用。注意，它与sendfile功能是互斥的。
+*directio_alignment*
+```bash
+directio_alignment size;
+# eg
+directio_alignment 512;
+```
+它与directio配合使用，指定以directio方式读取文件时的对齐方式。一般情况下，512B已经足够了，但针对一些高性能文件系统，如Linux下的XFS文件系统，可能需要设置到4KB
+作为对齐方式。
+*open_file_cache max=N[inactive=time]|off;*
+```bash
+open_file_cache off;
+```
+文件缓存会在内存中存储以下3种信息：
+- 文件句柄、文件大小和上次修改时间。
+- 已经打开过的目录结构。
+- 没有找到的或者没有权限操作的文件信息。
+这样，通过读取缓存就减少了对磁盘的操作。
+### 对客户端请求的特殊处理
+*ignore_invalid_headers on|off;*
+```bash
+ignore_invalid_headers on;
+```
+*HTTP头部是否允许下划线*
+```bash
+underscores_in_headers on|off;
+```
+默认为off，表示HTTP头部的名称中不允许带 `_`（下划线）。
 
+*对If-Modified-Since头部的处理策略*
+```bash
+if_modified_since[off|exact|before];
+# eg
+if_modified_since exact;
+```
+*文件未找到时是否记录到error日志*
+```bash
+log_not_found on|off;
+```
+*merge_slashes*
+```bash
+merge_slashes on|off;
+# eg 
+merge_slashes on;
+```
+此配置项表示是否合并相邻的“”，例如，/test///a.txt，在配置为on时，会将其匹配为location/test/a.txt；如果配置为off，则不会匹配，URI将仍然是//test///a.txt。
 
+*设置DNS名字解析服务器地址*
+设置的地址用来对域名进行解析
+```bash
+resolver address...;
+```
+*DNS解析的超时时间*
+```bash
+resolver_timeout time;
+# eg 
+resolver_timeout 30s;
+```
+*返回错误页面时是否在Server中注明Nginx版本*
+```bash
+server_tokens on|off;
+```
 
+### ngx_http_core_module模块提供的变量
 
+`ngx_http_core_module` 是 Nginx 中非常重要的一个模块，它提供了许多用于配置和控制 HTTP 请求处理过程的指令。此外，该模块还提供了一系列预定义变量，这些变量可以在 Nginx 配置文件中使用，以获取请求的各种信息或控制请求处理的行为。以下是一些常用的由 `ngx_http_core_module` 提供的变量：
 
+1. **$args**：这个变量包含请求行中的参数，即URL查询字符串。
+2. **$binary_remote_addr**：客户端地址的二进制表示，长度总是4个字节（对于IPv4地址）或16个字节（对于IPv6地址）。
+3. **$body_bytes_sent**：发送给客户端的字节数，不包括响应头的大小。
+4. **$content_length**：HTTP请求头中的"Content-Length"字段。
+5. **$content_type**：HTTP请求头中的"Content-Type"字段。
+6. **$document_root**：当前请求的root目录。
+7. **$document_uri / $uri**：与请求相关的当前URI（不带请求参数），可被内部重写。
+8. **$host**：请求中的Host（主机名），如果请求中没有Host，则为按照server_name指令进行匹配后得到的值。
+9. **$http_HEADER**：匹配任意请求头，将HEADER替换为要获取的头部字段名称，注意字段名称应全部大写，并用下划线替代连字符。
+10. **$https**：如果连接使用SSL/TLS则值为"on"，否则为空字符串。
+11. `$is_args`：如果$args设置则返回"?"，否则返回空字符串。
+12. **$limit_rate**：设置对客户端输出数据的速率限制，单位是字节/秒。
+13. **$msec**：当前时间戳，单位是秒，精度达到毫秒级。
+14. **$nginx_version**：Nginx版本号。
+15. **$pid**：worker进程的PID。
+16. `$query_string`：等同于$args。
+17. **$realpath_root**：基于root或者alias指令计算出来的当前请求的真实文件系统路径。
+18. **$remote_addr**：客户端地址。
+19. **$remote_port**：客户端端口号。
+20. **$remote_user**：使用basic认证时的用户名。
+21. **$request**：完整的原始请求行。
+22. **$request_body**：客户端请求主体信息。
+23. **$request_body_file**：临时存储客户端请求主体的文件名。
+24. **$request_completion**：如果请求成功完成则为"OK"，如果客户端在完整消息接收前断开连接则为空。
+25. **$request_filename**：当前请求的文件路径，由root或alias转换而来。
+26. **$request_method**：请求方法（如GET、POST等）。
+27. **$request_uri**：完整的原始请求URI（含查询字符串）。
+28. **$scheme**：所用协议，http 或 https。
+29. **$sent_http_HEADER**：对应响应头中HEADER的值，可以用来查看或记录响应头的内容。
+30. **$server_addr**：接受请求的服务器IP地址。
+31. **$server_name**：请求中Host首部对应的虚拟主机的名字。
+32. **$server_port**：接受请求的服务器端口。
+33. **$server_protocol**：请求使用的协议，通常为HTTP/1.0、HTTP/1.1或HTTP/2.0。
+34. **$status**：HTTP响应状态码。
+35. **$tcpinfo_rtt, $tcpinfo_rttvar, $tcpinfo_snd_cwnd, $tcpinfo_rcv_space**：TCP连接的相关信息。
+
+### 负载均衡的基本配置
+作为代理服务器，一般都需要向上游服务器的集群转发请求。这里的负载均衡是指选择一种策略，尽量把请求平均地分布到每一台上游服务器上。下面介绍负载均衡的配置项
+
+#### *upstream块*
+```bash
+upstream name{...}
+```
+
+upstream块定义了一个上游服务器的集群，便于反向代理中的proxy_pass使用
+```bash
+upstream backend {
+	server backend1.example.com;
+	server backend2.example.com;
+	server backend3.example.com;
+}
+server {
+	location / {
+		proxy_pass http://backend;
+	}
+}
+```
+
+`server name[parameters];` server配置项指定了一台上游服务器的名字，这个名字可以是域名、IP地址端口、UNIX句柄等，在其后还可以跟下列参数
+- weight=number：设置向这台上游服务器转发的权重，默认为1。
+- max_fails=number：该选项与fail_timeout配合使用，指在fail_timeout时间段内，如果向当前的上游服务器转发失败次数超过number，则认为在当前的fail_timeout时间段内这台上游服务器不可用。max_fails默认为1，如果设置为0，则表示不检查失败次数。
+- fail_timeout=time：fail_timeout表示该时间段内转发失败多少次后就认为上游服务器暂时不可用，用于优化反向代理功能。
+- down：表示所在的上游服务器永久下线，只在使用ip_hash配置项时才有用。
+- backup：在使用ip_hash配置项时它是无效的。它表示所在的上游服务器只是备份服务器，只有在所有的非备份上游服务器都失效后，才会向所在的上游服务器转发请求。
+
+```bash
+upstream backend {
+	server backend1.example.com weight=5;
+	server 127.0.0.1:8080    max_fails=3 fail_timeout=30s;
+	server unix:/tmp/backend3;;
+}
+```
+
+*ip_hash*
+```bash
+upstream backend {
+	ip_hash;
+	server backend1.example.com;
+	server backend2.example.com;
+	server backend3.example.com down;
+	server backend4.example.com;
+}
+```
+在有些场景下，我们可能会希望来自某一个用户的请求始终落到固定的一台上游服务器中。假设上游服务器会缓存一些信息，如果同一个用户的请求任意地转发到集群中的
+任一台上游服务器中，那么每一台上游服务器都有可能会缓存同一份信息，这既会造成资源的浪费，也会难以有效地管理缓存信息。ip_hash就是用以解决上述问题的，它首先根据客户端的IP地址计算出一个key，将key按照upstream集群里的上游服务器数量进行取模，然后以取模后的结果把请求转发到相应的上游服务器中。这样就确保了同一个客户端的请求只会转发到指定的上游服务器中。
+ip_hash与weight（权重）配置不可同时使用。如果upstream集群中有一台上游服务器暂时不可用，不能直接删除该配置，而是要down参数标识，确保转发策略的一贯性。
+
+*记录日志时支持的变量*
+
+| 变量名            | 意义           |
+|---|---|
+| $upstream_addr | 处理请求的上游服务器地址 |     
+| $upstream_cache_status | 表示是否命中缓存，取值范围：MISS、EXPIRED、PDATING、STALE、HIT |     
+| $upstream_status | 上游服务器返回的响应中的 HTTP 响应码 |     
+| $upstream_response_time | 上游服务器的响应时间，精度到毫秒 |
+| `$upstream_http_$HEADER` | HTTP 的头部，如 upstream_http_host |
+### 反向代理的基本配置
+*proxy_pass*
+```bash
+proxy_pass URL;
+```
+此配置项将当前请求反向代理到URL参数指定的服务器上，URL可以是主机名或IP地址加端口的形式
+```bash
+proxy_pass http://localhost:8000/uri/
+```
+还可以如上节负载均衡中所示，直接使用upstream块
+用户可以把HTTP转换成更安全的HTTPS
+```bash
+proxy_pass https://192.168.0.1
+```
+默认情况下反向代理是不会转发请求中的Host头部的。如果需要转发，那么必须加上配置
+```bash
+proxy_set_header Host $host;
+```
+*proxy_method*
+```bash
+proxy_method method;
+# eg, 客户端发来的GET请求在转发时方法名也会改为POST
+proxy_method POST;
+```
+此配置项表示转发时的协议方法名。
+*proxy_hide_header*
+```bash
+proxy_hide_header the_header;
+```
+Nginx会将上游服务器的响应转发给客户端，但默认不会转发以下HTTP头部字段：Date、Server、`X-Pad和X-Accel-*`。使用proxy_hide_header后可以任意地指定哪些HTTP头部
+字段不能被转发。
+```bash
+proxy_hide_header Cache-Control;
+proxy_hide_header MicrosoftOfficeWebServer;
+```
+*proxy_pass_header*
+```bash
+proxy_pass_header the_header;
+```
+与proxy_hide_header功能相反，proxy_pass_header会将原来禁止转发的header设置为允许转发。
+*proxy_pass_request_body*
+```bash
+proxy_pass_request_body on|off;
+```
+作用为确定是否向上游服务器发送HTTP包体部分。
+*proxy_pass_request_headers*
+```bash
+proxy_pass_request_headers on|off;
+```
+作用为确定是否转发HTTP头部。
+*proxy_redirect*
+```bash
+proxy_redirect[default|off|redirect replacement];
+# eg
+proxy_redirect default;
+```
+当上游服务器返回的响应是重定向或刷新请求（如HTTP响应码是301或者302）时，proxy_redirect可以重设HTTP头部的location或refresh字段。例如，如果上游服务器发出的响
+应是302重定向请求，location字段的URI是http://localhost:8000/two/some/uri/ ，那么在下面的配置情况下，实际转发给客户端的location是http://frontendonesome/uri/ 。
+```bash
+proxy_redirect http://localhost:8000/two/ http://frontendone;
+```
+这里还可以使用ngx-http-core-module提供的变量来设置新的location字段。例如：
+```bash
+proxy_redirect http://localhost:8000/ http://$host:$server_port/;
+```
+也可以省略replacement参数中的主机名部分，这时会用虚拟主机名称来填充。
+```bash
+proxy_redirect http://localhost:8000/two/one;
+```
+*proxy_next_upstream*
+```bash
+proxy_next_upstream[error|timeout|invalid_header|http_500|http_502|http_503|http_504|http_404|off];
+# eg
+proxy_next_upstream error timeout;
+```
+此配置项表示当向一台上游服务器转发请求出现错误时，继续换一台上游服务器处理这个请求。前面已经说过，上游服务器一旦开始发送应答，Nginx反向代理服务器会立刻把应
+答包转发给客户端。因此，一旦Nginx开始向客户端发送响应包，之后的过程中若出现错误也是不允许换下一台上游服务器继续处理的。这很好理解，这样才可以更好地保证客户端只
+收到来自一个上游服务器的应答。proxy_next_upstream的参数用来说明在哪些情况下会继续选择下一台上游服务器转发请求。
+- error：当向上游服务器发起连接、发送请求、读取响应时出错。
+- timeout：发送请求或读取响应时发生超时。
+- invalid_header：上游服务器发送的响应是不合法的。
+- http_500：上游服务器返回的HTTP响应码是500。
+- http_502：上游服务器返回的HTTP响应码是502。
+- http_503：上游服务器返回的HTTP响应码是503。
+- http_504：上游服务器返回的HTTP响应码是504。
+- http_404：上游服务器返回的HTTP响应码是404。
+- off：关闭proxy_next_upstream功能—出错就选择另一台上游服务器再次转发
