@@ -1,41 +1,98 @@
 {
   "main": {
-    "id": "f7473c8bec0af0c0",
+    "id": "fa60888132233ae0",
     "type": "split",
     "children": [
       {
-        "id": "633f016402ca10fc",
+        "id": "529306f70998dfba",
         "type": "tabs",
         "children": [
           {
-            "id": "f01a2ddcd6c4d1bb",
+            "id": "cafc4e2d41906217",
             "type": "leaf",
             "state": {
               "type": "markdown",
               "state": {
-                "file": "middleware/nginx.md",
+                "file": "架构/架构设计.md",
                 "mode": "source",
                 "source": false
               },
               "icon": "lucide-file",
-              "title": "nginx"
+              "title": "架构设计"
+            }
+          },
+          {
+            "id": "20d96e3062f4291e",
+            "type": "leaf",
+            "state": {
+              "type": "markdown",
+              "state": {
+                "file": "架构/架构设计.md",
+                "mode": "source",
+                "source": false
+              },
+              "icon": "lucide-file",
+              "title": "架构设计"
+            }
+          },
+          {
+            "id": "b7d07db209d422b0",
+            "type": "leaf",
+            "state": {
+              "type": "markdown",
+              "state": {
+                "file": "架构/分布式.md",
+                "mode": "source",
+                "source": false
+              },
+              "icon": "lucide-file",
+              "title": "分布式"
+            }
+          },
+          {
+            "id": "420f6196d6d3217b",
+            "type": "leaf",
+            "state": {
+              "type": "markdown",
+              "state": {
+                "file": "架构/架构设计.md",
+                "mode": "source",
+                "source": false
+              },
+              "icon": "lucide-file",
+              "title": "架构设计"
+            }
+          },
+          {
+            "id": "6e41c4bae6d0bed8",
+            "type": "leaf",
+            "state": {
+              "type": "markdown",
+              "state": {
+                "file": "架构/架构设计.md",
+                "mode": "source",
+                "source": false
+              },
+              "icon": "lucide-file",
+              "title": "架构设计"
             }
           }
-        ]
+        ],
+        "currentTab": 4
       }
     ],
     "direction": "vertical"
   },
   "left": {
-    "id": "abd5d96bf24d0f65",
+    "id": "984ded355ab1126f",
     "type": "split",
     "children": [
       {
-        "id": "5b4ab387230b9df4",
+        "id": "b68cb3808bf8406e",
         "type": "tabs",
         "children": [
           {
-            "id": "8c80d93c8dfd9929",
+            "id": "5c8b7f1f1f2346fa",
             "type": "leaf",
             "state": {
               "type": "file-explorer",
@@ -44,16 +101,16 @@
                 "autoReveal": false
               },
               "icon": "lucide-folder-closed",
-              "title": "Files"
+              "title": "文件列表"
             }
           },
           {
-            "id": "a4d96fea35df1148",
+            "id": "eb71ac99f702581a",
             "type": "leaf",
             "state": {
               "type": "search",
               "state": {
-                "query": "",
+                "query": "endpoint",
                 "matchingCase": false,
                 "explainSearch": false,
                 "collapseAll": false,
@@ -61,17 +118,17 @@
                 "sortOrder": "alphabetical"
               },
               "icon": "lucide-search",
-              "title": "Search"
+              "title": "搜索"
             }
           },
           {
-            "id": "f439de2486b8910b",
+            "id": "f6e422ca2c0d2f52",
             "type": "leaf",
             "state": {
               "type": "bookmarks",
               "state": {},
               "icon": "lucide-bookmark",
-              "title": "Bookmarks"
+              "title": "书签"
             }
           }
         ]
@@ -81,20 +138,20 @@
     "width": 300
   },
   "right": {
-    "id": "fbec81e268026dc0",
+    "id": "e7caec816f7dccec",
     "type": "split",
     "children": [
       {
-        "id": "5c8b9d0e95241a93",
+        "id": "6dda2822eaf66a8c",
         "type": "tabs",
         "children": [
           {
-            "id": "f5c18f865b7a3d8f",
+            "id": "f5d424bebab9d9a4",
             "type": "leaf",
             "state": {
               "type": "backlink",
               "state": {
-                "file": "middleware/nginx.md",
+                "file": "go/go_package.md",
                 "collapseAll": false,
                 "extraContext": false,
                 "sortOrder": "alphabetical",
@@ -104,25 +161,25 @@
                 "unlinkedCollapsed": true
               },
               "icon": "links-coming-in",
-              "title": "Backlinks for nginx"
+              "title": "go_package 的反向链接列表"
             }
           },
           {
-            "id": "fcc31de05f69e6a9",
+            "id": "3dc59a469e16eeb3",
             "type": "leaf",
             "state": {
               "type": "outgoing-link",
               "state": {
-                "file": "middleware/nginx.md",
+                "file": "linux/perf.adoc",
                 "linksCollapsed": false,
                 "unlinkedCollapsed": true
               },
               "icon": "links-going-out",
-              "title": "Outgoing links from nginx"
+              "title": "perf 的出链列表"
             }
           },
           {
-            "id": "29d859957f2f2d61",
+            "id": "27717574aa086f28",
             "type": "leaf",
             "state": {
               "type": "tag",
@@ -133,44 +190,89 @@
                 "searchQuery": ""
               },
               "icon": "lucide-tags",
-              "title": "Tags"
+              "title": "标签"
             }
           },
           {
-            "id": "72219f064c10dfb9",
+            "id": "c65fbe9a811375ef",
             "type": "leaf",
             "state": {
               "type": "outline",
               "state": {
-                "file": "middleware/nginx.md",
+                "file": "架构/架构设计.md",
                 "followCursor": false,
                 "showSearch": false,
                 "searchQuery": ""
               },
               "icon": "lucide-list",
-              "title": "Outline of nginx"
+              "title": "架构设计 的大纲"
             }
           }
-        ]
+        ],
+        "currentTab": 3
       }
     ],
     "direction": "horizontal",
-    "width": 300,
-    "collapsed": true
+    "width": 300
   },
   "left-ribbon": {
     "hiddenItems": {
-      "switcher:Open quick switcher": false,
-      "graph:Open graph view": false,
-      "canvas:Create new canvas": false,
-      "daily-notes:Open today's daily note": false,
-      "templates:Insert template": false,
-      "command-palette:Open command palette": false,
-      "obsidian-excalidraw-plugin:New drawing": false
+      "switcher:打开快速切换": false,
+      "graph:查看关系图谱": false,
+      "canvas:新建白板": false,
+      "daily-notes:打开/创建今天的日记": false,
+      "templates:插入模板": false,
+      "command-palette:打开命令面板": false,
+      "obsidian-excalidraw-plugin:新建绘图文件": false
     }
   },
-  "active": "f01a2ddcd6c4d1bb",
+  "active": "6e41c4bae6d0bed8",
   "lastOpenFiles": [
-    "架构/知识学习模板.md"
+    "架构/架构设计模板.md",
+    "架构/架构设计.md",
+    "middleware/nginx.md",
+    "k8s/kubernetes_service.md",
+    "k8s/kubernetes_network.md",
+    "k8s/kubernetes.md",
+    "k8s/kube_prometheus.md",
+    "go/高并发.md",
+    "go/go.md",
+    "eBPF/ebpf专家.md",
+    "eBPF/ebpf.md",
+    "eBPF/bpftrace.md",
+    "containerd/containerd.md",
+    "calico/calico.md",
+    "架构/分布式.md",
+    "架构/知识学习模板.md",
+    "middleware/redis.md",
+    "go/go_package.md",
+    "go/go_module.md",
+    "containerd/docker.md",
+    "架构/().md",
+    "go/gRPC.md",
+    "go/memory.md",
+    "calico/calico架构.md",
+    "middleware/etcd.md",
+    "db/DBA(Database administrator).md",
+    "k8s/attachments/Pasted image 20250430202140.png",
+    "k8s/attachments/Pasted image 20250430202042.png",
+    "k8s/attachments/Pasted image 20250430201959.png",
+    "k8s/attachments/Pasted image 20250430201347.png",
+    "k8s/attachments/Pasted image 20250430201322.png",
+    "k8s/attachments/Pasted image 20250430201223.png",
+    "k8s/attachments/Pasted image 20250430201154.png",
+    "k8s/attachments/Pasted image 20250430201152.png",
+    "k8s/attachments/Pasted image 20250430201106.png",
+    "架构/attachments/Pasted image 20250430151319.png",
+    "架构/attachments",
+    "架构",
+    "k8s/components/service.md~",
+    "k8s/components/pod.md~",
+    "harbor/harbor.md~",
+    "containerd/containerd.md~",
+    "k8s/components/ingress.md~",
+    "k8s/components/cadvisor.md~",
+    "k8s/components/controller-manager.md~",
+    "k8s/components/attachments"
   ]
 }
