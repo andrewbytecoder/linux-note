@@ -1,4 +1,4 @@
-
+从过去以物理机和虚拟机为主体的开发运维环境，向以容器为核心的基础设施的转变过程，并不是一次温和的改革，而是涵盖了对网络、存储、调度、操作系统、分布式原理等各个方面的容器化理解和改造。这些关于 Linux 内核、分布式系统、网络、存储等方方面面的积累，并不会在Docker 或者 Kubernetes 的文档中交代清楚。可偏偏就是它们，才是真正掌握容器技术体系的精髓所在。
 
 Kubernetes是一个 **生产级别的容器编排平台和集群管理系统**，不仅能够创建、调度容器，还能够监控、管理服务器。
 
@@ -427,7 +427,7 @@ metadata:
 创建成功之后，使用 `kubectl  get` `kubectl describe` 来查看ConfigMap的状态
 
 *Secret*
-
+secret里面的数据只是进行了base64加密，如果需要更加安全的方式需要开启Secret加密插件。
 Secret中又对对象细分了很多种：
 
 - 访问私有镜像仓库的认证信息
@@ -594,6 +594,64 @@ spec:
 
 > linux中不能使用 - 和 .创建环境变量，创建ConfigMap和Secret的时候需要注意一下。
 
+### Downward API
+
+使用project将多个挂载点整合到同一个目录底下
+```yaml
+spec:
+  containers:
+    - name: main
+      image: busybox
+      volumeMounts:
+        - name: pod-info
+          mountPath: /etc/podinfo
+          readOnly: true
+  volumes:
+    - name: pod-info
+      projected:   ## 可以将下面所有信息组织放到同一个目录下面
+        sources:
+          - downwardAPI:
+              items:
+                - path: "name"  # 宿主机名字
+                  fieldRef:
+                    fieldPath: metadata.name
+                - path: "ip"
+                  fieldRef:
+                    fieldPath: status.podIP
+                - path: "namespace"
+                  fieldRef:
+                    fieldPath: metadata.namespace
+                - path: "labels"
+                  fieldRef:
+                    fieldPath: metadata.labels
+                - path: "annotations"
+                  fieldRef:
+                    fieldPath: metadata.annotations
+```
+
+
+以下是您提供的图片内容转化成的文本：
+
+---
+
+### 1. 使用 `fieldRef` 可以声明使用:
+- `spec.nodeName` - 宿主机名字
+- `status.hostIP` - 宿主机 IP
+- `metadata.name` - Pod 的名字
+- `metadata.namespace` - Pod 的 Namespace
+- `status.podIP` - Pod 的 IP
+- `spec.serviceAccountName` - Pod 的 Service Account 的名字
+- `metadata.uid` - Pod 的 UID
+- `metadata.labels['<KEY>']` - 指定 `<KEY>` 的 `Label` 值
+- `metadata.annotations['<KEY>']` - 指定 `<KEY>` 的 `Annotation` 值
+- `metadata.labels` - Pod 的所有 Label
+- `metadata.annotations` - Pod 的所有 Annotation
+
+### 2. 使用 `resourceFieldRef` 可以声明使用:
+- 容器的 CPU limit
+- 容器的 CPU request
+- 容器的 memory limit
+- 容器的 memory request
 
 ## 容器编排
 [[容器编排]]
@@ -1412,6 +1470,8 @@ Service Mesh 不像 Sidecar 需要和 Service 一起打包一起部署，Service
 
 ![[Pasted image 20250430202140.png]]
 
+
+k8s中yaml配置所有能用的字段都定义在 `k8s.io/api/core/v1/types.go` 文件中，如果哪个字段不明白具体使用方法可以进行查看。
 
 
 ## 文章

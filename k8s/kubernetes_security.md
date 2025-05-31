@@ -123,12 +123,50 @@ spec:
 Pod才能创建成功。
 
 
+### Service Account
+Service Account 对象的作用，就是 Kubernetes 系统内置的一种“服务账户”，它是Kubernetes 进行权限分配的对象。比如，Service Account A，可以只被允许对Kubernetes API 进行 GET 操作，而 Service Account B，则可以有 Kubernetes API 的所有操作的权限。
 
+像这样的 Service Account 的授权信息和文件，实际上保存在它所绑定的一个特殊的Secret 对象里的。这个特殊的 Secret 对象，就叫作ServiceAccountToken。任何运行在Kubernetes 集群上的应用，都必须使用这个 ServiceAccountToken 里保存的授权信息，也就是 Token，才可以合法地访问 API Server。
 
-
-
-
-
+为了方便使用，Kubernetes 已经为你提供了一个的默认“服务账户”（default Service Account）。并且，任何一个运行在 Kubernetes 里的 Pod，都可以直接使用这个默认的 Service Account，而无需显示地声明挂载它。
+如果你查看一下任意一个运行在 Kubernetes 集群里的 Pod，就会发现，每一个 Pod，都已经自动声明一个类型是 Secret、名为 default-token-xxxx 的 Volume，然后 自动挂载在每个容器的一个固定目录上。
+```yaml
+  - name: kube-api-access-9hqqj
+    projected:
+      defaultMode: 420
+      sources:
+      - serviceAccountToken:
+          expirationSeconds: 3607
+          path: token
+      - configMap:
+          items:
+          - key: ca.crt
+            path: ca.crt
+          name: kube-root-ca.crt
+      - downwardAPI:
+          items:
+          - fieldRef:
+              apiVersion: v1
+              fieldPath: metadata.namespace
+            path: namespace
+      - configMap:
+          items:
+          - key: service-ca.crt
+            path: service-ca.crt
+          name: openshift-service-ca.crt
+status:
+  conditions:
+  - lastProbeTime: nul
+  containerStatuses:
+  - containerID: cri-o://a24fb6fe5a7e5e0411342f6d5ff7b2e9a0ac503261eab55c27068bb02fa4fe81
+	...
+    volumeMounts:
+    ...
+	- mountPath: /var/run/secrets/kubernetes.io/serviceaccount
+      name: kube-api-access-9hqqj
+```
+所以说，Kubernetes 其实在每个 Pod 创建的时候，自动在它的spec.volumes 部分添加上了默认 ServiceAccountToken 的定义，然后自动给每个容器加上了对应的 volumeMounts 字段
+这样，一旦 Pod 创建完成，容器里的应用就可以直接从这个默认 ServiceAccountToken的挂载目录里访问到授权信息和文件。这个容器内的路径在 Kubernetes 里是固定的，即：`/var/run/secrets/kubernetes.io/serviceaccount`
 
 
 

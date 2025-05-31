@@ -182,7 +182,14 @@ registry=# select * from harbor_user update harbor_user set salt = '', password 
 - 再次重启Harbor服务：重新设置密码就行了
 
 
+## 镜像
 
+### 推镜像
+
+```bash
+docker tag ysp/dp-proxy:v1.0.0.123 package.yyhocp.private.com:11036/ysp/dp-proxy:v1.0.0.123
+docker push package.yyhocp.private.com:11036/ysp/dp-proxy:v1.0.0.123
+```
 
 
 
