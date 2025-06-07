@@ -654,7 +654,786 @@ spec:
 - 容器的 memory request
 
 ## 容器编排
-[[容器编排]]
+![](https://www.thebyte.com.cn/assets/k8s-arch-DznxVVHy.svg)
+
+### 容器技术的原理与演进
+
+#### 资源全方位隔离
+Linux 吸收了 chroot 的设计理念，并在 2.4.19 版本中引入了 Mount 命名空间，使得文件系统挂载可以被隔离开来。随着容器技术的发展，发现进程间通信也需要隔离，因此引入了 IPC（Inter-Process Communication）命名空间。此外，容器还需要一个独立的主机名来在网络中标识自己，这便催生了 UTS（UNIX Time-Sharing）命名空间。有了独立的主机名，自然需要独立的 IP、端口、路由等，因此 Network 命名空间 也随之诞生。
+
+| 命名空间    | 隔离的资源                                                            | 内核版本   |
+| ------- | ---------------------------------------------------------------- | ------ |
+| Mount   | 隔离文件系统挂载点，功能大致类似 chroot                                          | 2.4.19 |
+| IPC     | 隔离进程间通信，使进程拥有独立消息队列、共享内存和信号量                                     | 2.6.19 |
+| UTS     | 隔离主机的 Hostname、Domain names，这样容器就可以拥有独立的主机名和域名，在网络中可以被视作一个独立的节点。 | 2.6.19 |
+| PID     | 隔离进程号，对进程 PID 重新编码，不同命名空间下的进程可以有相同的 PID                          | 2.6.24 |
+| Network | 隔离网络资源，包括网络设备、协议栈（IPv4、IPv6）、IP 路由表、iptables、套接字（socket）等        | 2.6.29 |
+| User    | 隔离用户和用户组                                                         | 3.8    |
+| Cgroup  | 使进程拥有一个独立的 cgroup 控制组。cgroup 非常重要，稍后笔者详细介绍。                      | 4.6    |
+| Time    | 隔离系统时间，Linux 5.6 内核版本起支持进程独立设置系统时间                               | 5.6    |
+在 Linux 中，为进程设置各种命名空间非常简单，只需通过系统调用函数 clone 并指定相应的 flags 参数即可。clone 函数允许创建一个新的进程，并在创建时指定多个资源隔离的选项。clone 函数的声明如下：
+
+```c
+int clone(int (*fn)(void *), void *child_stack,
+         int flags, void *arg, ...
+         /* pid_t *ptid, struct user_desc *tls, pid_t *ctid */ );
+```
+
+例如，下面的代码展示了如何通过调用 clone 函数并指定多个 CLONE_NEW 标志来创建一个子进程，该进程将“看到”一个全新的系统环境。所有的资源，包括进程挂载的文件目录、进程 PID、进程间通信资源、网络设备、主机名等，都将与宿主机进行隔离。
+
+```c
+int flags = CLONE_NEWNS | CLONE_NEWPID | CLONE_NEWIPC | CLONE_NEWNET | CLONE_NEWUTS;
+int pid = clone(main_function, stack_size, flags | SIGCHLD, NULL); 
+```
+
+#### 资源全方位限制
+进程的资源隔离已经完成，如果再对使用资源进行额度限制，就能对进程的运行环境实现“进乎完美”的隔离。这就要用 Linux 内核的第二项技术 —— Linux Control Cgroup（Linux 控制组群，简称 cgroups）。
+
+cgroups 是 Linux 内核用于隔离、分配并限制进程组使用资源配额的机制。例如，它可以控制进程的 CPU 占用时间、内存大小、磁盘 I/O 速度等。该项目最初由 Google 工程师 Paul Menage 和 Rohit Seth 于 2000 年发起，当时称之为“进程容器”（Process Container）。由于“容器”这一名词在 Linux 内核中有不同含义，为避免混淆，最终将其重命名为 cgroups。
+
+2008 年，cgroups 被合并到 Linux 内核 2.6.24 版本中，标志着第一代 cgroups 的发布。2016 年 3 月，Linux 内核 4.5 引入了由 Facebook 工程师 Tejun Heo 重写的第二代 cgroups。相比第一代，第二代提供了更加统一的资源控制接口，使得对 CPU、内存、I/O 等资源的限制更加一致。不过，考虑兼容性和稳定性，大多数容器运行时（container runtime）目前仍默认使用第一代 cgroups。
+
+在 Linux 系统中，cgroups 通过文件系统向用户暴露其操作接口。这些接口以文件和目录的形式组织在 /sys/fs/cgroup 路径下。
+
+在 Linux 中执行 ls /sys/fs/cgroup 命令，可以看到在该路径下有许多子目录，如 blkio、cpu、memory 等。
+
+```bash
+$ ll /sys/fs/cgroup
+总用量 0
+drwxr-xr-x 2 root root  0 2月  17 2023 blkio
+lrwxrwxrwx 1 root root 11 2月  17 2023 cpu -> cpu,cpuacct
+lrwxrwxrwx 1 root root 11 2月  17 2023 cpuacct -> cpu,cpuacct
+drwxr-xr-x 3 root root  0 2月  17 2023 memory
+...
+```
+
+在 cgroups 中，每个子目录被称为“控制组子系统”（control group subsystems），它们对应于不同类型的资源限制。每个子系统有多个配置文件，比如内存子系统：
+
+```bash
+$ ls /sys/fs/cgroup/memory
+cgroup.clone_children               memory.memsw.failcnt
+cgroup.event_control                memory.memsw.limit_in_bytes
+cgroup.procs                        memory.memsw.max_usage_in_bytes
+cgroup.sane_behavior                memory.memsw.usage_in_bytes
+```
+
+这些文件各自用于不同的功能。例如，memory.kmem.limit_in_bytes 用于限制应用程序的总内存使用；memory.stat 用于统计内存使用情况；memory.failcnt 文件报告内存使用达到了 memory.limit_in_bytes 限制值的次数等。
+
+目前，主流的 Linux 系统支持的控制组子系统如下表所示。
+
+表cgroups 控制组群子系统
+
+| 控制组群子系统    | 功能                                                                                                    |
+| ---------- | ----------------------------------------------------------------------------------------------------- |
+| blkio      | 控制并监控 cgroup 中的任务对块设备(例如磁盘、USB 等) I/O 的存取                                                             |
+| cpu        | 控制 cgroups 中进程的 CPU 占用率                                                                               |
+| cpuacct    | 自动生成报告来显示 cgroup 中的进程所使用的 CPU 资源                                                                      |
+| cpuset     | 可以为 cgroups 中的进程分配独立 CPU 和内存节点                                                                        |
+| devices    | 控制 cgroups 中进程对某个设备的访问权限                                                                              |
+| freezer    | 暂停或者恢复 cgroup 中的任务                                                                                    |
+| memory     | 自动生成 cgroup 任务使用内存资源的报告，并限定这些任务所用内存的大小                                                                |
+| net_cls    | 使用等级识别符（classid）标记网络数据包，这让 Linux 流量管控器（tc）可以识别从特定 cgroup 中生成的数据包 ，可配置流量管控器，让其为不同 cgroup 中的数据包设定不同的优先级 |
+| net_prio   | 可以为各个 cgroup 中的应用程序动态配置每个网络接口的流量优先级                                                                   |
+| perf_event | 允许使用 perf 工具对 crgoups 中的进程和线程监控                                                                       |
+
+Linux cgroups 的设计简洁易用。在 Docker 等容器系统中，只需为每个容器在每个子系统下创建一个控制组（通过创建目录），然后在容器进程启动后，将进程的 PID 写入相应子系统的 tasks 文件。
+
+如下面的代码所示，我们创建了一个内存控制组子系统（目录名为 $hostname），并将 PID 为 3892 的进程的内存限制为 1 GB，同时限制其 CPU 使用时间为 1/4。
+
+```bash
+/sys/fs/cgroup/memory/$hostname/memory.limit_in_bytes=1GB // 容器进程及其子进程使用的总内存不超过 1GB
+/sys/fs/cgroup/cpu/$hostname/cpu.shares=256 // CPU 时间总数为 1024，设置 256 后，限制进程最多只能占用 1/4 CPU 时间
+
+echo 3892 > /sys/fs/cgroup/cpu/$hostname/tasks 
+```
+
+值得补充的是，cgroups 在资源限制方面仍有不完善之处。例如，/proc 文件系统记录了进程对 CPU、内存等资源的占用情况，这些数据是 top 命令查看系统信息的主要来源。然而，/proc 文件系统并未关联 cgroups 对进程的限制。因此，当在容器内部执行 top 命令时，显示的是宿主机的资源占用状态，而不是容器内的状态。为了解决这个问题，业内通常采用 LXCFS（LXC 用的 FUSE 文件系统）技术，维护一套专门用于容器的 /proc 文件系统，从而准确反映容器内的资源使用情况。
+
+容器并不是轻量化的虚拟机，也不是一个完全的沙盒（容器共享宿主机内核，实现的是一种“软隔离”）。本质上，容器是通过命名空间、cgroups 等技术实现资源隔离和限制，并拥有独立根目录（rootfs）的特殊进程。
+
+#### 设计容器协作的方式
+
+既然容器是个特殊的进程，那联想到真正的操作系统内大部分进程也并非独自运行，而是以进程组的形式被有序地组织和协作，完成特定任务。
+
+例如，登录到 Linux 机器后，执行 pstree -g 命令可以查看当前系统中的进程树状结构。
+
+```bash
+$ pstree -g
+    |-rsyslogd(1089)-+-{in:imklog}(1089)
+    |  |-{in:imuxsock) S 1(1089)
+    | `-{rs:main Q:Reg}(1089)
+```
+
+如命令输出所示，rsyslogd 程序的进程树结构展示了其主程序 main 和内核日志模块 imklog 都属于进程组 1089。它们共享资源，共同完成 rsyslogd 的任务。对于操作系统而言，这种进程组管理更加方便。比如，Linux 操作系统可以通过向一个进程组发送信号（如 SIGKILL），使该进程组中的所有进程同时终止运行。
+
+现在，假设我们要将上述进程用容器改造，该如何设计呢？如果使用 Docker，通常会想到在容器内运行两个进程：
+
+- rsyslogd 负责业务逻辑；
+- imklog 处理日志。
+
+但这种设计会遇到一个问题：容器中的 PID=1 进程应该是谁？在 Linux 系统中，PID 为 1 的进程是 init，它作为所有其他进程的祖先进程，负责监控进程状态，并处理孤儿进程。因此，容器中的第一个进程也需要具备类似的功能，能够处理 SIGTERM、SIGINT 等信号，优雅地终止容器内的其他进程。
+
+Docker 的设计核心在于采用的是“单进程”模型。Docker 通过监控 PID 为 1 的进程的状态来判断容器的健康状态（在 Dockerfile 中用 ENTRYPOINT 指定启动的进程）。如果确实需要在一个 Docker 容器中运行多个进程，首个启动的进程应该具备资源监控和管理能力，例如，使用专为容器开发的 tinit 程序。
+
+虽然通过 Docker 可以勉强实现容器内运行多个进程，但进程间的协作远不止于资源回收那么简单。要让容器像操作系统中的进程组一样进行协作，下一步的演进是找到类似“进程组”的概念。这是实现容器从“隔离”到“协作”的第一步。
+####  超亲密容器组 Pod
+在 Kubernetes 中，与“进程组”对应的设计概念是 Pod。Pod 是一组紧密关联的容器集合，它们共享 IPC、Network 和 UTS 等命名空间，是 Kubernetes 管理的最基本单位。
+
+容器之间原本通过命名空间和 cgroups 进行隔离，Pod 的设计目标是打破这种隔离，使 Pod 内的容器能够像进程组一样共享资源和数据。为实现这一点，Kubernetes 引入了一个特殊容器 —— Infra Container。
+
+Infra Container 是 Pod 内第一个启动的容器，体积非常小（约 300 KB）。它主要负责为 Pod 内的容器申请共享的 UTS、IPC 和网络等命名空间。Pod 内的其他容器通过 setns（Linux 系统调用，用于将进程加入指定命名空间）来共享 Infra Container 的命名空间。此外，Infra Container 也可以作为 init 进程，管理子进程和回收资源。
+
+额外知识
+
+Infra Container 启动后，执行一个永远循环的 pause() 方法，因此又被称为“pause 容器”。
+
+![](https://www.thebyte.com.cn/assets/infra-container-DNfUcRbo.svg)
+通过 Infra Container，Pod 内的容器可以共享 UTS、Network、IPC 和 Time 命名空间。不过，PID 命名空间和文件系统命名空间默认依然是隔离的，原因如下：
+
+- **文件系统隔离**：容器需要独立的文件系统，以避免冲突。如果容器之间需要共享文件，Kubernetes 提供了 Volume 支持（将在本章 7.5 节中介绍）；
+- **PID 隔离**：PID 命名空间隔离是为了避免某些容器进程没有 PID=1 的问题，这可能导致容器启动失败（例如，使用 systemd 的容器）。
+
+如果需要共享 PID 命名空间，可以在 Pod 声明中设置 shareProcessNamespace: true。Pod 的 YAML 配置如下所示：
+
+```yaml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: example-pod
+spec:
+  shareProcessNamespace: true
+  containers:
+    - name: container1
+      image: myimage1
+    ...
+```
+
+在共享 PID 命名空间的 Pod 中，Infra Container 将承担 PID=1 进程的职责，负责处理信号和回收子进程资源等操作。
+
+#### Pod 是 Kubernetes 的基本单位
+
+解决了容器的资源隔离、限制以及容器间协作问题，Kubernetes 的功能开始围绕容器和 Pod 不断向实际应用的场景扩展。
+
+由于一个 Pod 不会仅有一个实例，Kubernetes 引入了更高层次的抽象来管理多个 Pod 实例。例如：
+
+- **Deployment**：用于管理无状态应用，支持滚动更新和扩缩容；
+- **StatefulSet**：用于管理有状态应用，确保 Pods 的顺序和持久性；
+- **DaemonSet**：确保每个节点上运行一个 Pod，常用于集群管理或监控；
+- **ReplicaSet**：确保指定数量的 Pod 副本处于运行状态；
+- **Job/CronJob**：管理一次性任务或定期任务。
+
+鉴于 Pod 的 IP 地址是动态分配的，Kubernetes 引入了 Service 来提供稳定的网络访问入口并实现负载均衡。此外，Ingress 作为反向代理，根据定义的规则将流量路由至后端的 Service 或 Pod，从而实现基于域名或路径的细粒度路由和更复杂的流量管理。围绕 Pod 的设计不断衍生，最终绘制出图 7-5 所示的 Kubernetes 核心功能全景图。
+
+![](https://www.thebyte.com.cn/assets/pod-DjWvdj6A.svg)
+#### Pod 是调度的原子单元
+
+Pod 还承担着作为调度单元的关键职责。
+
+调度（特别是协同调度）是非常麻烦的事情。举个例子，假设有两个具有亲和性的容器：
+
+- Nginx（资源需求：1GB 内存），负责接收请求并将其写入主机的日志文件；
+- LogCollector（资源需求：0.5GB 内存），负责读取日志并将其转发到 Elasticsearch 集群。
+
+假设当前集群的资源情况如下：
+
+- Node1：1.25G 可用内存；
+- Node2：2G 可用内存。
+
+如果这两个容器必须协作并在同一台机器上运行，调度器可能会将 Nginx 调度到 Node1。然而，Node1 上只有 1.25GB 内存，而 Nginx 占用了 1GB，导致 LogCollector 无法在该节点上运行，从而阻塞了调度。尽管重新调度可以解决这个问题，但如果需要协调数以万计的容器呢？以下是两种典型的解决方案：
+
+- **成组调度**：集群等到足够的资源满足容器需求后，统一调度。这种方法可能导致调度效率降低、资源利用不足，并可能出现互相等待而导致死锁的问题；
+- **提高单个调度效率**： 通过提升单任务调度效率解决。像 Google 的 Omega 系统采用了基于共享状态的乐观绑定（Optimistic Binding）来优化大规模调度效率。但这种方案实现起来较为复杂，笔者将在第 7.7.3 节“调度器及扩展设计”中详细探讨。
+
+在 Pod 上直接声明资源需求，并以 Pod 作为原子单元来实现调度，Pod 与 Pod 之间不存在超亲密的关系，如果有关系，就通过网络通信实现关联。复杂的协同调度问题在 Kubernetes 中直接消失了！
+
+### 容器边车模式
+
+组合多种不同角色的容器，共享资源并统一调度编排，在 Kubernetes 中是一种经典的容器设计模式 —— 边车（Sidecar）模式。
+
+如图所示，在边车模式下，一个主容器（负责业务逻辑处理）与一个或多个边车容器共同运行在同一个 Pod 内。边车容器负责处理非业务逻辑的任务，如日志记录、监控、安全保障或数据同步。边车容器将这些职能从主业务容器中分离，使得开发更加高内聚、低耦合的软件变得更加容易。
+![](https://www.thebyte.com.cn/assets/sidecar-Clxo9o_p.svg)
+### 容器镜像的原理与应用
+容器镜像是 Docker 革命性的创新，它在短短几年就迅速改变了整个云计算领域的发展历程。在本节中，我们将深入分析镜像技术原理，并探讨其在下载加速、启动加速、存储优化等场景中的最佳实践。
+
+#### 什么是容器镜像
+
+所谓的“容器镜像”，其实就是一个“特殊的压缩包”，它将应用及其依赖（包括操作系统中的库和配置）打包在一起，形成一个自包含的环境。
+
+很多开发者通常将应用依赖局限于编程语言层面。例如，某个 Java 应用依赖特定版本的 JDK，或者 Python 应用依赖 Python 2.7。但一个常被忽视的事实是：“操作系统本身才是应用运行所需的最完整依赖环境”。制作容器镜像的过程，实际上就是创建一个符合特定要求的操作系统快照。Docker 中，这个操作是：
+
+```bash
+$ docker build 镜像名称
+```
+
+一旦镜像创建完成，用户便可通过 Docker 创建一个“沙盒”，解压镜像并将其作为根文件系统（rootfs）挂载，容器内的应用程序和依赖就可以顺利运行。Docker 中，这个操作是：
+
+```bash
+$ docker run 镜像名称
+```
+
+上述的“沙盒”，其实就是上一篇介绍的 namespace 和 cgroups 技术创建出来的隔离环境。
+
+由于镜像打包的是“整个操作系统”，应用程序与运行依赖全部封装在了一起，从而赋予了容器最核心的一致性能力。无论是在本地，还是在云端某个虚拟机，只要解压打包好的容器镜像，应用程序运行所依赖的环境就能完美重现。
+
+>注意
+>严格讲，rootfs 只是操作系统的一部分，是按规则组织的一些文件和目录，并不包括操作系统内核。如果容器内的进程与内核交互，将影响宿主机，这是容器相比虚拟机的主要缺陷之一（不安全）。
+
+#### 容器镜像分层设计原理
+
+rootfs 解决了应用程序运行环境的一致性问题，但并未解决所有问题。
+
+例如，当应用程序升级或运行环境发生变动时，是否需要重新制作一次 rootfs？将整个 rootfs 直接打包不仅无法复用，还会浪费大量存储空间。举例来说，笔者基于 CentOS ISO 制作了一个 rootfs，配置了 Java 运行环境。那么，笔者的同事发布 Java 应用时，肯定想复用之前安装过 Java 运行环境的 rootfs，而不是重新制作一个。此外，如果每个人都重新制作 rootfs，考虑到一台主机通常运行几十个容器，将会占用巨大的存储空间。
+
+分析上述 Java 应用对 rootfs 的需求，发现底层的 rootfs（例如 CentOS + JDK）其实是固定的。那么，是否可以通过增量修改的方式来支持不同应用的依赖？比如，维护一个共同的“基础 rootfs”，然后根据应用的不同依赖制作不同的镜像。例如，**CentOS + JDK** + app-1、**CentOS + JDK** + app-2 和 **CentOS** + Python + app-3 等等。
+
+增量修改的思路当然可行，这也是 Docker 镜像设计的核心。与传统的 rootfs 制作流程不同，Docker 引入了“层”（layer）的概念，每次创建镜像时，都会生成一个新的层，即一个增量式的 rootfs。
+
+Docker 镜像的分层设计依赖于 UnionFS（联合文件系统）技术，UnionFS 允许将多个目录联合挂载到同一目录下，呈现给用户的是一个统一的文件系统视图，而非多个分散的目录。
+
+UnionFS 有多种实现，例如 OverlayFS、Btrfs 和 AUFS 等。在 Linux 内核 3.18 版本中，OverlayFS 被合并进主分支，并逐渐成为各大主流 Linux 发行版的默认联合文件系统。OverlayFS 的使用非常简便，只需通过 mount 命令，指定文件系统类型为 overlay，并配置以下相关参数：
+
+- **lowerdir**：OverlayFS 的只读层，通常用于提供基础文件系统，可以指定多个目录；
+- **upperdir**：OverlayFS 的读写层，用于存储用户的增量修改；
+- **merged**：挂载完成后，展示给用户的统一文件系统视图。
+
+笔者举一个具体的例子供你参考，代码如下所示：
+
+```bash
+#!/bin/bash
+
+umount ./merged
+rm upper lower merged work -r
+
+mkdir upper lower merged work
+echo "I'm from lower!" > lower/in_lower.txt
+echo "I'm from upper!" > upper/in_upper.txt
+# `in_both` is in both directories
+echo "I'm from lower!" > lower/in_both.txt
+echo "I'm from upper!" > upper/in_both.txt
+
+// 使用 mount 命令即将 lower、upper 挂载到 merged。
+
+$ sudo mount -t overlay overlay \
+ -o lowerdir=./lower,upperdir=./upper,workdir=./work \
+ ./merged
+```
+
+使用 mount 命令，指定文件系统类型为 overlay，挂载后的文件系统如图 7-7 所示。
+![[Pasted image 20250607160522.png]]
+
+当在 merged 目录中执行增删改操作时，OverlayFS 文件系统会触发写时复制（CoW，Copy-On-Write）策略。下面通过一系列操作来解释 CoW 的基本原理：
+
+- **新建文件时**：文件会被写入到 upper 目录中；
+- **删除文件时**：
+    - 如果删除 in_upper.txt，该文件会从 upper 目录中移除；
+    - 如果删除 in_lower.txt，lower 目录中的 in_lower.txt 文件保持不变，但 upper 目录会新增一个特殊文件，标记 in_lower.txt 在 merged 目录中已被删除。
+- **修改文件时**：如果修改 in_lower.txt，upper 目录会创建一个新的 in_lower.txt 文件，包含更新后的内容，而 lower 目录中的原始文件保持不变。
+
+再来看 Docker 镜像利用联合文件系统的分层设计。如图所示，整个镜像从下往上由 6 个层组成：
+
+- 最底层是基础镜像 Debian Stretch，相当于“base rootfs”，所有容器可以共享这一层；
+- 接下来的 3 层是通过 Dockerfile 中的 ADD、ENV、CMD 等指令生成的只读层；
+- Init Layer 位于只读层和可写层之间，存放可能会被修改的文件，如 /etc/hosts、/etc/resolv.conf 等。这些文件原本属于 Debian 镜像，但容器启动时，用户往往会写入一些指定的配置，因此 Docker 为其单独创建了这一层；
+- 最上层是通过 CoW（写时复制）技术创建的可写层（Read/Write Layer）。容器内的所有增、删、改操作都发生在此层。但该层的数据不具备持久性，容器销毁时，所有写入的数据也会丢失。容器镜像内无法写入任何数据，是不可变基础设施的思想的体现，无论容器重启多少次或在任何机器上运行，只要使用相同的镜像，启动的服务始终保持一致。
+![[Pasted image 20250607160533.png]]
+
+最终，这 6 个层被联合挂载到` /var/lib/docker/overlay/mnt` 目录。容器系统通过系统调用 `chroot` 和 pivot_root 切换根目录，使得容器内的进程仿佛独占一个带有 Java 环境的 Debian 操作系统。
+
+通过镜像分层设计，以 Docker 镜像为核心，不同公司和团队的开发人员可以紧密协作。每个人不仅可以发布基础镜像，还可以基于他人的基础镜像构建和发布自己的软件。**镜像的增量操作使得拉取和推送内容也是增量的，这远比操作虚拟机动辄数 GB 的 ISO 镜像要更敏捷**。更重要的是，容器镜像一旦发布，全球任何地方的用户都能下载并复现应用所需的完整环境，打通了“开发-测试-部署”流程中的每个环节。
+
+#### 构建足够小的容器镜像
+
+容器镜像的一大挑战是尽量减小镜像体积。较小的镜像在部署、故障转移和存储成本等方面具有显著优势。构建足够小镜像的方法如下：
+
+- **选用精简的基础镜像**：基础镜像应只包含运行应用程序所必需的最小系统环境和依赖。选择 Alpine Linux 这样的轻量级发行版作为基础镜像，镜像体积会比 CentOS 这样的大而全的基础镜像要小得多；
+- **使用多阶段构建镜像**：在构建过程中，编译缓存、临时文件和工具等不必要的内容可能被包含在镜像中。通过多阶段构建，可以只打包编译后的可执行文件，从而得到更加精简的镜像。
+
+以下是通过多阶段构建一个精简 Nginx 镜像的示例，供读者参考：
+
+```bash
+# 第 1 阶段
+FROM skillfir/alpine:gcc AS builder01
+RUN wget https://nginx.org/download/nginx-1.24.0.tar.gz -O nginx.tar.gz && \
+tar -zxf nginx.tar.gz && \
+rm -f nginx.tar.gz && \
+cd /usr/src/nginx-1.24.0 && \
+ ./configure --prefix=/app/nginx --sbin-path=/app/nginx/sbin/nginx && \
+  make && make install
+  
+# 第 2 阶段 只打包最终可执行文件
+FROM skillfir/alpine:glibc
+RUN apk update && apk upgrade && apk add pcre openssl-dev pcre-dev zlib-dev 
+
+COPY --from=builder01 /app/nginx /app/nginx
+WORKDIR /app/nginx
+EXPOSE 80
+CMD ["./sbin/nginx","-g","daemon off;"]
+```
+
+使用 docker build 命令构建镜像并查看生成的镜像，最终大小为 23.4 MB。
+
+```
+$ docker build -t alpine:nginx .
+$ docker images 
+REPOSITORY                TAG             IMAGE ID       CREATED          SIZE
+alpine                    nginx           ca338a969cf7   17 seconds ago   23.4MB
+```
+
+#### 加速容器镜像下载
+
+当容器启动时，如果本地没有镜像文件，它将从远程仓库（Repository）下载。镜像下载效率受限于网络带宽和仓库服务质量，镜像越大，下载时间越长，容器启动也因此变慢。
+
+为了解决镜像拉取速度慢和带宽浪费的问题，阿里巴巴技术团队在 2018 年开源了 Dragonfly 项目。
+
+Dragonfly 的工作原理如图所示。首先，Dragonfly 在多个节点上启动 Peer 服务（类似 P2P 节点）。当容器系统下载镜像时，下载请求通过 Peer 转发到 Scheduler（类似 P2P 调度器），Scheduler 判断该镜像是否为首次下载：
+
+- **首次下载**：Scheduler 启动回源操作，从源服务器获取镜像文件，并将镜像文件切割成多个“块”（Piece）。每个块会缓存到不同节点，相关配置信息上报给 Scheduler，供后续调度决策使用；
+- **非首次下载**：Scheduler 根据配置，生成一个包含所有镜像块的下载调度指令。
+
+最终，Peer 根据调度策略从集群中的不同节点下载所有块，并将它们拼接成完整的镜像文件。
+
+![[Pasted image 20250607160551.png]]
+可以看出，Dragonfly 的镜像下载加速流程与 P2P 下载加速非常相似，二者都是通过分布式节点和智能调度来加速大文件的传输与重组。
+
+#### 加速容器镜像启动
+
+容器镜像的大小直接影响启动时间，一些大型软件的镜像可能超过数 GB。例如，机器学习框架 TensorFlow 的镜像大小为 1.83 GB，冷启动时至少需要 3 分钟。大型镜像不仅启动缓慢、镜像内的文件往往未被充分利用（业内研究表明，通常镜像中只有 6% 的内容被实际使用）
+
+2020 年，阿里巴巴技术团队发布了 Nydus 项目，它将镜像层的数据（blobs）与元数据（bootstrap）分离，容器第一次启动时，首先拉取元数据，再按需拉取 blobs 数据。相较于拉取整个镜像层，Nydus 下载的数据量大大减少。值得一提的是，Nydus 还使用 FUSE 技术（Filesystem in Userspace，用户态文件系统）重构文件系统，用户几乎无需任何特殊配置（感知不到 Nydus 的存在），即可按需从远程镜像中心拉取数据，加速容器镜像启动。
+
+![[Pasted image 20250607160600.png]]
+
+
+### 容器运行时与 CRI 接口
+
+由于 Docker 太流行了，Kubernetes 没有考虑支持其他容器引擎的可能性，完全依赖并绑定于 Docker。那时，Kubernetes 通过内部的 DockerManager 组件调用 Docker API 来创建和管理容器。
+![](https://www.thebyte.com.cn/assets/k8s-runtime-v1-BorpnPeX.svg)
+随着市场上出现越来越多的容器运行时，比如 CoreOS 推出的开源容器引擎 Rocket（简称 rkt），Kubernetes 在 rkt 发布后采用类似强绑定 Docker 的方式，添加了对 rkt 的支持。随着容器技术的快速发展，如果继续采用与 Docker 类似的强绑定方式，Kubernetes 的维护工作将变得无比庞大。
+
+#### 容器运行时接口 CRI
+从 Kubernetes 1.5 版本开始，Kubernetes 在遵循 OCI 标准的基础上，将容器管理操作抽象为一系列接口。这些接口作为 Kubelet（Kubernetes 节点代理）与容器运行时之间的桥梁，使 Kubelet 能通过发送接口请求来管理容器。
+
+管理容器的接口称为“CRI 接口”（Container Runtime Interface，容器运行时接口）。如下面的代码所示，CRI 接口其实是一套通过 Protocol Buffer 定义的 API。
+
+```go
+// https://github.com/kubernetes/cri-api/blob/master/pkg/apis/services.go
+// RuntimeService 定义了管理容器的 API
+service RuntimeService {
+
+    // CreateContainer 在指定的 PodSandbox 中创建一个新的容器
+    rpc CreateContainer(CreateContainerRequest) returns (CreateContainerResponse) {}
+    // StartContainer 启动容器
+    rpc StartContainer(StartContainerRequest) returns (StartContainerResponse) {}
+    // StopContainer 停止正在运行的容器。
+    rpc StopContainer(StopContainerRequest) returns (StopContainerResponse) {}
+    ...
+}
+
+// ImageService 定义了管理镜像的 API。
+service ImageService {
+    // ListImages 列出现有的镜像。
+    rpc ListImages(ListImagesRequest) returns (ListImagesResponse) {}
+    // PullImage 使用认证配置拉取镜像。
+    rpc PullImage(PullImageRequest) returns (PullImageResponse) {}
+    // RemoveImage 删除镜像。
+    rpc RemoveImage(RemoveImageRequest) returns (RemoveImageResponse) {}
+    ...
+}
+```
+
+CRI 的实现由三个主要组件协作完成：gRPC Client、gRPC Server 和具体的容器运行时。具体来说：
+
+- Kubelet 充当 gRPC Client，调用 CRI 接口；
+- CRI shim 作为 gRPC Server，响应 CRI 请求，并将其转换为具体的容器运行时管理操作。
+
+![[Pasted image 20250607190808.png]]
+由此，市场上的各类容器运行时，只需按照规范实现 CRI 接口，就可以无缝接入 Kubernetes 生态。
+#### Kubernetes 专用容器运行时
+2017 年，Google、RedHat、Intel、SUSE 和 IBM 一众大厂联合发布了 CRI-O（Container Runtime Interface Orchestrator）项目。从名称可以看出，CRI-O 的目标是兼容 CRI 和 OCI，使 Kubernetes 能在不依赖传统容器引擎（如 Docker）的情况下，仍能有效管理容器。
+
+![[Pasted image 20250607190833.png]]
+Google 推出 CRI-O 的意图明显，即削弱 Docker 在容器编排领域的主导地位。但彼时 Docker 在容器生态中的市场份额仍占绝对优势。对于普通用户而言，如果没有明确的收益，并没么动力把 Docker 换成别的容器引擎。
+
+不过，我们也可以想象，Docker 当时的内心一定充满了被抛弃的焦虑。
+
+#### Containerd 与 CRI
+Docker 并没有“坐以待毙”，开始主动进行革新。Docker 从 1.1 版本起开始重构，并拆分出了 Containerd。
+
+早期，Containerd 单独开源，并未捐赠给 CNCF，还适配了其他容器编排系统，如 Swarm，因此并未直接实现 CRI 接口。出于诸多原因的考虑，Docker 对外部开放的接口也依然保持不变。在这种背景下，Kubernetes 中出现了两种调用链：
+
+- **通过适配器 dockershim 调用**：首先 dockershim 调用 Docker，然后 Docker 调用 Containerd，最后 Containerd 操作容器；；
+- **通过适配器 CRI-containerd 调用**：首先 CRI-containerd 调用 Containerd，随后 Containerd 操作容器。
+![[Pasted image 20250607190857.png]]
+
+在这一阶段，Kubelet 和 dockershim 的代码都托管在同一个仓库中，意味着 dockershim 由 Kubernetes 负责组织、开发和维护。因此，每当 Docker 发布新版本时，Kubernetes 必须集中精力快速更新 dockershim。此外，Docker 作为容器运行时显得过于庞大。Kubernetes 弃用 dockershim 有了充分的理由和动力。
+
+再来看 Docker。2018 年，Docker 将 Containerd 捐赠给 CNCF，并在 CNCF 的支持下发布了 1.1 版。与 1.0 版相比，1.1 版的最大变化在于完全支持 CRI 标准，这意味着原本作为 CRI 适配器的 CRI-Containerd 也不再需要。
+
+Kubernetes v1.24 版本正式移除 dockershim，实质上是废弃了内置的 dockershim 功能，转而直接对接 Containerd。此时，再观察 Kubernetes 与容器运行时之间的调用链，你会发现，与 DockerShim 和 CRI-containerd 的交互相比，调用步骤最多减少了两步：
+
+- 用户只需抛弃 Docker 的情怀，容器编排至少可以省略一次调用，获得性能上的收益；
+- 对 Kubernetes 而言，选择 Containerd 作为容器运行时，调用链更短、更稳定、占用的资源更少。
+![[Pasted image 20250607190909.png]]
+
+根据 Kubernetes 官方提供的性能测试数据，Containerd 1.1 相比 Docker 18.03，Pod 的启动延迟降低了 20%、CPU 使用率降低了 68%、内存使用率降低了 12%。这是一个相当显著的性能改善。
+![](https://www.thebyte.com.cn/assets/k8s-runtime-v4-VvEKKbDn.svg)
+#### 安全容器运行时
+事实上，虽然容器提供一个与系统中的其它进程资源相隔离的执行环境，但是与宿主机系统是共享内核的。如果有一个容器进程被恶意程序攻击，就有可能造成容器逃逸，轻则破坏当前的容器，重则造成 Linux 内核崩溃，导致整个机器宕机。
+
+为了提高安全性，很多运维人员会将容器“嵌套”在虚拟机中，将容器与同一主机上的其他进程完全隔离。但在虚拟机中运行容器会丧失容器的速度和敏捷性优势。为了解决这个问题，Intel 和 Hyper.sh（现为蚂蚁集团的一部分）在 2016 年，几乎同时发布了各自的解决方案，分别是 Intel Clear Containers 和 runV 项目。
+
+2017 年，Intel 和 Hyper.sh 两家公司将各自的项目合并，互补优势，创建了开源项目 Kata Containers。该项目的原理如图 7-18 所示，本质上是通过硬件虚拟化技术（如 QEMU/KVM）为每个容器/Pod 分配独立的内核，将其运行在一个精简的轻量级虚拟机中。因此，它“像容器一样敏捷，像虚机一样安全”（The speed of containers, the security of VMs）。
+
+![[Pasted image 20250607190942.png]]
+为了与上层容器编排系统对接，Kata Containers 会启动一个进程（shimv2）来负责容器的生命周期管理。shimv2 相当于 Kata Containers 与容器运行时之间的兼容层，支持标准的容器接口，如 CRI（容器运行时接口）或 Docker API。这使得容器编排系统能够像操作普通容器一样管理容器，而不需要意识到容器实际上是运行在一个虚拟机中。
+![[Pasted image 20250607190951.png]]
+
+除了 Kata Containers，2018 年底，AWS 发布了安全容器项目 Firecracker。其核心是一个用 Rust 编写的虚拟化管理器，利用 Linux 内核虚拟机（KVM）来创建和运行轻量级虚拟机。不难看出，无论是 Kata Containers 还是 Firecracker，它们实现安全容器的方法殊途同归，都是为每个进程分配独立的操作系统内核，从而有效防止容器进程“逃逸”或夺取宿主机控制权的问题。
+
+#### 容器运行时生态
+目前已有十几种容器运行时实现了 CRI 接口，具体选择哪一种取决于 Kubernetes 安装时宿主机的容器运行时环境。但对于云计算厂商而言，除非出于安全性需要（如必须实现内核级别的隔离），大多数情况都会选择 Containerd 作为容器运行时。毕竟对于它们而言，性能与稳定才是核心的生产力与竞争力。
+![[Pasted image 20250607191133.png]]
+
+### 容器持久化存储设计
+
+镜像作为不可变的基础设施，要求在任何环境下能复制出完全一致的容器实例。这意味着，容器内部写入的数据与镜像无关，一旦容器重启，所有写入的数据都会丢失。那容器系统怎么实现数据持久化存储呢？本节，我们由浅入深，先从 Docker 开始，逐步了解容器持久化存储的原理、不同存储类型的特点及其适用场景。
+
+#### Docker 的存储设计
+Docker 通过将宿主机目录挂载到容器内部的方式，实现数据持久化存储。如图 7-21 所示，目前它支持三种挂载方式：bind mount、volume 和 tmpfs mount。
+![[Pasted image 20250607193206.png]]
+
+bind mount 是 Docker 最早支持的挂载类型，也是我们最熟悉的挂载方式。如下命令所示，启动一个 Nginx 容器，并将宿主机的 /usr/share/nginx/html 目录挂载到容器内 /data 目录：
+
+```
+$ docker run -v /usr/share/nginx/html:/data nginx:lastest
+```
+
+上面的挂载，实际上是通过 mount 系统调用实现的。如下代码所示：
+
+```
+// 将宿主机中的 /usr/share/nginx/html 挂载到容器根文件系统的 /data 路径
+mount("/usr/share/nginx/html", "rootfs/data", "none", MS_BIND, NULL);
+```
+
+通过 mount 系统调用实现的持久化存储存在以下缺陷：
+
+- **与操作系统的强耦合**：容器内的目录通过 mount 挂载到宿主机的绝对路径，这使得容器的运行环境与操作系统紧密绑定。一方面，bind mount 方式无法写入 Dockerfile，否则镜像在其他环境中可能无法启动。另一方面，宿主机中被挂载的目录与 Docker 并无直接关联，其他进程可能会误操作，存在潜在的安全风险；
+- **难以满足多样化的存储需求**：随着容器广泛应用，存储需求也变得更加复杂。存储位置不仅限于宿主机，还可能涉及外部网络存储；存储介质不仅是磁盘，还可能是内存文件系统（如 tmpfs）；存储类型也不局限于文件系统，还包括块设备或对象存储；
+- **低效的网络存储处理**，对于网络存储，实在没必要先将其挂载到操作系统再挂载到容器内某个目录。Docker 完全可以直接对接 iSCSI、NFS 网络存储协议，绕过操作系统，降低资源占用和访问延迟。
+
+为了解决上述问题，Docker 从 1.7 版本起引入了全新的挂载类型 —— Volume（存储卷）：
+
+- **独立的存储空间**：Volume 会在宿主机中开辟一个专属于 Docker 的空间（通常在 Linux 中为 /var/lib/docker/volumes/ 目录），这样就避免了 bind mount 对宿主机绝对路径的依赖；
+- **支持多种存储系统**：考虑到存储类型的多样性，仅依赖 Docker 本身来实现所有存储需求并不现实。因此，Docker 在 1.10 版本中又引入了 Volume Driver 机制，借助社区的力量扩展存储驱动，支持更多存储系统和协议。。
+
+经过一系列的设计，现在 Docker 用户只要通过 docker plugin install 安装额外的第三方卷驱动，就能使用想要的存储方案。
+
+举个具体的例子，请看使用阿里云文件存储（NAS）的示例：
+
+1. 先安装阿里云 NAS Volume 插件：
+
+```
+docker plugin install aliyun/aliyun-volume-plugin:latest --alias aliyun-nas --grant-all-permissions
+```
+
+2. 接着，使用 docker volume create 命令创建一个挂载到阿里云 NAS 的存储卷，指定 NAS 文件系统的地址：
+
+```
+docker volume create \
+--driver aliyun-nas \
+--opt nasAddr=<Your_NAS_Address> \
+--opt mountDir=/myvolume \
+my-aliyun-nas-volume
+```
+
+3. 最后，启动容器时，将创建的阿里云 NAS 卷挂载到容器中的目录：
+
+```
+docker run -d -v my-aliyun-nas-volume:/mnt/nas nginx:latest
+```
+
+## [#](https://www.thebyte.com.cn/container/storage.html#_7-5-2-kubernetes-%E7%9A%84%E5%AD%98%E5%82%A8%E8%AE%BE%E8%AE%A1)7.5.2 Kubernetes 的存储设计
+
+我们从 Docker 返回到 Kubernetes 中，同 Docker 类似的是：
+
+- Kubernetes 也抽象出了 Volume 的概念来解决持久化存储；
+- 在宿主机中，也开辟了属于 Kubernetes 的空间（该目录是 /var/lib/kubelet/pods/[pod uid]/volumes）；
+- 也设计了存储驱动（在 Kubernetes 中称 Volume Plugin）扩展支持出众多的存储类型，如本地存储、网络存储（如 NFS、iSCSI）、云厂商的存储服务（如 AWS EBS、GCE PD、阿里云 NAS 等）。
+
+不同的是，作为一个工业级的容器编排系统，Kubernetes 的 Volume 机制比 Docker 更复杂、支持的存储类型更丰富。Kubernetes 支持的存储类型，如图 7-22 所示
+![[Pasted image 20250607193227.png]]
+
+乍一看，这么多 Volume 类型实在难以下手。然而，总结起来就 3 类：
+
+- **普通 Volume**：主要用于临时数据存储，包括 emptyDir 和 hostPath 等类型；
+    - emptyDir：在 Pod 删除时数据会被清空；
+    - hostPath：数据存储在节点本地路径上，如果 Pod 被调度到其他节点，则无法访问原有数据。
+- **持久化的 Volume**：通过 PersistentVolume（PV）和 PersistentVolumeClaim（PVC）机制实现，支持长期存储且与 Pod 的生命周期解耦。常见的类型包括 NFS、云存储（如 AWS EBS、GCE PD）等；
+- **特殊的 Volume**：用于管理配置和敏感数据，例如 Secret 和 ConfigMap。严格来说，这类 Volume 并非传统意义上的存储类型，而是通过实现标准的 POSIX（可移植操作系统接口）接口，提供对 Kubernetes 集群中配置信息的便捷访问。这部分内容，笔者就不再展开讨论了。
+
+## [#](https://www.thebyte.com.cn/container/storage.html#_7-5-3-%E6%99%AE%E9%80%9A%E7%9A%84-volume)7.5.3 普通的 Volume
+
+Kubernetes 设计普通 Volume 的初衷并非为了持久化存储数据，而是为了实现容器间的数据共享。请看两个典型示例：
+
+- **EmptyDir**：这种 Volume 类型常用于 Sidecar 模式。例如，日志收集容器通过 EmptyDir 访问业务容器的日志文件；
+- **HostPath**：与 EmptyDir 不同，HostPath 允许同一节点上的所有容器共享宿主机的本地存储。例如，在 Loki 日志系统中，Pod 挂载宿主机的 HostPath Volume 后，Loki 可以收集并读取宿主机上所有 Pod 生成的日志。
+
+如图 7-23 所示，EmptyDir 类型的 Volume 随 Pod 生命周期而存在。当 Pod 被销毁时，EmptyDir Volume 也会被删除。对于 HostPath，当 Pod 被调度到其他节点时，数据也相当于丢失了。
+![](https://www.thebyte.com.cn/assets/volume-B3WbdOc-.svg)
+#### 持久化的 Volume
+由于 Pod 随时可能被调度到其他节点，如果要实现数据的持久化存储，就得依赖网络存储解决方案。这就是引入 PV（PersistentVolume，持久卷）的原因。
+
+以下是一个 PV 资源的 YAML 配置示例。其 spec 部分定义了关键配置项，包括：存储容量（5Gi）、访问模式（ReadWriteOnce，表示允许单个节点进行读写）、远程存储类型（如 NFS），以及数据回收策略（Recycle，表示在 PV 释放后自动清除数据以供重用）。
+
+```
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: pv1
+spec:
+  capacity:  #容量
+    storage: 5Gi
+  accessModes:  #访问模式
+  - ReadWriteOnce
+  persistentVolumeReclaimPolicy: Recycle  #回收策略
+  storageClassName: manual  
+  nfs:
+    path: /
+    server: 172.17.0.2
+```
+
+直接使用 PV 时，需要详细描述存储的配置信息，这对业务工程师并不友好。业务工程师只想知道我有多大的空间、I/O 是否满足要求，肯定不关心存储底层的配置细节。
+
+为了简化存储的使用，Kubernetes 将存储服务再次抽象，把业务工程师关心的逻辑再抽象一层，于是有了 PVC（Persistent Volume Claim，持久卷声明），这种设计很像软件开发中的“面向对象”思想：
+
+- PVC 可以理解为持久化存储的“接口”，它提供了对某种持久化存储的描述，但不提供具体的实现；
+- 而持久化存储的实现部分则由 PV 负责完成。
+
+这样设计的好处是，作为业务开发者，我们只需要与 PVC 这个“接口”进行交互，而不必关心存储的具体的实现是 NFS 还是 Ceph。请看下面 PVC 资源的 YAML 配置示例。可以看到，其中没有任何与存储实现相关的细节。
+
+```
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: pv-claim
+spec:
+  storageClassName: manual
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 3Gi
+```
+
+现在，还有个问题，PV 和 PVC 两者之间并没有明确相关的绑定参数，它们之间是如何绑定的？PV 和 PVC 的绑定是自动的，依赖以下两个匹配条件：
+
+- **Spec 参数匹配**：Kubernetes 会根据 PVC 中声明的规格自动寻找符合条件的 PV。这包括存储容量、所需的访问模式（如 ReadWriteOnce、ReadOnlyMany 或 ReadWriteMany），以及存储类型（如文件系统或块存储）；
+- **存储类匹配**：PV 和 PVC 必须具有相同的 storageClassName，它定义了存储类型和特性，确保 PVC 请求的存储资源与 PV 提供的资源一致。
+
+以下 YAML 配置展示了如何在 Pod 中使用 PVC。当 PVC 成功绑定到 PV 后，NFS 远程存储将被挂载到 Pod 内指定的目录，比如 nginx 容器中的 /data 目录。这样，Pod 内的应用就可以像使用本地存储一样，使用远程存储资源了。
+
+```
+apiVersion: v1
+kind: Pod
+metadata:
+  name: test-nfs
+spec:
+  containers:
+  - image: nginx:alpine
+    imagePullPolicy: IfNotPresent
+    name: nginx
+    volumeMounts:
+    - mountPath: /data
+      name: nfs-volume
+  volumes:
+  - name: nfs-volume
+    persistentVolumeClaim:
+      claimName: pv-claim
+```
+
+## [#](https://www.thebyte.com.cn/container/storage.html#_7-5-5-pv-%E7%9A%84%E4%BD%BF%E7%94%A8-%E4%BB%8E%E6%89%8B%E5%8A%A8%E5%88%B0%E8%87%AA%E5%8A%A8)7.5.5 PV 的使用：从手动到自动
+
+在 Kubernetes 中，如果没有现成的 PV 满足 PVC 的需求，PVC 会保持在 Pending 状态，直到找到合适的 PV。在此期间，Pod 无法正常启动。对于小规模集群，可以提前手动创建多个 PV 以匹配 PVC，但在大规模集群中，Pod 数量可能达到成千上万，显然无法依靠人工方式提前创建如此多的 PV。
+
+为此，Kubernetes 提供了一套自动创建 PV 的机制 —— 动态供给（Dynamic Provisioning）。相对而言，前面通过人工创建 PV 的方式被称为“静态供给”（Static Provisioning）。
+
+动态供给的关键在于 Kubernetes 的 StorageClass 资源，它充当了 PV 模板的角色，使得 PV 可以根据需要自动生成。声明 StorageClass 时，必须明确两类信息：
+
+- **PV 的属性**：定义 PV 的特性，包括存储空间的大小、读写模式（如 ReadWriteOnce、ReadOnlyMany 或 ReadWriteMany），以及回收策略（如 Retain、Recycle 或 Delete）等；
+- **Provisioner 的属性**：确定存储供应商（即 Volume Plugin）及其相关参数。Kubernetes 支持两种类型的存储插件：
+    - **In-Tree 插件**：这些插件是 Kubernetes 源码的一部分，通常以前缀“kubernetes.io”命名，如 kubernetes.io/aws、kubernetes.io/azure 等。它们直接集成在 Kubernetes 项目中，为特定的存储服务提供支持；
+    - **Out-of-Tree 插件**：这些插件根据 Kubernetes 提供的存储接口由第三方存储供应商实现，代码独立于 Kubernetes 核心代码。Out-of-Tree 插件允许更灵活地集成各种存储解决方案，以适应不同的存储需求。
+
+以下是一个 Kubernetes StorageClass 配置示例。该 StorageClass 使用 AWS Elastic Block Store（aws-ebs）作为存储供应商，并通过 type 属性设置为 gp2，表示使用 AWS 的通用型 SSD 卷。
+
+```
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: standard
+provisioner: kubernetes.io/aws-ebs
+parameters:
+  type: gp2
+reclaimPolicy: Retain
+allowVolumeExpansion: true
+mountOptions:
+  - debug
+volumeBindingMode: Immediate
+```
+
+当 StorageClass 资源提交到 Kubernetes 集群后，Kubernetes 会根据 StorageClass 定义的模板以及 PVC 的请求规格，自动创建一个新的 PV 实例。创建完成后，PV 会自动与 PVC 绑定，PVC 的状态从 Pending 转变为 Bound，表示存储资源已准备好。随后，Pod 就能使用 StorageClass 定义的存储类型了。
+
+## [#](https://www.thebyte.com.cn/container/storage.html#_7-5-6-kubernetes-%E5%AD%98%E5%82%A8%E7%B3%BB%E7%BB%9F%E8%AE%BE%E8%AE%A1)7.5.6 Kubernetes 存储系统设计
+
+相信大部分读者对如何使用 Volume 已经没有疑问了。接下来，我们将继续探讨存储系统与 Kubernetes 的集成，以及它们是如何与 Pod 相关联的。
+
+在深入这个高级主题之前，我们需要先掌握一些关于操作存储设备的基础知识。Kubernetes 继承了操作系统接入外置存储的设计，将新增或卸载存储设备分解为以下三个操作：
+
+- **准备**（Provision）：首先，需要确定哪种设备进行 Provision。这一步类似于给操作系统准备一块新的硬盘，确定接入存储设备的类型、容量等基本参数。其逆向操作为 delete（移除）设备。
+- **附加**（Attach）：接下来，将准备好的存储附加到系统中。Attach 可类比为将存储设备接入操作系统，此时尽管设备还不能使用，但你可以用操作系统的 fdisk -l 命令查看到设备。这一步确定存储设备的名称、驱动方式等面向系统的信息，其逆向操作为 Detach（分离）设备。
+- **挂载**（Mount）：最后，将附加好的存储挂载到系统中。Mount 可类比为将设备挂载到系统的指定位置，这就是操作系统中 mount 命令的作用，其逆向操作为卸载（Unmount）存储设备。
+
+注意
+
+如果 Pod 中使用的是 EmptyDir、HostPath 这类 Volume，并不会经历附加/分离的操作，它们只会被挂载/卸载到某一个 Pod 中。
+
+Kubernetes 中的 Volume 创建和管理主要由 VolumeManager（卷管理器）、AttachDetachController（挂载控制器）和 PVController（PV 生命周期管理器）负责。前面提到的 Provision、Delete、Attach、Detach、Mount 和 Unmount 操作由具体的 VolumePlugin（第三方存储插件，也称 CSI 插件）实现。
+
+图 7-24 展示了一个带有 PVC 的 Pod 创建过程：
+
+1. 首先，用户创建一个包含 PVC 的 Pod，该 PVC 要求使用动态存储卷；
+2. 默认调度器 kube-scheduler 根据 Pod 配置、节点状态、PV 配置等信息，将 Pod 调度到一个合适的节点中；
+3. PVController 会持续监测 ApiServer，当发现一个 PVC 已创建但仍处于未绑定状态时，它会尝试将一个 PV 与该 PVC 进行绑定。首先，PVController 会在集群内查找适合的 PV；如果找不到相应的 PV，它会调用 Volume Plugin 中的接口执行 Provision 操作。Provision 过程包括从远程存储介质创建一个 Volume，并在集群中创建一个 PV 对象，然后将此 PV 与 PVC 绑定；
+4. 如果一个 Pod 被调度到某个节点后，它所定义的 PV 还没有被挂载，AttachDetachController 就会调用 Volume Plugin 中的接口，把远端的 Volume 挂载到目标节点中的设备上（例如：/dev/vdb）；
+5. 在节点中，当 VolumeManager 发现一个 Pod 已调度到自己的节点上并且 Volume 已经完成挂载时，它会执行 mount 操作，将本地设备（即刚才得到的 /dev/vdb）挂载到 Pod 在节点上的一个子目录 `/var/lib/kubelet/pods/[pod uid]/volumes/kubernetes.io~iscsi/[PV name]`（以 iSCSI 类型的存储为例）；
+6. 最后，Kubelet 启动 Pod，并使用 bind mount 方式将已挂载到本地目录的卷映射到 Pod 容器内。
+![](https://www.thebyte.com.cn/assets/k8s-volume-fnGgoFQH.svg)
+上述流程中第三方存储供应商实现 Volume Plugin 即 CSI（Container Storage Interface，容器存储接口）插件。CSI 是一个开放性的标准，目标是为容器编排系统（不仅仅是 Kubernetes，还包括 Docker Swarm 和 Mesos 等）提供统一的存储接口。
+
+CSI 插件在实现上是一个可执行的二进制文件，它以 gRPC 的方式对外提供了三个主要的 gRPC 服务：Identity Service、Controller Service、Node Service 用于卷的管理、挂载和卸载等操作。笔者介绍如下：
+
+其中，Identity Service 用于对外暴露插件本身的信息，它的接口定义如下：
+
+```
+service Identity {
+  // 返回插件的名称、版本和其他元数据。
+  rpc GetPluginInfo(GetPluginInfoRequest)
+    returns (GetPluginInfoResponse) {}
+
+  // 返回插件支持的功能，例如是否支持卷的快照等。
+  rpc GetPluginCapabilities(GetPluginCapabilitiesRequest)
+    returns (GetPluginCapabilitiesResponse) {}
+
+  rpc Probe (ProbeRequest)
+    returns (ProbeResponse) {}
+}
+```
+
+Controller Service 管理卷的生命周期，包括创建、删除和获取卷的信息，它的接口定义如下所示。可以看出，接口中定义的操作就是图 7-24 Master 节点中 准备（Provision）和 附加（Attach）的逻辑。
+
+```
+service Controller {
+  // 创建一个新卷，并返回该卷的详细信息。
+  rpc CreateVolume (CreateVolumeRequest)
+    returns (CreateVolumeResponse) {}
+  // 删除指定的卷。
+  rpc DeleteVolume (DeleteVolumeRequest)
+    returns (DeleteVolumeResponse) {}
+  // 将卷绑定到特定的节点，准备后续的挂载操作。
+  rpc ControllerPublishVolume (ControllerPublishVolumeRequest)
+    returns (ControllerPublishVolumeResponse) {}
+
+  // 从节点解绑卷，准备进行删除或其他操作。
+  rpc ControllerUnpublishVolume (ControllerUnpublishVolumeRequest)
+    returns (ControllerUnpublishVolumeResponse) {}
+  ...
+```
+
+Node Service 主要由 Kubelet 调用处理卷在节点上的挂载和卸载操作。它的接口定义如下：
+
+```
+service Node {
+  // 将卷挂载到节点的设备上，使其准备好被 Pod 使用。
+  rpc NodeStageVolume (NodeStageVolumeRequest)
+    returns (NodeStageVolumeResponse) {}
+  // 将卷从节点的设备中卸载。
+  rpc NodeUnstageVolume (NodeUnstageVolumeRequest)
+    returns (NodeUnstageVolumeResponse) {}
+  // 在指定的 Pod 中将卷挂载到容器的文件系统上。
+  rpc NodePublishVolume (NodePublishVolumeRequest)
+    returns (NodePublishVolumeResponse) {}
+  ...
+```
+
+CSI 插件机制为存储供应商和容器编排系统之间的交互提供了标准化的接口。云存储厂商只需根据这一标准接口实现自己的云存储插件，即可无缝衔接 Kubernetes 的底层编排系统，Kubernetes 也由此具备了多样化的云存储、备份和快照等能力。
+
+## [#](https://www.thebyte.com.cn/container/storage.html#_7-5-7-%E5%AD%98%E5%82%A8%E5%88%86%E7%B1%BB-%E5%9D%97%E5%AD%98%E5%82%A8%E3%80%81%E6%96%87%E4%BB%B6%E5%AD%98%E5%82%A8%E5%92%8C%E5%AF%B9%E8%B1%A1%E5%AD%98%E5%82%A8)7.5.7 存储分类：块存储、文件存储和对象存储
+
+得益 Kubernetes 的开放性设计，通过图 7-25 感受提供了 CSI 插件支持的存储生态，基本上包含了市面上所有的存储供应商。
+![[Pasted image 20250607193324.png]]
+
+上述众多的存储系统无法一一展开，但作为业务开发工程师而言，直面的问题是，我应该选择哪种存储类型？无论是内置的存储插件还是第三方的 CSI 存储插件，总结提供的存储服务类型就 3 种：块存储（Block Storage）、文件存储（File Storage）和对象存储（Object Storage）。这三种存储类型特点与区别，笔者介绍如下：
+
+- **块存储**：块存储是最接近物理介质的一种存储方式，常见的硬盘就属于块设备。块存储不关心数据的组织方式和结构，只是简单地将所有数据按固定大小分块，每块赋予一个用于寻址的编号。数据的读写通过与块设备匹配的协议（如 SCSI、SATA、SAS、FCP、FCoE、iSCSI 等）进行。
+    
+    块存储处于整个存储软件栈的底层，不经过操作系统，因此具有超低时延和超高吞吐。但缺点是每个块是独立的，缺乏集中控制机制来解决数据冲突和同步问题。因此，块存储设备通常不能共享，无法被多个客户端（节点）同时挂载。在 Kubernetes 中，块存储类型的 Volume 的访问模式必须是 RWO（ReadWriteOnce），即可读可写，但只能被单个节点挂载。
+    
+    由于块存储不关心数据的组织方式或内容，接口简单朴素，因此主要用于文件系统、专业备份管理软件、分区软件以及数据库，而非直接提供给普通用户。
+    
+- **文件存储**：块设备存储的是最原始的二进制数据（0 和 1），对于人类用户来说，这样的数据既难以使用也难以管理。因此，我们使用“文件”这一概念来组织这些数据。所有用于同一用途的数据按照不同应用程序要求的结构方式组成不同类型的文件，并用不同的后缀来指代这些类型。每个文件有一个便于理解和记忆的名称。当文件数量较多时，通过某种划分方式对这些文件分组，所有文件和目录形成一个树状结构。再补充权限、文件名称、创建时间、所有者、修改者等元数据信息。
+    
+    这种定义文件分配、实现方式、存储信息和提供功能的标准被称为“文件系统”（File System）。常见的文件系统有 FAT32、NTFS、exFAT、ext2/3/4、XFS、BTRFS 等等。如果文件存储在网络服务器中，客户端用类似访问本地文件系统的方式访问远程服务器上的文件，这样的系统称为“网络文件系统”。常见的网络文件系统有 Windows 网络的 CIFS（Common Internet File System，也称 SMB）和类 Unix 系统的 NFS（Network File System）。
+    
+- **对象存储**：文件存储的树状结构和路径访问方式便于人类理解、记忆和访问，但计算机需要逐级分解路径并查找，最终定位到所需文件，这对于应用程序而言既不必要，也浪费性能。块存储则性能出色，但难以理解且无法共享。选择困难症出现的同时，人们思考：“是否可以有一种既具备高性能、实现共享、又能满足大规模扩展需求的新型存储系统？”。于是，对象存储应运而生。
+    
+    对象存储中的“对象”可以理解为元数据与逻辑数据块的组合：
+    
+    - 元数据提供了对象的上下文信息，如数据类型、大小、权限、创建人、创建时间等；
+    - 数据块则存储了对象的具体内容。
+    
+    对象存储中，所有数据处于同一层次，通过唯一标识来识别和查找（扩展简单），非常适合处理数据量大、增速快的非结构化数据（如视频、图像等）。
+    
+    最著名的对象存储服务是 AWS S3（Simple Storage Service），它的接口规范已经成为业内对象存储服务事实标准。如果你考虑降低云成本，也可以通过开源项目如 Ceph、Minio 或 Swift 等自建对象存储服务。
+
+
+### 容器间通信原理
+要理解容器网络的工作原理，一定要从 Flannel 项目入手。Flannel 是 CoreOS 推出的容器网络解决方案，是业界公认是“最简单”的容器网络解决方案。接下来，笔者将以 Flannel 为例，介绍容器间通信的三种模式、容器网络接口（CNI）的设计及生态。
+
+## [#](https://www.thebyte.com.cn/container/container-network.html#_7-6-1-overlay-%E8%A6%86%E7%9B%96%E7%BD%91%E7%BB%9C%E6%A8%A1%E5%BC%8F)7.6.1 Overlay 覆盖网络模式
+
+本书第三章 5.4 节已详细介绍了 Overlay 网络的设计思想。简而言之，它在现有三层网络之上“叠加”了一层由内核 VXLAN 模块管理的虚拟二层网络。
+
+为在宿主机网络上构建虚拟二层通信网络（即建立隧道网络），VXLAN 模块会在通信双方配置特殊的网络设备作为隧道端点，称为 VTEP（VXLAN Tunnel Endpoints，VXLAN 隧道端点）。VTEP 是虚拟网络设备，具备 IP 地址和 MAC 地址。它根据 VXLAN 通信规范，负责将分布在不同节点和子网的“主机”（如容器或虚拟机）发送的数据包进行封装和解封，从而使它们能够像在同一局域网内一样进行通信。
+
+上述基于 VTEP 设备构建“隧道”通信的流程，可以总结为图 7-26。
+![](https://www.thebyte.com.cn/assets/flannel-vxlan-CCkSgVDe.svg)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 .容器类型说明
 ![[napkin-selection.png]]
@@ -665,7 +1444,7 @@ spec:
 
 minikube中能通过 `minikube dashboard` 来使用界面查看kubernetes的运行状况。
 
-## Deployment 应用永不宕机
+### Deployment 应用永不宕机
 
 ![[Pasted image 20250430201959.png]]
 
@@ -756,7 +1535,7 @@ spec:
 status: {}
 ```
 
-## Daemonset 忠实可靠的看门狗
+### Daemonset 忠实可靠的看门狗
 
 Kubernetes定义了新的API对象DaemonSet，它在形式上和Deployment类似，都是管理控制Pod，但管理调度策略却不同。DaemonSet的目标是在集群的每个节点上运行且仅运行一个Pod，就好像是为节点配上一只“看门狗”，忠实地“守护”着节点，这就是DaemonSet名字的由来。
 
@@ -813,7 +1592,7 @@ Kubernetes的4个核心组件apiserver、etcd、scheduler、controller-manager�
 
 如果你有一些DaemonSet无法满足的特殊的需求，可以考虑使用静态Pod，编写一个YAML文件放到这个目录里，节点的kubelet会定期检查目录里的文件，发现变化就会调用容器运行时创建或者删除静态Pod。
 
-## Service：微服务架构的应对之道
+### Service：微服务架构的应对之道
 
 有了Deployment之后和DaemonSet应用能够快速进行迭代，但是Deployment等又会导致应用节点变来变去，而Service-服务发现就是用来解决这个问题的。
 
@@ -874,7 +1653,7 @@ Service对象有一个关键字段“ **type**”，表示Service是哪种类型
 > HostPort（宿主机端口映射）是直接访问Pod不会进行负载均衡，但是NodePort Service会进行负载均衡，见: https://team.jiunile.com/blog/2020/11/k8s-cilium-service.html[k8s-service]
 
 
-## 服务发现
+### 服务发现
 
 Kubernetes 通过以下方式来实现服务发现（ Service discovery）。
 
@@ -894,7 +1673,7 @@ Kubernetes 通过以下方式来实现服务发现（ Service discovery）。
 
 
 
-## Ingress 集群进出口流量的总管(比Service更加细化)
+### Ingress 集群进出口流量的总管(比Service更加细化)
 [[Ingress集群进出口流量的总管]]
 
 Service是运行在四层上的负载均衡，但在四层上的负载均衡功能还是太有限了，只能够依据IP地址和端口号做一些简单的判断和组合，而我们现在的绝大多数应用都是跑在七层的HTTP/HTTPS协议上的，有更多的高级路由条件，比如主机名、URI、请求头、证书等等，而这些在TCP/IP网络栈里是根本看不见的。
@@ -983,13 +1762,13 @@ kubectl get ing
 
 [[PersistentVolume让Pod拥有一个真正的持久化存储]]
 
-## PersistentVolume 让Pod拥有一个真正的持久化存储
+### PersistentVolume 让Pod拥有一个真正的持久化存储
 
 Kubernetes顺着Volume的概念，延伸出了 **PersistentVolume** 对象，它专门用来表示持久存储设备，但隐藏了存储的底层实现，我们只需要知道它能安全可靠地保管数据就可以了（由于PersistentVolume这个词很长，一般都把它简称为PV）。
 
 PV属于集群的系统资源，是和Node平级的一种对象，Pod对它没有管理权，只有使用权。
 
-### PersistentVolumeClaim/StorageClass
+#### PersistentVolumeClaim/StorageClass
 
 这么多种存储设备，有的速度快，有的速度慢；有的可以共享读写，有的只能独占读写；有的容量小，只有几百MB，有的容量大到TB、PB级别……，只用一个PV对象来管理还是有点太勉强了，不符合“单一职责”的原则，让Pod直接去选择PV也很不灵活。于是Kubernetes就又增加了两个新对象， **PersistentVolumeClaim** 和 **StorageClass**，用的还是“中间层”的思想，把存储卷的分配管理过程再次细化。
 
@@ -1005,7 +1784,7 @@ PersistentVolumeClaim，简称PVC，从名字上看比较好理解，就是用�
 .带Provisioner的pvc
 ![[e3905990be6fb8739fb51a4ab9856f1e.jpg]]
 
-## StatefulSet 管理有状态应用
+### StatefulSet 管理有状态应用
 
 - Stateless Application
 - Stateful Application
@@ -1041,7 +1820,7 @@ Service原本的目的是负载均衡，应该由它在Pod前面来转发流量�
 .结合持久化卷和StatefulSet
 ![[1a06987c87f3db948b591883a81bac0f.jpg]]
 
-## 应用的平滑升级
+### 应用的平滑升级
 
 kubectl简单升级使用kubectl apply滚动升级可以使用kubectl rollout命令来实现应用无感知的应用升级和降级。
 
@@ -1107,13 +1886,18 @@ deployment "nginx-deployment"
 ```
 
 
-## Pod的探测
+### Pod的探测
 
 1. 资源限制， spec.containers.resources.[limits,requests]
 2. 使用探针，检测Pod运行状态
     - Startup，启动探针
     - Liveness，存活探针
     - Readiness，就绪探针
+
+
+
+
+
 
 ## 使用命名空间分割系统资源
 
