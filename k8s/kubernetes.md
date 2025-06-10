@@ -1099,18 +1099,18 @@ Kubernetes v1.24 版本正式移除 dockershim，实质上是废弃了内置的 
 镜像作为不可变的基础设施，要求在任何环境下能复制出完全一致的容器实例。这意味着，容器内部写入的数据与镜像无关，一旦容器重启，所有写入的数据都会丢失。那容器系统怎么实现数据持久化存储呢？本节，我们由浅入深，先从 Docker 开始，逐步了解容器持久化存储的原理、不同存储类型的特点及其适用场景。
 
 #### Docker 的存储设计
-Docker 通过将宿主机目录挂载到容器内部的方式，实现数据持久化存储。如图 7-21 所示，目前它支持三种挂载方式：bind mount、volume 和 tmpfs mount。
+Docker 通过将宿主机目录挂载到容器内部的方式，实现数据持久化存储。如图所示，目前它支持三种挂载方式：bind mount、volume 和 tmpfs mount。
 ![[Pasted image 20250607193206.png]]
 
 bind mount 是 Docker 最早支持的挂载类型，也是我们最熟悉的挂载方式。如下命令所示，启动一个 Nginx 容器，并将宿主机的 /usr/share/nginx/html 目录挂载到容器内 /data 目录：
 
-```
+```bash
 $ docker run -v /usr/share/nginx/html:/data nginx:lastest
 ```
 
 上面的挂载，实际上是通过 mount 系统调用实现的。如下代码所示：
 
-```
+```bash
 // 将宿主机中的 /usr/share/nginx/html 挂载到容器根文件系统的 /data 路径
 mount("/usr/share/nginx/html", "rootfs/data", "none", MS_BIND, NULL);
 ```
@@ -1132,13 +1132,13 @@ mount("/usr/share/nginx/html", "rootfs/data", "none", MS_BIND, NULL);
 
 1. 先安装阿里云 NAS Volume 插件：
 
-```
+```bash
 docker plugin install aliyun/aliyun-volume-plugin:latest --alias aliyun-nas --grant-all-permissions
 ```
 
 2. 接着，使用 docker volume create 命令创建一个挂载到阿里云 NAS 的存储卷，指定 NAS 文件系统的地址：
 
-```
+```bash
 docker volume create \
 --driver aliyun-nas \
 --opt nasAddr=<Your_NAS_Address> \
@@ -1148,11 +1148,11 @@ my-aliyun-nas-volume
 
 3. 最后，启动容器时，将创建的阿里云 NAS 卷挂载到容器中的目录：
 
-```
+```bash
 docker run -d -v my-aliyun-nas-volume:/mnt/nas nginx:latest
 ```
 
-## [#](https://www.thebyte.com.cn/container/storage.html#_7-5-2-kubernetes-%E7%9A%84%E5%AD%98%E5%82%A8%E8%AE%BE%E8%AE%A1)7.5.2 Kubernetes 的存储设计
+#### Kubernetes 的存储设计
 
 我们从 Docker 返回到 Kubernetes 中，同 Docker 类似的是：
 
@@ -1160,7 +1160,7 @@ docker run -d -v my-aliyun-nas-volume:/mnt/nas nginx:latest
 - 在宿主机中，也开辟了属于 Kubernetes 的空间（该目录是 /var/lib/kubelet/pods/[pod uid]/volumes）；
 - 也设计了存储驱动（在 Kubernetes 中称 Volume Plugin）扩展支持出众多的存储类型，如本地存储、网络存储（如 NFS、iSCSI）、云厂商的存储服务（如 AWS EBS、GCE PD、阿里云 NAS 等）。
 
-不同的是，作为一个工业级的容器编排系统，Kubernetes 的 Volume 机制比 Docker 更复杂、支持的存储类型更丰富。Kubernetes 支持的存储类型，如图 7-22 所示
+不同的是，作为一个工业级的容器编排系统，Kubernetes 的 Volume 机制比 Docker 更复杂、支持的存储类型更丰富。Kubernetes 支持的存储类型，如图所示
 ![[Pasted image 20250607193227.png]]
 
 乍一看，这么多 Volume 类型实在难以下手。然而，总结起来就 3 类：
@@ -1171,21 +1171,21 @@ docker run -d -v my-aliyun-nas-volume:/mnt/nas nginx:latest
 - **持久化的 Volume**：通过 PersistentVolume（PV）和 PersistentVolumeClaim（PVC）机制实现，支持长期存储且与 Pod 的生命周期解耦。常见的类型包括 NFS、云存储（如 AWS EBS、GCE PD）等；
 - **特殊的 Volume**：用于管理配置和敏感数据，例如 Secret 和 ConfigMap。严格来说，这类 Volume 并非传统意义上的存储类型，而是通过实现标准的 POSIX（可移植操作系统接口）接口，提供对 Kubernetes 集群中配置信息的便捷访问。这部分内容，笔者就不再展开讨论了。
 
-## [#](https://www.thebyte.com.cn/container/storage.html#_7-5-3-%E6%99%AE%E9%80%9A%E7%9A%84-volume)7.5.3 普通的 Volume
+##### 普通的 Volume
 
 Kubernetes 设计普通 Volume 的初衷并非为了持久化存储数据，而是为了实现容器间的数据共享。请看两个典型示例：
 
 - **EmptyDir**：这种 Volume 类型常用于 Sidecar 模式。例如，日志收集容器通过 EmptyDir 访问业务容器的日志文件；
 - **HostPath**：与 EmptyDir 不同，HostPath 允许同一节点上的所有容器共享宿主机的本地存储。例如，在 Loki 日志系统中，Pod 挂载宿主机的 HostPath Volume 后，Loki 可以收集并读取宿主机上所有 Pod 生成的日志。
 
-如图 7-23 所示，EmptyDir 类型的 Volume 随 Pod 生命周期而存在。当 Pod 被销毁时，EmptyDir Volume 也会被删除。对于 HostPath，当 Pod 被调度到其他节点时，数据也相当于丢失了。
+如图所示，EmptyDir 类型的 Volume 随 Pod 生命周期而存在。当 Pod 被销毁时，EmptyDir Volume 也会被删除。对于 HostPath，当 Pod 被调度到其他节点时，数据也相当于丢失了。
 ![](https://www.thebyte.com.cn/assets/volume-B3WbdOc-.svg)
-#### 持久化的 Volume
+##### 持久化的 Volume
 由于 Pod 随时可能被调度到其他节点，如果要实现数据的持久化存储，就得依赖网络存储解决方案。这就是引入 PV（PersistentVolume，持久卷）的原因。
 
 以下是一个 PV 资源的 YAML 配置示例。其 spec 部分定义了关键配置项，包括：存储容量（5Gi）、访问模式（ReadWriteOnce，表示允许单个节点进行读写）、远程存储类型（如 NFS），以及数据回收策略（Recycle，表示在 PV 释放后自动清除数据以供重用）。
 
-```
+```yaml
 apiVersion: v1
 kind: PersistentVolume
 metadata:
@@ -1211,7 +1211,7 @@ spec:
 
 这样设计的好处是，作为业务开发者，我们只需要与 PVC 这个“接口”进行交互，而不必关心存储的具体的实现是 NFS 还是 Ceph。请看下面 PVC 资源的 YAML 配置示例。可以看到，其中没有任何与存储实现相关的细节。
 
-```
+```yaml
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
@@ -1232,7 +1232,7 @@ spec:
 
 以下 YAML 配置展示了如何在 Pod 中使用 PVC。当 PVC 成功绑定到 PV 后，NFS 远程存储将被挂载到 Pod 内指定的目录，比如 nginx 容器中的 /data 目录。这样，Pod 内的应用就可以像使用本地存储一样，使用远程存储资源了。
 
-```
+```yaml
 apiVersion: v1
 kind: Pod
 metadata:
@@ -1251,7 +1251,8 @@ spec:
       claimName: pv-claim
 ```
 
-## [#](https://www.thebyte.com.cn/container/storage.html#_7-5-5-pv-%E7%9A%84%E4%BD%BF%E7%94%A8-%E4%BB%8E%E6%89%8B%E5%8A%A8%E5%88%B0%E8%87%AA%E5%8A%A8)7.5.5 PV 的使用：从手动到自动
+
+##### PV 的使用：从手动到自动
 
 在 Kubernetes 中，如果没有现成的 PV 满足 PVC 的需求，PVC 会保持在 Pending 状态，直到找到合适的 PV。在此期间，Pod 无法正常启动。对于小规模集群，可以提前手动创建多个 PV 以匹配 PVC，但在大规模集群中，Pod 数量可能达到成千上万，显然无法依靠人工方式提前创建如此多的 PV。
 
@@ -1266,7 +1267,7 @@ spec:
 
 以下是一个 Kubernetes StorageClass 配置示例。该 StorageClass 使用 AWS Elastic Block Store（aws-ebs）作为存储供应商，并通过 type 属性设置为 gp2，表示使用 AWS 的通用型 SSD 卷。
 
-```
+```yaml
 apiVersion: storage.k8s.io/v1
 kind: StorageClass
 metadata:
@@ -1281,9 +1282,9 @@ mountOptions:
 volumeBindingMode: Immediate
 ```
 
-当 StorageClass 资源提交到 Kubernetes 集群后，Kubernetes 会根据 StorageClass 定义的模板以及 PVC 的请求规格，自动创建一个新的 PV 实例。创建完成后，PV 会自动与 PVC 绑定，PVC 的状态从 Pending 转变为 Bound，表示存储资源已准备好。随后，Pod 就能使用 StorageClass 定义的存储类型了。
+当 StorageClass 资源提交到 Kubernetes 集群后，aq 会根据 StorageClass 定义的模板以及 PVC 的请求规格，自动创建一个新的 PV 实例。创建完成后，PV 会自动与 PVC 绑定，PVC 的状态从 Pending 转变为 Bound，表示存储资源已准备好。随后，Pod 就能使用 StorageClass 定义的存储类型了。
 
-## [#](https://www.thebyte.com.cn/container/storage.html#_7-5-6-kubernetes-%E5%AD%98%E5%82%A8%E7%B3%BB%E7%BB%9F%E8%AE%BE%E8%AE%A1)7.5.6 Kubernetes 存储系统设计
+ #### Kubernetes 存储系统设计
 
 相信大部分读者对如何使用 Volume 已经没有疑问了。接下来，我们将继续探讨存储系统与 Kubernetes 的集成，以及它们是如何与 Pod 相关联的。
 
@@ -1299,7 +1300,7 @@ volumeBindingMode: Immediate
 
 Kubernetes 中的 Volume 创建和管理主要由 VolumeManager（卷管理器）、AttachDetachController（挂载控制器）和 PVController（PV 生命周期管理器）负责。前面提到的 Provision、Delete、Attach、Detach、Mount 和 Unmount 操作由具体的 VolumePlugin（第三方存储插件，也称 CSI 插件）实现。
 
-图 7-24 展示了一个带有 PVC 的 Pod 创建过程：
+如图展示了一个带有 PVC 的 Pod 创建过程：
 
 1. 首先，用户创建一个包含 PVC 的 Pod，该 PVC 要求使用动态存储卷；
 2. 默认调度器 kube-scheduler 根据 Pod 配置、节点状态、PV 配置等信息，将 Pod 调度到一个合适的节点中；
@@ -1314,7 +1315,7 @@ CSI 插件在实现上是一个可执行的二进制文件，它以 gRPC 的方�
 
 其中，Identity Service 用于对外暴露插件本身的信息，它的接口定义如下：
 
-```
+```go
 service Identity {
   // 返回插件的名称、版本和其他元数据。
   rpc GetPluginInfo(GetPluginInfoRequest)
@@ -1329,9 +1330,9 @@ service Identity {
 }
 ```
 
-Controller Service 管理卷的生命周期，包括创建、删除和获取卷的信息，它的接口定义如下所示。可以看出，接口中定义的操作就是图 7-24 Master 节点中 准备（Provision）和 附加（Attach）的逻辑。
+Controller Service 管理卷的生命周期，包括创建、删除和获取卷的信息，它的接口定义如下所示。
 
-```
+```go
 service Controller {
   // 创建一个新卷，并返回该卷的详细信息。
   rpc CreateVolume (CreateVolumeRequest)
@@ -1350,8 +1351,7 @@ service Controller {
 ```
 
 Node Service 主要由 Kubelet 调用处理卷在节点上的挂载和卸载操作。它的接口定义如下：
-
-```
+```go
 service Node {
   // 将卷挂载到节点的设备上，使其准备好被 Pod 使用。
   rpc NodeStageVolume (NodeStageVolumeRequest)
@@ -1367,9 +1367,9 @@ service Node {
 
 CSI 插件机制为存储供应商和容器编排系统之间的交互提供了标准化的接口。云存储厂商只需根据这一标准接口实现自己的云存储插件，即可无缝衔接 Kubernetes 的底层编排系统，Kubernetes 也由此具备了多样化的云存储、备份和快照等能力。
 
-## [#](https://www.thebyte.com.cn/container/storage.html#_7-5-7-%E5%AD%98%E5%82%A8%E5%88%86%E7%B1%BB-%E5%9D%97%E5%AD%98%E5%82%A8%E3%80%81%E6%96%87%E4%BB%B6%E5%AD%98%E5%82%A8%E5%92%8C%E5%AF%B9%E8%B1%A1%E5%AD%98%E5%82%A8)7.5.7 存储分类：块存储、文件存储和对象存储
+#### 存储分类：块存储、文件存储和对象存储
 
-得益 Kubernetes 的开放性设计，通过图 7-25 感受提供了 CSI 插件支持的存储生态，基本上包含了市面上所有的存储供应商。
+得益 Kubernetes 的开放性设计，感受提供了 CSI 插件支持的存储生态，基本上包含了市面上所有的存储供应商。
 ![[Pasted image 20250607193324.png]]
 
 上述众多的存储系统无法一一展开，但作为业务开发工程师而言，直面的问题是，我应该选择哪种存储类型？无论是内置的存储插件还是第三方的 CSI 存储插件，总结提供的存储服务类型就 3 种：块存储（Block Storage）、文件存储（File Storage）和对象存储（Object Storage）。这三种存储类型特点与区别，笔者介绍如下：
@@ -1399,28 +1399,358 @@ CSI 插件机制为存储供应商和容器编排系统之间的交互提供了�
 ### 容器间通信原理
 要理解容器网络的工作原理，一定要从 Flannel 项目入手。Flannel 是 CoreOS 推出的容器网络解决方案，是业界公认是“最简单”的容器网络解决方案。接下来，笔者将以 Flannel 为例，介绍容器间通信的三种模式、容器网络接口（CNI）的设计及生态。
 
-## [#](https://www.thebyte.com.cn/container/container-network.html#_7-6-1-overlay-%E8%A6%86%E7%9B%96%E7%BD%91%E7%BB%9C%E6%A8%A1%E5%BC%8F)7.6.1 Overlay 覆盖网络模式
-
-本书第三章 5.4 节已详细介绍了 Overlay 网络的设计思想。简而言之，它在现有三层网络之上“叠加”了一层由内核 VXLAN 模块管理的虚拟二层网络。
+#### Overlay 覆盖网络模式
+Overlay 网络的设计思想。简而言之，它在现有三层网络之上“叠加”了一层由内核 VXLAN 模块管理的虚拟二层网络。
 
 为在宿主机网络上构建虚拟二层通信网络（即建立隧道网络），VXLAN 模块会在通信双方配置特殊的网络设备作为隧道端点，称为 VTEP（VXLAN Tunnel Endpoints，VXLAN 隧道端点）。VTEP 是虚拟网络设备，具备 IP 地址和 MAC 地址。它根据 VXLAN 通信规范，负责将分布在不同节点和子网的“主机”（如容器或虚拟机）发送的数据包进行封装和解封，从而使它们能够像在同一局域网内一样进行通信。
 
-上述基于 VTEP 设备构建“隧道”通信的流程，可以总结为图 7-26。
+上述基于 VTEP 设备构建“隧道”通信的流程。
 ![](https://www.thebyte.com.cn/assets/flannel-vxlan-CCkSgVDe.svg)
+从图中可以看到，宿主机内的容器通过 veth-pair（虚拟网卡）桥接到名为 cni0 的 Linux Bridge。同时，每个宿主机都有一个名为 flannel.1 的设备，作为 VXLAN 所需的 VTEP 设备。当容器接收或发送数据包时，它们通过 flannel.1 设备进行封装和解封。
 
+在 VXLAN 规范中，数据包由两层构成：
 
+- **内层帧**（Inner Ethernet Header），属于 VXLAN 逻辑网络；
+- **外层帧**（Outer Ethernet Header），属于宿主机网络。
 
+当 Kubernetes 节点加入 Flannel 网络后，Flannel 会启动名为 flanneld 的服务，作为 DaemonSet 在集群中运行。flanneld 负责为每个节点内的容器分配子网，并同步集群内的网络配置信息，以确保各节点之间的网络连通性和一致性。
 
+接下来，我们来分析当 Node1 中的 Container-1 与 Node2 中的 Container-2 通信时，Flannel 是如何进行封包和解包的。
 
+首先，当 Container-1 发出请求时，目标地址为 100.10.2.3 的 IP 数据包会通过 cni0 Linux 网桥。由于该地址不在 cni0 网桥的转发范围内，数据包将被送入 Linux 内核协议栈，进一步路由到 flannel.1 设备进行处理。
 
+Node1 中的路由信息由 flanneld 添加，规则大致如下：
 
+```bash
+[root@Node1 ~]# route -n
+Kernel IP routing table
+Destination     Gateway         Genmask         Flags Metric Ref    Use Iface
+100.10.1.0      0.0.0.0         255.255.255.0   U     0      0        0 cni0
+100.10.2.0      100.10.2.0      255.255.255.0   UG    0      0        0 flannel.1
+```
 
+上面两条路由的意思是：
 
+- 凡是发往 100.10.1.0/24 网段的 IP 报文，都需要经过接口 cni0。
+- 凡是发往 100.10.2.0/24 网段的 IP 报文，都需要经过接口 flannel.1，并且最后一跳的网关地址是 10.224.1.0（也就是 Node2 中 VTEP 的设备）。
 
+根据上述路由规则，Container-1 发出的数据包会交由 flannel.1 设备处理，即数据包进入了隧道的“起始端点”。当“起始端点”接收到原始的 IP 数据包后，它会构造 VXLAN 网络的内层以太网帧，并将其发送到隧道网络的“目的端点”，即 Node2 中的 VTEP 设备。这样，虚拟二层网络就成功建立，容器可以跨节点进行通信。
 
+构造 VXLAN 网络内层以太网帧的前提是，Node1 节点的 flannel.1 设备需要知道 Node2 中 flannel.1 设备的 IP 地址和 MAC 地址。当前，我们已经通过 Node1 的路由表获得了 VTEP 设备的 IP 地址（100.10.2.0）。那么，如何获取 flannel.1 设备的 MAC 地址呢？
 
+实际上，Node2 中 VTEP 设备的 MAC 地址已由 flanneld 自动添加到 Node1 的 ARP 表中。在 Node1 中执行下面的命令：
 
+```bash
+[root@Node1 ~]# ip n | grep flannel.1
+100.10.2.0  dev flannel.1 lladdr ba:74:f9:db:69:c1 PERMANENT # PERMANENT 表示永不过期
+```
 
+上面记录的意思是，IP 地址 10.10.2.0（也就是 Node2 flannel.1 设备的 IP）对应的 MAC 地址是 ba:74:f9:db:69:c1。
+
+>注意
+>这里 ARP 表记录并不是通过 ARP 协议学习得到的，而是 flanneld 预先为每个节点设置好的，没有过期时间。
+
+现在，内层以太网帧已完成封装。接下来，Linux 内核将内层帧封装至宿主机 UDP 报文内，以“搭便车”的方式发送到宿主机的二层网络中。
+
+为了实现“搭便车”机制，Linux 内核会在内层数据帧前添加一个特殊的 VXLAN Header，用于标识“乘客” 要转发给 VXLAN 模块处理。VXLAN Header 中有一个重要的标志 —— VNI（VXLAN Network Identifier），这是 VTEP 设备判断数据包是否属于自己处理的依据。在 Flannel 的 VXLAN 模式下，所有节点的 VNI 默认为 1，这也是 VTEP 设备命名为 flannel.1 的原因。
+
+接下来，Linux 内核会将二层数据帧封装进宿主机的 UDP 报文。
+
+在进行 UDP 封装时，首先需要确定四元组信息，即目的 IP 和目的端口。默认情况下，Linux 内核为 VXLAN 分配的 UDP 端口为 4789，因此目的端口为 4789。而目的 IP 地址则通过转发表（forwarding database，fdb）获取，fdb 表中的信息也由 flanneld 提前配置。在 Node1 中执行下面的命令：
+
+```bash
+[root@Node1 ~]# bridge fdb show | grep flannel.1
+ba:74:f9:db:69:c1 dev flannel.1 dst 192.168.50.3 self permanent
+```
+
+上面记录的意思是，目的 MAC 地址为 ba:74:f9:db:69:c1（ Node2 VTEP 设备的 MAC 地址）的数据帧封装后，应该发往哪个目的IP（192.168.50.3）。
+
+至此，VTEP 设备已收集到所有封装所需的信息，并调用宿主机网络的 UDP 协议发送函数将数据包发出。接下来的过程与本机 UDP 程序发送数据包类似，就不再赘述了。
+
+接下来，我们来看 Node2 收到数据包后的处理流程。
+
+当数据包到达 Node2 的 8472 端口时，内核中的 VXLAN 模块会检查以下两个条件：
+
+- **VNI 比较**：VXLAN 模块会检查 VXLAN Header 中的 VNI 是否与本机的 VXLAN 网络的 VNI 一致；
+- **MAC 地址比较**：接着，比较内层数据帧中的目的 MAC 地址与本机的 flannel.1 设备的 MAC 地址是否匹配。
+
+如果上述两个条件都满足，VXLAN 模块会去除数据包中的 VXLAN Header 和内层以太网帧 Header，恢复出 Container-1 原始发送的数据包。随后，根据 Node2 节点的路由规则（由 flanneld 提前配置），继续进行路由处理。
+
+```bash
+[root@Node2 ~]# route -n
+Kernel IP routing table
+Destination     Gateway         Genmask         Flags Metric Ref    Use Iface
+...
+100.10.2.0      0.0.0.0         255.255.255.0   U     0      0        0 cni0
+```
+
+从上面的路由规则可以看出，目标地址属于 100.10.2.0/24 网段的数据包会被交给 cni0 接口处理。接下来，数据包将按照 Linux 网桥的处理流程转发至对应的 Pod。
+
+至此，Flannel VXLAN 模式的整个工作流程宣告结束。
+
+#### 三层路由模式
+
+Flannel 的 host-gw 模式是“host gateway”的缩写。从名称可以看出，host-gw 工作模式通过宿主机路由表实现容器间通信。
+
+该模式的工作原理简单明了，如图 7-27 所示。
+![](https://www.thebyte.com.cn/assets/flannel-route-DdD3ppfH.svg)
+现在，假设 Node1 中的 container-1 与 Node2 中的 container-2 通信，我们来看 host-gw 模式是如何工作的。
+
+首先，当 Kubernetes 节点加入 Flannel 网络后，flanneld 会在上面创建以下路由规则：
+
+```bash
+$ ip route
+100.96.2.0/24 via 10.244.1.0 dev eth0
+```
+
+这条路由的含义是，目的地为 100.96.2.0/24 的 IP 包应通过 eth0 接口发送，其下一跳地址为 10.244.1.0（via 10.244.1.0）。
+
+什么是下一跳
+
+所谓“下一跳”是指 IP 数据包发送时需要经过某个路由设备的中转，下一跳的地址就是该中转路由设备的 IP 地址。例如，如果你个人电脑中配置的网关地址为 192.168.0.1，那么本机发出的所有 IP 包都需要经过 192.168.0.1 进行中转。
+
+一旦确定了下一跳地址，Node1 中的 container-1 发出的 IP 包将被宿主机网络路由至下一跳地址，即 Node2 节点。
+
+同样，Node2 中也有 flanneld 提前创建的路由规则。如下所示：
+
+```bash
+$ ip route
+100.10.0.0/24 dev cni0 proto kernel scope link src 100.10.0.1
+```
+
+这条路由规则的含义是，目的地属于 100.10.0.0/24 网段的 IP 包应被送往 cni0 网桥。接下来的处理过程笔者就不再赘述了。
+
+由此可见，Flannel 的 host-gw 模式实际上将每个容器子网（如 Node1 中的 100.10.1.0/24）的下一跳设置为目标主机的 IP 地址，利用宿主机的路由功能充当容器间通信的“路由网关”，这也是“host-gw”名称的由来。
+
+host-gw 模式没有封包/解包的额外消耗，在性能表现上肯定优于前面介绍的 Overlay 模式。但由于它依赖于下一跳路由，因此它肯定无法用于宿主机跨子网的通信。
+
+三层路由模式除了 Flannel 的 host-gw 模式外，还有一个更具代表性的项目 —— Calico。
+
+Calico 和 Flannel 的原理都是直接利用宿主机的路由功能实现容器间通信，但不同之处在于**Calico 通过 BGP 协议实现路由规则的自动化分发**。因此 Calico 的灵活性更强，更适合大规模容器组网。
+
+什么是 BGP
+
+BGP（Border Gateway Protocol，边界网关协议）使用 TCP 作为传输层的路由协议，用于交互 AS（Autonomous System，自治域）之间的路由规则。每个 BGP 服务实例一般称为“BGP Router”，与 BGP Router 连接的对端称为“BGP Peer”。每个 BGP Router 收到 Peer 传来的路由信息后，经过校验判断后，将其存储在路由表中。
+
+了解 BGP 协议之后，再看 Calico 的架构，就能理解它各个组件的作用了：
+
+- **Felix**：负责在宿主机上插入路由规则，相当于 BGP Router；
+- **BGP Client**：BGP 的客户端，负责在集群内分发路由规则，相当于 BGP Peer。
+
+![](https://www.thebyte.com.cn/assets/calico-bgp-Dusc2zh6.svg)
+除了对路由信息的维护的区别外，Calico 与 Flannel 的另一个不同之处在于，它不会设置任何虚拟网桥设备。观察图 ，Calico 并未创建 Linux Bridge，而是将每个 Veth-Pair 设备的另一端放置在宿主机中（名称以 cali 为前缀），然后根据路由规则进行转发。例如，Node2 中 container-1 的路由规则如下：
+
+```bash
+$ ip route
+10.223.2.3 dev cali2u3d scope link
+```
+
+这条路由规则的含义是，发往 10.223.2.3 的数据包应进入与 container-1 连接的 cali2u3d 设备（也就是 Veth-Pair 设备的另一端）。
+
+由此可见，Calico 实际上将集群中每个节点的容器视为一个 AS（Autonomous System，自治域），并将节点视为边界路由器，节点之间相互交互路由规则，从而构建出容器间的三层路由网络。
+
+#### Underlay 底层网络模式
+
+接下来介绍的是最后一种容器间通信模式 —— Underlay 底层网络模式。
+
+Underlay 模式本质上是**直接利用宿主机的二层网络进行通信**。在这种模式下，容器通常依赖于 MACVLAN 技术来组网。
+
+MAC 地址通常是网卡接口的唯一标识，保持一对一关系。而 MACVLAN 技术打破了这一规则，它借鉴 VLAN 子接口的概念，在物理设备之上、内核网络栈之下创建多个“虚拟以太网卡”，每个虚拟网卡都有独立的 MAC 地址。
+
+通过 MACVLAN 技术虚拟出的副本网卡在功能上与真实网卡完全对等。在接收到数据包后，物理网卡承担类似交换机的职责，它根据目标 MAC 地址判断该数据包应转发至哪块副本网卡处理。
+![](https://www.thebyte.com.cn/assets/macvlan-DYuGzlCt.svg)
+由于同一物理网卡虚拟出的副网卡天然位于同一子网（VLAN）内，因此它们可以直接在宿主机的二层网络中进行通信。
+
+Docker 的网络模型中的 Macvlan 模式，正是利用上述“子设备”实现组网。Docker 使用 Macvlan 模式配置网络的命令如下：
+
+```bash
+$ docker network create -d macvlan \
+  --subnet=192.168.1.0/24 \
+  --gateway=192.168.1.1 \
+  -o parent=eth0 macvlan_network
+```
+
+可以看出，Underlay 底层网络模式直接利用物理网络资源，绕过了容器网络桥接和 NAT，因此具有最佳的性能表现。不过，由于依赖硬件和底层网络环境，部署时需要根据具体的软硬件条件进行调整，缺乏 Overlay 网络那样的开箱即用的灵活性。
+
+### CNI 插件及生态
+
+设计一个容器网络模型是一个很复杂的事情，Kubernetes 本身并不直接实现网络模型，而是通过 CNI（Container Network Interface，容器网络接口）把网络变成外部可扩展的功能。
+
+CNI 接口最初由 CoreOS 为 rkt 容器创建，如今已成为容器网络的事实标准，广泛应用于 Kubernetes、Mesos 和 OpenShift 等容器平台。需要注意的是，CNI 接口并非类似于 CSI、CRI 那样的 gRPC 接口，而是指调用符合 CNI 规范的可执行程序，这些程序被称为“CNI 插件”。
+
+以 Kubernetes 为例，Kubernetes 节点默认的 CNI 插件路径为 /opt/cni/bin。在该路径下，可以查看到可用的 CNI 插件，这些插件有的是内置的，有些是安装容器网络方案时自动下载的。
+
+```bash
+$ ls /opt/cni/bin/
+bandwidth  bridge  dhcp  firewall  flannel calico-ipam cilium...
+```
+
+CNI 插件的大致工作流程如图所示。在创建 Pod 时，容器运行时根据 CNI 配置规范（如设置 VXLAN 网络、配置节点容器子网等），通过标准输入（stdin）向 CNI 插件传递网络配置信息。待 CNI 插件完成网络配置后，容器运行时通过标准输出（stdout）接收配置结果。
+![[Pasted image 20250609090454.png]]
+
+举个具体例子，使用 Flannel 配置 VXLAN 网络，来帮助你理解 CNI 插件的工作流程。
+
+首先，当在宿主机安装 flanneld 时，flanneld 启动会在每台宿主机生成对应的 CNI 配置文件，告诉 Kubernetes：该集群使用 flannel 容器网络方案。 CNI 配置文件通常位于 /etc/cni/net.d/ 目录下。它的配置如下所示：
+
+```json
+{
+  "cniVersion": "0.4.0",
+  "name": "container-cni-list",
+  "plugins": [
+    {
+      "type": "flannel",
+      "delegate": {
+        "isDefaultGateway": true,
+        "hairpinMode": true,
+        "ipMasq": true,
+        "kubeconfig": "/etc/kube-flannel/kubeconfig"
+      }
+    }
+  ]
+}
+```
+
+接下来，容器运行时（如 CRI-O 或 containerd）会加载上述 CNI 配置文件，将 plugins 列表中的第一个插件（Flannel）设置为默认插件。在 Kubernetes 启动容器之前（即在创建 Infra 容器时），kubelet 调用 CNI 插件，传入下面两类参数，来为 Infra 容器配置网络。
+
+- **Pod 信息**：如容器的唯一标识符、Pod 所在的命名空间、Pod 的名称等，这些信息一般组织成 JSON 对象；
+- **CNI 插件要执行的操作**：
+    - add 操作：用于分配 IP 地址、创建 veth pair 设备等，并将容器添加到 Flannel 网络中；
+    - del 操作：用于清除容器的网络配置，将容器从 Flannel 网络中删除。
+
+接下来，容器运行时会通过标准输入将上述参数传递给 CNI 插件。后续的逻辑则是 CNI 插件的具体操作，具体细节就不再赘述了。
+
+```bash
+echo '{
+  "cniVersion": "0.4.0",
+  "name": "flannel",
+  "type": "flannel",
+  "containerID": "abc123def456",
+  "namespace": "default",
+  "podName": "my-pod",
+  "netns": "/var/run/netns/abc123def456",
+  "ifname": "eth0",
+  "args": {
+    "isDefaultGateway": true
+  }
+}' | /opt/cni/bin/flannel add abc123def456
+```
+
+最后，CNI 插件执行完毕后，会将容器的 IP 地址等信息返回给容器运行时，并由 kubelet 更新到 Pod 的状态字段中，整个容器网络配置就宣告结束了。
+
+通过 CNI 这种开放性的设计，需要接入什么样的网络，设计一个对应的网络插件即可。这样一来节省了开发资源集中精力到 Kubernetes 本身，二来可以利用开源社区的力量打造一整个丰富的生态。现如今，如图 7-31 所示，支持 CNI 规范的网络插件多达几十种。这些网络插件笔者无法逐一解释，但就实现的容器通信模式而言，总结就上面三种类型：Overlay 覆盖网络模式、三层路由模式 和 Underlay 底层网络模式。
+![[Pasted image 20250609090504.png]]
+
+需要补充的是，对于容器编排系统而言，网络并非孤立的功能模块，还要配套各类的网络访问策略能力支持。例如，用来限制 Pod 出入站规则网络策略（NetworkPolicy），对网络流量数据进行分析监控等等额外功能。这些需求明显不属于 CNI 规范内的范畴，因此并不是每个 CNI 插件都会支持这些额外功能。如果你选择 Flannel 插件，必须配套其他插件（如 Calico 或 Cilium）才能启用网络策略。因此，有这方面需求的，应该考虑功能更全面的网络插件。
+
+### 资源模型及编排调度
+过去的集群管理平台（如 Mesos、Swarm）擅长的是，通过特定规则将容器调度到最佳节点上，这一功能称为“调度”。而 Kubernetes 擅长的，是根据系统规则和用户需求，自动化地处理好容器间的各种关系，这个功能就是我们常听到的 “编排”。
+
+#### 资源模型与资源管理
+##### 资源模型
+在 Kubernetes 中，Pod 是最小的调度单元。因此，所有与调度和资源管理相关的属性都应包含在 Pod 对象中。
+
+与调度密切相关的主要是 CPU 和内存的配置，如下所示：
+
+```yaml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: qos-demo-5
+  namespace: qos-example
+spec:
+  containers:
+    - name: qos-demo-ctr-5
+      image: nginx
+      resources:
+        limits:
+          memory: "200Mi"
+          cpu: "700m"
+        requests:
+          memory: "200Mi"
+          cpu: "700m"
+```
+像 CPU 这类的资源被称作可压缩资源。这类资源不足时，Pod 内的进程变得卡顿，但 Pod 不会因此被杀掉。
+
+Kubernetes 中的 CPU 资源计量单位为“个数”。例如，CPU=1 表示 Pod 的 CPU 限额为 1 个 CPU。具体的“1 个 CPU”定义取决于宿主机的硬件配置，它可能对应多核处理器中的一个核心、一个超线程（Hyper-Threading）或虚拟机中的一个虚拟处理器（vCPU）。对于不同硬件环境构建的 Kubernetes 集群，1 个 CPU 的实际算力可能有所不同，但 Kubernetes 只保证 Pod 能够使用到“1 个 CPU”这一逻辑单位的算力。
+
+实际上，Kubernetes 中常用的 CPU 计量单位是毫核（Millcores，缩写 m）。1 个 CPU 等于 1000m。这样可以更精确地度量和分配 CPU 资源。例如，分配给某个容器 500m CPU，相当于 0.5 个 CPU。
+
+像内存这样的资源被称作不可压缩资源。这类资源不足时，可能会杀死 Pod 中的进程，甚至驱逐整个 Pod。 对于内存资源来说，最基本的计量单位是字节。如果没有明确指定单位，默认以字节为计量单位。为了方便使用，Kubernetes 支持以 Ki、Mi、Gi、Ti、Pi、Ei 或 K、M、G、T、P、E 为单位来表示内存大小。例如，下面是一些相同内存值的不同表示方式：
+
+```bash
+128974848, 129e6, 129M, 123Mi
+```
+
+> 注意区分 Mi 和 M，1Mi=1024x1024，1M=1000x1000。随着数值的增加，Mi 和 M 计算的差异会越来越大，因此使用带小 i 的更准确。
+
+##### 资源分配
+Kubernetes 使用以下两个属性来描述 Pod 的资源分配和限制：
+
+- **requests**：表示容器请求的资源量，Kubernetes 会确保 Pod 获得这些资源。requests 是调度的依据，调度器只有在节点上有足够可用资源时，才会将 Pod 调度到该节点。
+- **limits**：表示容器可使用的资源上限，防止容器过度消耗资源，导致节点过载。limits 会配置到 cgroups 中相应任务的 /sys/fs/cgroup 文件中。
+
+Pod 是由一个或多个容器组成的，因此资源需求是在容器级别进行描述的。如图所示，每个容器都可以通过 resources 属性单独设定相应的 requests 和 limits。例如，container-1 指定其容器进程需要 500m（即 0.5 个 CPU）才能被调度，并且允许最多使用 1000m（即 1 个 CPU）。
+![[Pasted image 20250609164023.png]]
+
+requests 和 limits 除了用于表明资源需求和限制资源使用之外，还有一个隐含功能，它决定了 Pod 的 QoS（Quality of Service，服务质量）等级。
+
+##### 服务质量等级
+
+Kubernetes 根据每个 Pod 中容器资源配置情况，为 Pod 设置不同的服务质量（QoS，Quality of Service）等级。不同的 QoS 等级决定了当节点资源紧张时，Kubernetes 该如何处理节点上的 Pod，也就是接下来要讨论的驱逐（eviction）机制。
+
+Pod 的 QoS 级别与资源配置之间的对应关系，具体名称及含义如下：
+- **Guaranteed**：Pod 中每个容器必须配置相等的 CPU 和内存 requests 与 limits。此类 Pod 通常用于需要稳定资源的应用（如数据库）。在节点资源紧张时，Guaranteed 类型的 Pod 最不容易被驱逐。
+- **Burstable**：Pod 中至少有一个容器设置了 requests 或 limits，但并非所有容器的请求和限制都相等。Burstable 类型的 Pod 在资源使用上有一定灵活性，但优先级低于 Guaranteed 类型。在节点资源紧张时，可能会被驱逐。
+- **Best Effort**：Pod 中的容器没有设置 CPU 或内存的 requests 和 limits。Best Effort 类型的 Pod 通常用于临时或非关键任务，会尽可能使用可用资源，但在资源紧张时最容易被驱逐。
+![[Pasted image 20250609164044.png]]
+从上述描述可见，未配置 requests 和 limits 时，Pod 的 QoS 等级最低，在节点资源紧张时最容易受到影响。因此，合理配置 requests 和 limits 参数，能够提高调度精确度，并增强服务的稳定性。
+
+##### 节点资源管理
+
+在 Kubernetes 系统中，每个节点都运行着容器运行时（如 Docker、containerd）以及负责管理容器的组件 kubelet。这些基础服务在节点上运行时，会占用一定的资源。因此，当 Kubernetes 进行资源管理时，必须为这些基础服务预先分配一部分资源。
+
+Kubelet 通过下面两个参数，控制节点上基础服务的资源预留额度：
+
+- **--kube-reserved**=[cpu=100m][,][memory=100Mi][,][ephemeral-storage=1Gi]：预留给 Kubernetes 组件 CPU、内存和存储资源。
+- **--system-reserved**=[cpu=100mi][,][memory=100Mi][,][ephemeral-storage=1Gi]：预留给操作系统的 CPU、内存和存储资源。
+
+需要注意的是，考虑 Kubernetes 驱逐机制，kubelet 会确保节点上的资源使用率不会达到 100%。因此，Pod 实际可用的资源会更少一些。最终，一个节点的资源分配如图 7-34 所示。
+
+Node Allocatable Resource（节点可分配资源）= Node Capacity（节点所有资源） - Kube Reserved（Kubernetes 组件预留资源）- System Reserved（系统预留资源）- Eviction Threshold（为驱逐预留的资源）。
+![](https://www.thebyte.com.cn/assets/k8s-resource-Db4gyTHO.svg)
+#####  驱逐机制
+
+当不可压缩类型的资源（如可用内存 memory.available、宿主机磁盘空间 nodefs.available、镜像存储空间 imagefs.available）不足时，保证节点稳定的手段是驱逐（Eviction）那些不太重要的 Pod，使其能够重新调度到其他节点。
+
+承担上述职责的组件为 kubelet。kubelet 运行在节点上，能够轻松感知节点的资源耗用情况。当 kubelet 发现不可压缩类型的资源即将耗尽时，触发两类驱逐策略。
+
+kubelet 的第一种驱逐策略是软驱逐（soft eviction）。
+
+由于节点资源耗用可能是临时性波动，通常会在几十秒内恢复。因此，当资源耗用达到设定阈值时，应先观察一段时间再决定是否触发驱逐操作。与软驱逐相关的 kubelet 配置参数如下：
+
+- **--eviction-soft**：软驱逐触发条件。例如，可用内存（memory.available）< 500Mi，可用磁盘空间（nodefs.available）< 10% 等等。
+- **--eviction-soft-grace-period**：软驱逐宽限期。例如，memory.available=2m30s，即可用内存 < 500Mi，并持续 2m30s 后，才真正开始驱逐 Pod。
+- **--eviction-max-pod-grace-period**：Pod 优雅终止宽限期，该参数决定给 Pod 多少时间来优雅地关闭（graceful shutdown）。
+
+kubelet 的第二种驱逐策略是硬驱逐（hard eviction）。
+
+硬驱逐主要关注节点稳定性，防止资源耗尽导致节点不可用。硬驱逐相当直接，当 kubelet 发现节点资源耗用达到硬驱逐阈值时，会立即杀死相应的 Pod。与硬驱逐相关的 kubelet 配置参数仅有 --eviction-hard，其配置方式与 --eviction-soft 一致，笔者就不再赘述了。
+
+需要注意的是，当 kubelet 驱逐部分 Pod 后，节点的资源使用可能在一段时间后再次达到阈值，进而触发新的驱逐，形成循环，这种现象称为“驱逐波动”。为了预防这种情况，kubelet 预留了以下参数：
+
+- **--eviction-minimum-reclaim**：决定每次驱逐时至少要回收的资源量，以停止驱逐操作；
+- **--eviction-pressure-transition-period**：决定 kubelet 上报节点状态的时间间隔。较短的上报周期可能导致频繁更改节点状态，从而引发驱逐波动。
+
+最后，以下是与驱逐相关的 kubelet 配置示例：
+
+```yaml
+$ kubelet --eviction-soft=memory.available<500Mi,nodefs.available < 10%,nodefs.inodesFree < 5%,imagefs.available < 15% \
+--eviction-soft-grace-period=memory.available=1m30s,nodefs.available=1m30s \
+--eviction-max-pod-grace-period=120 \
+--eviction-hard=memory.available<500Mi,nodefs.available < 5% \
+--eviction-pressure-transition-period=30s \
+--eviction-minimum-reclaim="memory.available=500Mi,nodefs.available=500Mi,imagefs.available=1Gi"
+```
 
 
 
