@@ -1752,6 +1752,7 @@ $ kubelet --eviction-soft=memory.available<500Mi,nodefs.available < 10%,nodefs.i
 --eviction-minimum-reclaim="memory.available=500Mi,nodefs.available=500Mi,imagefs.available=1Gi"
 ```
 
+#### 扩展资源与设备插件
 
 
 
