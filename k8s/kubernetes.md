@@ -1558,7 +1558,7 @@ Underlay 模式本质上是**直接利用宿主机的二层网络进行通信**�
 MAC 地址通常是网卡接口的唯一标识，保持一对一关系。而 MACVLAN 技术打破了这一规则，它借鉴 VLAN 子接口的概念，在物理设备之上、内核网络栈之下创建多个“虚拟以太网卡”，每个虚拟网卡都有独立的 MAC 地址。
 
 通过 MACVLAN 技术虚拟出的副本网卡在功能上与真实网卡完全对等。在接收到数据包后，物理网卡承担类似交换机的职责，它根据目标 MAC 地址判断该数据包应转发至哪块副本网卡处理。
-![](https://www.thebyte.com.cn/assets/macvlan-DYuGzlCt.svg)
+![[macvlan-DYuGzlCt.svg]]
 由于同一物理网卡虚拟出的副网卡天然位于同一子网（VLAN）内，因此它们可以直接在宿主机的二层网络中进行通信。
 
 Docker 的网络模型中的 Macvlan 模式，正是利用上述“子设备”实现组网。Docker 使用 Macvlan 模式配置网络的命令如下：
@@ -1753,6 +1753,687 @@ $ kubelet --eviction-soft=memory.available<500Mi,nodefs.available < 10%,nodefs.i
 ```
 
 #### 扩展资源与设备插件
+在 Kubernetes 中，节点的标准资源（如 CPU、内存和存储）由 Kubelet 自动报告，但节点内的异构硬件资源（如 GPU、FPGA、RDMA 或硬件加速器），Kubernetes 并未识别和管理。
+
+##### 扩展
+作为通用的容器编排平台，Kubernetes 需要集成各种异构硬件资源，以满足更广泛的计算需求。为此，Kubernetes 提供了“扩展资源”（Extended Resource）机制，允许用户像使用标准资源一样声明和调度特殊硬件资源。
+
+为了让调度器了解节点的异构资源，节点需向 API Server 报告资源情况。报告方式是通过向 Kubernetes API Server 发送 HTTP PATCH 请求。例如，某节点拥有 4 个 GPU 资源，以下是相应的 PATCH 请求示例：
+
+```bash
+PATCH /api/v1/nodes/<your-node-name>/status HTTP/1.1
+Accept: application/json
+Content-Type: application/json-patch+json
+Host: k8s-master:8080
+[
+  {
+    "op": "add",
+    "path": "/status/capacity/nvidia.com~1gpu",
+    "value": "4"
+  }
+]
+```
+
+需要注意的是，上述 PATCH 请求仅告知 Kubernetes，节点 `<your-node-name>` 拥有 4 个名为 GPU 的资源，但 Kubernetes 并不理解 GPU 资源的具体含义和用途。
+
+接着，运行 kubectl describe node 命令，查看节点资源情况。从输出结果中可以看到，之前扩展的 nvidia.com/gpu 资源容量为 4。
+
+```bash
+$ kubectl describe node <your-node-name>
+...
+Status
+  Capacity:
+  	cpu: 2
+  	memory: 2049008Ki
+  	nvidia.com/gpu: 4
+```
+
+在完成上述操作后，配置 Pod 的 YAML 文件时，就可以像配置标准资源（如 CPU 和内存）一样，为自定义资源（例如 nvidia.com/gpu）设置 request 和 limits。以下是包含 nvidia.com/gpu 资源申请的 Pod 配置示例：
+
+```yaml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: gpu-pod
+spec:
+  containers:
+    - name: cuda-container
+      image: nvidia/cuda:10.0-base
+      resources:
+        request:
+          nvidia.com/gpu: 1
+```
+
+在上述 Pod 资源配置中，GPU 的资源名称为 nvidia.com/gpu，并且为其分配了 1 个该资源的配额。这表明 Kubernetes 调度器会将该 Pod 调度到具有足够 nvidia.com/gpu 资源的节点上。
+
+一旦 Pod 成功调度到目标节点，系统将自动执行一系列配置操作，例如设置环境变量、挂载 GPU 设备驱动等。这些操作完成后，容器内的程序便可使用 GPU 资源了。
+
+##### 设备插件
+
+除非特殊情况，通常不需用手动的方式扩展异构资源。
+
+在 Kubernetes 中，管理异构资源主要通过一种称为**设备插件**（Device Plugin）的机制负责。该机制的原理是，通过定义一系列标准化的 gRPC 接口，使 kubelet 能够与设备插件进行交互，从而实现设备发现、状态更新以及资源上报等功能。
+
+具体来说，设备插件定义了如下 gRPC 接口，硬件设备插件按照这些规范实现接口后，即可与 kubelet 进行交互。
+
+```go
+service DevicePlugin {
+	// 返回设备插件的配置选项。
+	rpc GetDevicePluginOptions(Empty) returns (DevicePluginOptions) {}
+	// 实时监控设备资源的状态变化，并将设备资源信息上报至 Etcd 中。
+	rpc ListAndWatch(Empty) returns (stream ListAndWatchResponse) {}
+	// 执行特定设备的初始化操作，并告知 kubelet 如何使设备在容器中可用。
+	rpc Allocate(AllocateRequest) returns (AllocateResponse) {}
+
+	// 从一组可用的设备中返回一些优选的设备用来分配。
+	rpc GetPreferredAllocation(PreferredAllocationRequest) returns (PreferredAllocationResponse) {}
+
+	// 在容器启动之前调用，用于特定于设备的初始化操作。确保容器能够正确地访问和使用特定的硬件资源。
+	rpc PreStartContainer(PreStartContainerRequest) returns (PreStartContainerResponse) {}
+}
+```
+
+目前，Kubernetes 社区已有多个专用设备插件，涵盖 NVIDIA GPU、Intel GPU、AMD GPU、FPGA 和 RDMA 等硬件。以 GPU 设备插件为例，其工作原理如下：
+
+- **设备发现与注册**：设备插件在节点上运行，自动检测并将 GPU 资源注册到 Kubernetes API，例如，NVIDIA GPU 设备插件将 GPU 注册为 nvidia.com/gpu；
+- **资源暴露与分配**：设备插件通过 Kubernetes API 将 GPU 资源暴露给 Pod，Pod 可通过 request 和 limit 字段声明所需的 GPU 资源，例如，Pod 可以在 limits 中指定 nvidia.com/gpu: 1 来请求一个 NVIDIA GPU；
+- **调度与使用**：当 Pod 请求特殊硬件资源时，Kubernetes 调度器根据节点的资源状态和 Pod 的需求进行调度。一旦 Pod 被调度并分配了资源，kubelet 调用设备插件的 Allocate 接口获取设备配置信息（如设备路径、驱动目录），并将这些信息添加到容器创建请求中。最终，容器运行时（如 Docker、Containerd）会将硬件驱动目录挂载到容器内，容器中的应用程序即可直接访问这些设备了。
+- ![[DevicePlugin-DBWIuMeo.svg]]
+最后，再来看扩展资源和设备插件的问题。Pod 只能通过类似“nvidia.com/gpu:2”的计数方式申请 2 个 GPU，但这些 GPU 的具体型号、拓扑结构、是否共享等属性并不明确。也就是说，设备插件仅实现了基本的入门级功能，能用，但不好用。
+
+在“成本要省”、“资源利用率要高”背景推动下，Nvidia、Intel 等头部厂商联合推出了“动态资源分配”（Dynamic Resource Allocation，DRA）机制，允许用户以更复杂的方式描述异构资源，而不仅仅是简单的计数形式。DRA 属于较新的机制，具体的接口规范因硬件供应商和 Kubernetes 版本不同而有所变化。
+
+##### 默认调度器及扩展设计
+
+如果节点只有几十个，为新建的 Pod 找到合适的节点并不困难。但当节点的数量扩大到几千台甚至更多时，情况就复杂了：
+
+- 首先，节点资源无时无刻不在变化，如果每次调度都需要数千次远程请求获取信息，势必因耗时过长，增加调度失败的风险。
+- 其次，调度器频繁发起网络请求，极容易成为集群的性能瓶颈，影响整个集群的运行。
+
+>为了充分利用硬件资源，通常会将各种类型(CPU 密集、IO 密集、批量处理、低延迟作业)的 workloads 运行在同一台机器上，这种方式减少了硬件上的投入，但也使调度问题更加复杂。
+>随着集群规模的增大，需要调度的任务的规模也线性增大，由于调度器的工作负载与集群大小大致成比例，调度器有成为可伸缩性瓶颈的风险。
+>                                                                                           —— from Omega 论文
+
+Omega 论文中提出了一种基于“共享状态”（Scheduler Cache）的双循环调度机制，用来解决大规模集群的调度效率问题。双循环的调度机制不仅应用在 Google 的 Omega 系统中，也被 Kubernetes 继承下来。
+
+Kubernetes 默认调度器（kube-scheduler）双循环调度机制如图所示。
+![[kube-scheduler-DoXi8Zhy.svg]]
+Kubernetes 调度的核心在于两个互相独立的控制循环。
+
+第一个控制循环被称为“Informer 循环”。其主要逻辑是启动多个 Informer 来监听 API 资源（主要是 Pod 和 Node）状态的变化。一旦资源发生变化，Informer 会触发回调函数进行进一步处理。例如，当一个待调度的 Pod 被创建时，Pod Informer 会触发回调，将 Pod 入队到调度队列（PriorityQueue），以便在下一阶段处理。
+
+当 API 资源发生变化时，Informer 的回调函数还负责更新调度器缓存（Scheduler Cache），以便将 Pod 和 Node 信息尽可能缓存，从而提高后续调度算法的执行效率。
+
+第二个控制循环是“Scheduling 循环”。其主要逻辑是从调度队列（PriorityQueue）中不断出队一个 Pod，并触发两个核心的调度阶段：预选阶段（图 7-36 中的 Predicates）和优选阶段。
+
+Kubernetes 从 v1.15 版本起，为默认调度器（kube-scheduler）设计了可扩展的机制 —— Scheduling Framework。其主要目的是在调度器生命周期的关键点暴露可扩展接口，允许实现自定义的调度逻辑。这套机制基于标准 Go 语言插件机制，需要按照规范编写 Go 代码并进行静态编译集成，其通用性相较于 CNI、CSI 和 CRI 等较为有限。
+![[scheduling-framework-extensions-Dw4Q9WYG.svg]]
+(接下来，我们回到调度处理逻辑，首先来看预选阶段的处理。
+
+预选阶段的主要逻辑是在调度器生命周期的 PreFilter 和 Filter 阶段，调用相关的过滤插件，筛选出符合 Pod 要求的节点集合。以下是 Kubernetes 默认调度器内置的一些筛选插件：
+```yaml
+// k8s.io/kubernetes/pkg/scheduler/algorithmprovider/registry.go
+func getDefaultConfig() *schedulerapi.Plugins {
+  ...
+  Filter: &schedulerapi.PluginSet{
+      Enabled: []schedulerapi.Plugin{
+        {Name: nodeunschedulable.Name},
+        {Name: noderesources.FitName},
+        {Name: nodename.Name},
+        {Name: nodeports.Name},
+        {Name: nodeaffinity.Name},
+        {Name: volumerestrictions.Name},
+        {Name: tainttoleration.Name},
+        {Name: nodevolumelimits.EBSName},
+        {Name: nodevolumelimits.GCEPDName},
+        {Name: nodevolumelimits.CSIName},
+        {Name: nodevolumelimits.AzureDiskName},
+        {Name: volumebinding.Name},
+        {Name: volumezone.Name},
+        {Name: interpodaffinity.Name},
+      },
+    },
+}
+```
+
+上述插件本质上是按照 Scheduling Framework 规范实现 Filter 方法，根据一系列预设的策略筛选节点。它们的筛选策略可以总结为以下三类：
+
+- **通用过滤策略**：负责基础的筛选操作，例如检查节点是否有足够的可用资源满足 Pod 请求，或检查 Pod 请求的宿主机端口是否与节点中的端口冲突。相关插件包括 noderesources、nodeports 等。。
+- **节点相关的过滤策略**：与节点特性相关的筛选策略。例如，检查 Pod 的污点容忍度（tolerations）是否匹配节点的污点（taints），检查 Pod 的节点亲和性（nodeAffinity）是否与节点匹配，或检查 Pod 与节点中已有 Pod 之间的亲和性（Affinity）和反亲和性（Anti-Affinity）。相关插件包括 tainttoleration、interpodaffinity、nodeunschedulable 等。
+- **Volume 相关的过滤策略**：与存储卷相关的筛选策略。例如，检查 Pod 挂载的 PV 是否冲突（如 AWS EBS 类型的 Volume 不允许多个 Pod 同时使用），或者检查节点上某类型 PV 的数量是否超限。相关插件包括 nodevolumelimits、volumerestrictions 等。
+
+预选阶段执行完毕后，会得到一个可供 Pod 调度的节点列表。如果该列表为空，表示 Pod 无法调度。至此，预选阶段宣告结束，接着进入优选阶段。
+
+优选阶段的设计与预选阶段类似，主要通过调用相关的打分插件，对预选阶段得到的节点进行排序，选择出评分最高的节点来运行 Pod。
+
+Kubernetes 默认调度器内置的打分插件如下所示。与筛选插件不同，打分插件额外包含一个权重属性。
+
+```yaml
+// k8s.io/kubernetes/pkg/scheduler/algorithmprovider/registry.go
+func getDefaultConfig() *schedulerapi.Plugins {
+  ...
+  Score: &schedulerapi.PluginSet{
+      Enabled: []schedulerapi.Plugin{
+        {Name: noderesources.BalancedAllocationName, Weight: 1},
+        {Name: imagelocality.Name, Weight: 1},
+        {Name: interpodaffinity.Name, Weight: 1},
+        {Name: noderesources.LeastAllocatedName, Weight: 1},
+        {Name: nodeaffinity.Name, Weight: 1},
+        {Name: nodepreferavoidpods.Name, Weight: 10000},
+        {Name: defaultpodtopologyspread.Name, Weight: 1},
+        {Name: tainttoleration.Name, Weight: 1},
+      },
+    }
+    ...
+}
+```
+
+优选阶段最重要的策略是 NodeResources.LeastAllocated，它的计算公式如下：
+
+
+$$ \text{score} = \frac{\left(\frac{(capacity_{cpu} - \sum_{pods} requested_{cpu}) \times 10}{capacity_{cpu}} + \frac{(capacity_{memory} - \sum_{pods} (requested_{memory})) \times 10}{capacity_{memory}}\right)}{2} $$
+上述公式实际上是根据节点中 CPU 和内存资源的剩余量进行打分，从而使 Pod 更倾向于调度到资源使用较少的节点，避免某些节点资源过载而其他节点资源闲置。
+
+与 NodeResources.LeastAllocated 策略配合使用的，还有 NodeResources.BalancedAllocation 策略，它的计算公式如下：
+
+$$\text{score}=10−\text{variance}(\text{cpuFraction},\text{memoryFraction},\text{volumeFraction}) \times 10$$
+
+这里的 Fraction 指的是资源利用比例。以 cpuFraction 为例，它的计算公式如下：
+
+$$cpuFraction= \frac{\text{Pod 的 CPU 请求}} {\text{节点中 CPU 总量}}​$$
+
+memoryFraction 和 volumeFraction 也是类似的概念。Fraction 算法的主要作用是计算资源利用比例的方差，以评估节点的资源（CPU、内存、volume）分配是否均衡，避免出现 CPU 被过度分配而内存浪费的情况。方差越小，说明资源分配越均衡，得分也就越高。
+
+除了上述两种优选策略外，还有 InterPodAffinity（根据 Pod 之间的亲和性、反亲和性规则来打分）、Nodeaffinity（根据节点的亲和性规则来打分）、ImageLocality（根据节点中是否缓存容器镜像打分）、NodePreferAvoidPods（基于节点的注解信息打分）等等，笔者就不再一一解释了。
+
+值得注意的是，打分插件的权重可以在调度器配置文件中进行设置，以调整它们在调度决策中的影响力。例如，如果希望更重视 NodePreferAvoidPods 插件的打分结果，可以为该插件分配更高的权重，如下所示：
+```yaml
+apiVersion: kubescheduler.config.k8s.io/v1
+kind: KubeSchedulerConfiguration
+profiles:
+- schedulerName: default-scheduler
+  plugins:
+    score:
+      enabled:
+      - name: NodePreferAvoidPods
+        weight: 10000
+      - name: InterPodAffinity
+        weight: 1
+      ...
+```
+
+经过优选阶段之后，调度器根据预定的打分策略为每个节点分配一个分数，最终选择出分数最高的节点来运行 Pod。如果存在多个节点分数相同，调度器则随机选择其中一个。
+
+选择出最终目标节点后，接下来就是通知目标节点内的 kubelet 创建 Pod 了。
+
+在这一阶段，调度器不会直接与 kubelet 通信，而是将 Pod 对象的 nodeName 修改为选定节点的名称。kubelet 会持续监控 Etcd 中 Pod 信息的变化，发现变动后执行一个名为“Admin”的本地操作，确认资源可用性和端口是否冲突。这相当于执行一遍通用的过滤策略，对 Pod 是否能在该节点运行进行二次确认。
+
+不过，从调度器更新 Etcd 中的 nodeName 到 kubelet 检测到变化，再到二次确认是否可调度，这一过程可能会持续一段不等的时间。如果等到所有操作完成才宣布调度结束，势必会影响整体调度效率。
+
+调度器采用了“乐观绑定”（Optimistic Binding）策略来解决上述问题。首先，调度器更新 Scheduler Cache 里的 Pod 的 nodeName 的信息，并发起异步请求 更新 Etcd 中的远程信息，该操作在调度生命周期中称 Bind。如果调度成功了，Scheduler Cache 和 Etcd 中的信息势必一致。如果调度失败了（也就是异步更新失败），也没有太大关系。因为 Informer 会持续监控 Pod 变化，只要将调度成功、但没有创建成功的 Pod nodeName 字段清空，然后同步至调度队列，待下一次调度解决即可。
+
+### 资源弹性伸缩
+为了平衡资源预估和实际使用之间的差距，Kubernetes 提供了 HPA、VPA 和 CA 三种自动扩缩（autoscaling）机制。
+
+#### Pod 水平自动伸缩
+HPA（Horizontal Pod Autoscaler，Pod 水平自动扩缩）是根据工作负载（如 Deployment）的资源使用情况调整 Pod 副本数量的机制。
+
+HPA 的工作原理简单明了：
+
+- 当负荷较高时，增加 Pod 副本数量；
+- 当负荷较低时，减少 Pod 副本数量。
+
+因此，自动伸缩的关键在于准确监控资源使用情况。为此，Kubernetes 提供了 Metrics API，用于获取节点和 Pod 的资源信息。以下是 Metrics API 的响应示例，展示了 CPU 和内存的使用情况。
+
+```bash
+$ kubectl get --raw "/apis/metrics.k8s.io/v1beta1/nodes/minikube" | jq '.'
+{
+  "kind": "NodeMetrics",
+  "apiVersion": "metrics.k8s.io/v1beta1",
+  "metadata": {
+    "name": "minikube",
+    "selfLink": "/apis/metrics.k8s.io/v1beta1/nodes/minikube",
+    "creationTimestamp": "2022-01-27T18:48:43Z"
+  },
+  "timestamp": "2022-01-27T18:48:33Z",
+  "window": "30s",
+  "usage": {
+    "cpu": "487558164n",
+    "memory": "732212Ki"
+  }
+}
+```
+
+最初，Metrics API 仅支持 CPU 和内存指标。随着需求的增加，Metrics API 扩展了对用户自定义指标（Custom Metrics）的支持。用户可以开发 Custom Metrics Server，并通过调用其他服务（如 Prometheus）来监控应用程序、系统资源、服务性能及外部系统的繁忙程度。
+
+接下来介绍 HPA 的使用方式。如图所示，使用 kubectl autoscale 命令创建 HPA，设置监控指标类型（如 cpu-percent）、目标值（如 70%）以及 Pod 副本数量的范围（最少 1 个，最多 10 个）。
+
+```bash
+$ kubectl autoscale deployment foo --cpu-percent=70 --min=1 --max=10
+```
+
+随后，HPA 定期获取 Metrics 数据，与设定的目标值比较，决定是否进行扩缩。如果需要扩缩，HPA 调用 Deployment 的 Scale 接口调整副本数量，将每个 Pod 的负荷维持在用户期望的水平。
+![[HPA-CFL2sKLt.svg]]
+#### Pod 垂直自动伸缩
+VPA（Vertical Pod Autoscaler）是 Pod 的垂直自动伸缩组件。其工作原理与 HPA 类似，两者都是通过 Metrics API 获取指标并进行评估调整。不同之处在于，VPA 调整的是工作负载的资源配额，例如 Pod 的 CPU 和内存的 request 和 limit。
+
+需要注意的是，VPA 是 Kubernetes 的附加组件，必须安装并配置后，才能为工作负载（如 Deployment）定义资源调整策略。以下是一个 VPA 配置示例，供参考：
+
+```yaml
+apiVersion: autoscaling.k8s.io/v1
+kind: VerticalPodAutoscaler
+metadata:
+  name: example-app-vpa
+  namespace: default
+spec:
+  targetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: example-app
+  updatePolicy:
+    updateMode: Auto  # 决定 VPA 如何应用推荐的资源调整，也可以设置为 "Off" 或 "Initial" 来控制更新策略
+```
+
+将上述 YAML 文件提交到 Kubernetes 集群后，可以通过 kubectl describe vpa 命令查看 VPA 推荐的资源策略：
+
+```yaml
+$ kubectl describe vpa example-app-vpa
+...
+Recommendation:
+    Container Recommendations:
+      Container Name:  nginx
+      Lower Bound:
+        Cpu:     25m
+        Memory:  262144k
+      Target:
+        Cpu:     25m
+        Memory:  262144k
+      Uncapped Target:
+        Cpu:     25m
+        Memory:  262144k
+      Upper Bound:
+        Cpu:     11601m
+        Memory:  12128573170
+...
+```
+
+可以看出，VPA 更适用于负载变化较大、资源需求不确定的场景，尤其在无法精确预估应用资源需求时。
+
+#### 基于事件驱动的伸缩
+
+虽然 HPA 基于 Metrics API 实现了弹性伸缩，但其指标范围有限且粒度较粗。为了支持基于外部事件的更细粒度扩缩容，微软与红帽联合开发了 KEDA（Kubernetes Event-driven Autoscaling）。
+
+KEDA 的出现并非为了取代 HPA，而是与其互补。其工作原理如图所示：用户通过配置 ScaledObject（缩放对象）来定义 Scaler（KEDA 内部组件）的行为，Scaler 持续从外部系统获取状态数据，并与扩缩条件进行比较。当条件满足时，Scaler 触发扩缩操作，调用 Kubernetes 的 HPA 组件调整工作负载的 Pod 副本数。
+
+![[Pasted image 20250613135354.png]]
+KEDA 内置了多种常见的 Scaler，用于处理特定的事件源或指标源。以下是部分 Scaler 示例，供参考：
+
+- 消息队列 Scaler：获取 Kafka、RabbitMQ、Azure Queue、AWS SQS 等消息队列的消息数量。
+- 数据库 Scaler：获取 SQL 数据库的连接数、查询延迟等。
+- HTTP 请求 Scaler：获取 HTTP 请求数量或响应时间。
+- Prometheus Scaler：通过 Prometheus 获取自定义指标来触发扩缩操作，如队列长度、CPU 使用率等业务特定指标。
+- 时间 Scaler：根据特定时间段触发扩缩逻辑，如每日的高峰期或夜间低峰期。
+
+以下是 Kafka Scaler 的配置示例，它监控某个 Kafka 主题中的消息数量：
+
+- 当消息队列超过设定阈值时，触发扩容操作，增加 Pod 副本数量，以提高消息处理吞吐量；
+- 当消息队列为空时，触发缩减操作，减少 Pod 副本数量，降低资源成本（ Pod 数可缩减至 0，minReplicaCount）。
+
+```yaml
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: kafka-scaledobject
+  namespace: default
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: brm-index-basic
+  pollingInterval: 10
+  minReplicaCount: 0
+  maxReplicaCount: 20
+  triggers:
+    - type: kafka
+      metadata:
+        bootstrapServers: kafka-server:9092
+        consumerGroup: basic
+        topic: basic
+        lagThreshold: "100"
+        offsetResetPolicy: latest
+```
+
+#### 节点自动伸缩
+
+业务增长（或萎缩）可能导致集群资源不足或过度冗余。如果能够根据集群资源情况自动调整节点数量，不仅能保证集群的可用性，还能最大程度地降低资源成本。
+
+CA（Cluster AutoScaler）是专门用于调整节点的组件，其功能如下：
+
+- **自动扩展**（Scale Up）：当节点资源不能满足 Pod 需求时，Cluster AutoScaler 向云服务提供商（如 GCE、GKE、Azure、AKS、AWS 等）请求创建新的节点，扩展集群容量，确保业务能够获得所需的资源。
+- **自动缩减**（Scale Down）：当节点资源利用率长期处于低水平（如低于 50%），Cluster AutoScaler 将该节点上的 Pod 调度到其他节点，然后将节点从集群中移除，避免资源浪费。
+
+![[Pasted image 20250613135414.png]]
+
+最后，Cluster Autoscaler 是 Kubernetes 官方提供的组件，但它深度依赖于公有云厂商。因此，具体的使用方法、功能和限制取决于云厂商的实现。
+
+
+### 服务网格技术
+>计算机科学中的所有问题都可以通过增加一个间接层来解决。如果不够，那就再加一层。
+>                                                                                           —— by David Wheeler
+
+在传统分布式系统中，解决上述问题通常依赖于微服务治理框架（如 Spring Cloud 或 Apache Dubbo），这类框架将业务逻辑和技术方案紧密耦合。而在云原生时代，解决这些问题时，在 Pod 内注入代理型边车（Sidecar Proxy） ，业务对此完全无感知，显然是最“Kubernetes Native”的方式。边车代理将非业务逻辑从应用程序中剥离，服务间的通信治理由此开启了全新的进化，并最终演化出一层全新基础设施层 —— 服务网格（ServiceMesh）。
+
+#### 什么是服务网格
+2016 年，William Morgan 离开 Twiiter，组建了一个小型技术公司 Buoyant。不久之后，他在 Github 上发布了创业项目 Linkerd，业界第一款服务网格诞生！
+
+那么，服务网格（Service Mesh）到底是什么？服务网格的概念最早由 William Morgan 在其博文《What’s a service mesh? And why do I need one?》中提出。作为服务网格的创造者，引用他的定义无疑是最官方和权威的。
+
+>服务网格的定义
+>服务网格是一个处理服务通讯的专门的基础设施层。它的职责是在由云原生应用组成服务的复杂拓扑结构下进行可靠的请求传送。在实践中，它是一组和应用服务部署在一起的轻量级的网络代理，对应用服务透明。
+                                                  —— What’s a service mesh？And why do I need one?，William Morgan
+
+#### 服务间通信的演化
+##### 原始的通信时代
+大约 50 年前，初代工程师编写涉及网络的应用程序，需要在业务代码里“埋入”各类网络通信的逻辑。比如实现可靠连接、超时重传和拥塞控制等功能，这些功能与业务逻辑毫无关联，但不得不与业务代码混杂在一起实现。
+
+为了解决每个应用程序都要重复实现相似的通信控制逻辑问题，TCP/IP 协议应运而生，它把通信控制逻辑从应用程序中剥离，并将这部分逻辑下沉，成为操作系统网络层的一部分。
+
+![[Pasted image 20250613155615.png]]
+在原始的通信时代，TCP/IP 协议的出现让我们看到这样的变化：非业务逻辑从应用程序中剥离出来，剥离出来的通信逻辑下沉成为基础设施层。于是，工程师的生产力被解放，各类网络应用开始遍地开花。
+
+##### 第一代微服务
+随着 TCP/IP 协议的出现，机器之间的网络通信不再是难题，分布式系统也由此迎来了蓬勃发展。此阶段，分布式系统特有的通信语义又出现了，比如熔断策略、负载均衡、服务发现、认证与授权、灰度发布以及蓝绿部署等。
+![[Pasted image 20250613155708.png]]
+在这一阶段，工程师实现分布式系统时，不仅需要专注于业务逻辑，还需根据业务需求实现各种分布式系统的通信语义。随着系统规模的扩大，即使是最简单的服务发现功能，逻辑也变得愈发复杂。其次，使用相同开发语言的另一个应用，这些分布式系统功能仍需重复实现一遍。
+
+此刻，你是否想到了计算机远古时代前辈们处理网络通信的情形？
+
+##### 第二代微服务
+为了避免每个应用程序都要自己实现一套分布式系统的通信语义，一些面向分布式系统的微服务框架出现了，比如 Twitter 的 Finagle、Facebook 的 Proxygen，还有众所周知的 Spring Cloud。
+
+![[Pasted image 20250613155902.png]]
+此类微服务框架实现了负载均衡、服务发现、流量治理等分布式通用功能。开发人员无需关注分布式系统底层细节，付出较小的精力就能开发出健壮的分布式应用。
+
+##### 微服务框架的痛点
+使用微服务框架解决分布式问题看似完美，但开发人员很快发现它存在三个固有问题：
+
+- **技术门槛高**：虽然微服务框架屏蔽了分布式系统通用功能的实现细节，但开发者却要花很多精力去掌握和管理复杂的框架本身。以 SpringCloud 为例，如图所示，它的官网用了满满一页介绍各类通信功能的技术组件。实践过程中，工程师们追踪、解决框架出现的问题绝非易事。
+
+![[Pasted image 20250613155935.png]]
+
+- **框架无法跨语言**：微服务框架通常只支持一种或几种特定的编程语言，而微服务的关键特性是和编程语言无关。如果你使用的编程语言框架不支持，则很难融入这类微服务的架构体系。因此，微服务架构所提倡的：“因地制宜用多种编程语言实现不同模块”，也就成了空谈。
+    
+- **框架升级困难**：微服务框架以 Lib 库的形式和服务联编，当项目非常复杂时，处理依赖库版本、版本兼容问题将非常棘手。同时，微服务框架的升级也无法对服务透明。服务稳定的情况下，工程师们普遍不愿意升级微服务框架。大部分的情况是，微服务框架某个版本出现 Bug 时，才被迫升级。
+
+站在企业组织的角度思考，技术重要还是业务重要？每个工程师都是分布式专家固然好，但又不现实。因此，当企业实施微服务架构时，你会看到业务团队每天处理大量的非业务逻辑，相似的技术问题总在不停上演！
+
+##### 思考服务间通信的本质
+
+实施微服务架构时，**需要解决问题（服务注册、服务发现、负载均衡、熔断、限流等）的本质是保证服务间请求的可靠传递**。站在业务的角度来看，**无论上述逻辑设计的多么复杂，都不会影响业务请求本身的业务语义与业务内容发生任何变化**，实施微服务架构的技术挑战和业务逻辑没有任何关系。
+
+回顾前面提到的 TCP/IP 协议案例，我们思考是否服务间的通信是否也能像 TCP 协议栈那样：“人们基于 HTTP 协议开发复杂的应用，无需关心底层 TCP 协议如何控制数据包”。如果能把服务间通信剥离、并下沉到微服务基础层，工程师将不再浪费时间编写基础设施层的代码，而是将充沛的精力聚焦在业务逻辑上。
+
+![[Pasted image 20250613155948.png]]
+
+##### 代理模式的探索
+
+最开始，探路者们尝试过使用“代理”（Proxy）的方案，比如使用 Nginx 代理配置上游、负载均衡的方式处理部分通信逻辑。
+
+虽然这种方式和微服务关系不大，功能也简陋，但它们提供了一个新颖的思路：“**在服务器端和客户端之间插入一个中间层，避免两者直接通讯，所有的流量经过中间层的代理，代理实现服务间通信的某些特性。**”。
+
+受限于传统代理软件功能不足，在参考代理模式的基础上，市场上开始陆陆续续出现“边车代理”（Sidecar）模式的产品，比如 Airbnb 的 Nerve & Synaps、Netflix 的 Prana。这些产品的功能对齐原侵入式框架的各类功能，实现上也大量重用了它们的代码、逻辑。
+![[Pasted image 20250613155957.png]]
+
+但是此类边车代理存在局限性：它们往往被设计成与特定的基础设施组件配合使用。比如 Airbnb 的 Nerve & Synapse，要求服务发现必须使用 Zookeeper，Prana 则限定使用 Netflix 自家的服务发现框架 Eureka。
+
+因此，该阶段的边车代理局限在某些特定架构体系中，谈不上通用性。
+
+##### 第一代服务网格
+
+2016 年 1 月，William Morgan 和 Oliver Gould 离开 twitter，开启了他们的创业项目 Linkerd。早期的 Linkerd 借鉴了 Twtter 开源的 Finagle 项目，并重用了大量的 Finagle 代码：
+
+- 设计思路上：Linkerd 将分布式服务的通信逻辑抽象为单独一层，在这一层中实现负载均衡、服务发现、认证授权、监控追踪、流量控制等必要功能。
+- 具体实现上：Linkerd 作为和服务对等的代理服务（Sidecar）和服务部署在一起，接管服务的流量。
+
+Linkerd 开创先河的不绑定任何基础架构或某类技术体系，实现了通用性，成为业界第一个服务网格项目。同期的服务网格代表产品还有 Lyft（和 Uber 类似的打车软件）公司的 Envoy（Envoy 是 CNCF 内继 Kubernetes、Prometheus 第三个孵化成熟的项目）。
+
+![[Pasted image 20250613160006.png]]
+##### 第二代服务网格
+
+第一代服务网格由一系列独立运行的代理型服务（Sidecar）构成，但并没有思考如何系统化管理这些代理服务。为了提供统一的运维入口，服务网格继续演化出了集中式的控制面板（Control Plane）。
+
+典型的第二代服务网格以 Google、IBM 和 Lyft 联合开发的 Istio 为代表。根据 Istio 的总体架构，第二代服务网格由两大核心组成部分：一系列与微服务共同部署的边车代理（称为数据平面），以及用于管理这些代理的控制器（称为控制平面）。控制器向代理下发路由、熔断策略、服务发现等策略信息，代理根据这些策略处理服务间的请求。
+
+![[Pasted image 20250613160016.png]]
+
+只看代理组件（下方浅蓝色的方块）和控制面板（顶部深蓝色的长方形），它们之间的关系形成如图 8-9 所示的网格形象状，这也是服务网格命名的由来。
+![[Pasted image 20250613160024.png]]
+
+至此，我们见证了 5 个时代的变迁。大家一定清楚了服务网格技术到底是什么，以及是如何一步步演化成今天这样的形态。现在，我们回过头重新看 William Morgan 对服务网格的定义。
+
+服务网格的定义
+
+服务网格是一个**基础设施层**，用于处理服务间通信。云原生应用有着复杂的服务拓扑，服务网格保证**请求在这些拓扑中可靠地穿梭**。在实际应用当中，服务网格通常是由一系列轻量级的**网络代理**组成的，它们与应用程序部署在一起，但**对应用程序透明**。
+
+再来理解定义中的 4 个关键词：
+
+- **基础设施层+请求在这些拓扑中可靠穿梭**：这两个词加起来描述了服务网格的定位和功能，是否似曾相识？没错，你一定想到了 TCP 协议。
+- **网络代理**：描述了服务网格的实现形态。
+- **对应用透明**：描述了服务网格的关键特点，正是由于这个特点，服务网格能够解决以 Spring Cloud 为代表的第二代微服务框架所面临的三个本质问题。
+
+#### 数据平面的设计
+服务间通信治理并非复杂的技术，服务网格之所以备受追捧，正是因为它能够自动化实现这一过程，且对应用完全透明。接下来，笔者将从边车代理（Sidecar）自动注入、请求透明劫持和可靠通信实现三个方面，探讨数据平面的设计原理。
+
+##### Sidecar 自动注入
+
+使用过 Istio 的读者一定知道，在带有 istio-injection: enabled 标签的命名空间中创建 Pod 时，Kubernetes 会自动为其注入一个名为 istio-proxy 的边车容器。这套机制的核心在于 Kubernetes 的准入控制器。
+
+Kubernetes 准入控制器
+
+Kubernetes 准入控制器会拦截 Kubernetes API Server 接收到的请求，在资源对象被持久化到 etcd 之前，对其进行校验和修改。准入控制器分为两类：
+
+- **Validating** 类型准入控制器：用于校验请求，无法修改对象，但可以拒绝不符合特定策略的请求；
+- **Mutating** 类型准入控制器：在对象创建或更新时，可以修改资源对象。
+
+Istio 预先在 Kubernetes 集群中注册了一个类型为 Mutating 类型的准入控制器，它包含以下内容：
+
+- Webhook 服务地址：指向运行注入逻辑的 Webhook 服务，例如 Istio 的 istio-sidecar-injector；
+- 匹配规则：定义哪些资源和操作会触发该 Webhook，比如针对 Pod 创建请求（operations: ["CREATE"]）；
+- 注入条件：通过 Label（istio-injection: enabled） 或 Annotation 决定是否注入某些 Pod。
+
+```yaml
+apiVersion: admissionregistration.k8s.io/v1
+kind: MutatingWebhookConfiguration
+metadata:
+  name: sidecar-injector
+webhooks:
+  - name: sidecar-injector.example.com
+    admissionReviewVersions: ["v1"]
+    clientConfig:
+      service:
+        name: sidecar-injector-service
+        namespace: istio-system
+        path: "/inject"
+    rules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        resources: ["pods"]
+        operations: ["CREATE"]
+    namespaceSelector:
+      matchLabels:
+        istio-injection: enabled
+```
+
+##### 流量透明劫持
+
+Isito 通过准入控制器，还会注入一个名为 istio-init 的初始化容器 ，它的配置如下：
+
+```yaml
+initContainers:
+  - name: istio-init
+    image: docker.io/istio/proxyv2:1.13.1
+    args: ["istio-iptables", "-p", "15001", "-z", "15006", "-u", "1337", "-m", "REDIRECT", "-i", "*", "-x", "", "-b", "*", "-d", "15090,15021,15020"]
+```
+
+在上述配置中，istio-init 容器的入口命令为 istio-iptables，该命令配置了一系列 iptables 规则，用于拦截并重定向除特定端口（如 15090、15021、15020）外的流量到 Istio 的边车代理（Envoy）：
+
+- 对于入站（Inbound）流量，会被重定向到边车代理监听的端口（通常为 15006）。
+- 对于出站（Outbound）流量，则会被重定向到边车代理监听的另一个端口（通常为 15001）。
+
+通过 iptables -t nat -L -v 命令查看 istio-iptables 添加的 iptables 规则。
+
+```bash
+# 查看 NAT 表中规则配置的详细信息
+$ iptables -t nat -L -v
+# PREROUTING 链：用于目标地址转换（DNAT），将所有入站 TCP 流量跳转到 ISTIO_INBOUND 链上
+Chain PREROUTING (policy ACCEPT 0 packets, 0 bytes)
+ pkts bytes target     prot opt in     out     source               destination
+    2   120 ISTIO_INBOUND  tcp  --  any    any     anywhere             anywhere
+
+# INPUT 链：处理输入数据包，非 TCP 流量将继续 OUTPUT 链
+Chain INPUT (policy ACCEPT 2 packets, 120 bytes)
+ pkts bytes target     prot opt in     out     source               destination
+
+# OUTPUT 链：将所有出站数据包跳转到 ISTIO_OUTPUT 链上
+Chain OUTPUT (policy ACCEPT 41146 packets, 3845K bytes)
+ pkts bytes target     prot opt in     out     source               destination
+   93  5580 ISTIO_OUTPUT  tcp  --  any    any     anywhere             anywhere
+
+# POSTROUTING 链：所有数据包流出网卡时都要先进入POSTROUTING 链，内核根据数据包目的地判断是否需要转发出去，我们看到此处未做任何处理
+Chain POSTROUTING (policy ACCEPT 41199 packets, 3848K bytes)
+ pkts bytes target     prot opt in     out     source               destination
+
+# ISTIO_INBOUND 链：将所有目的地为 9080 端口的入站流量重定向到 ISTIO_IN_REDIRECT 链上
+Chain ISTIO_INBOUND (1 references)
+ pkts bytes target     prot opt in     out     source               destination
+    2   120 ISTIO_IN_REDIRECT  tcp  --  any    any     anywhere             anywhere             tcp dpt:9080
+
+# ISTIO_IN_REDIRECT 链：将所有的入站流量跳转到本地的 15006 端口，至此成功的拦截了流量到 Envoy 
+Chain ISTIO_IN_REDIRECT (1 references)
+ pkts bytes target     prot opt in     out     source               destination
+    2   120 REDIRECT   tcp  --  any    any     anywhere             anywhere             redir ports 15006
+
+# ISTIO_OUTPUT 链：选择需要重定向到 Envoy（即本地） 的出站流量，所有非 localhost 的流量全部转发到 ISTIO_REDIRECT。为了避免流量在该 Pod 中无限循环，所有到 istio-proxy 用户空间的流量都返回到它的调用点中的下一条规则，本例中即 OUTPUT 链，因为跳出 ISTIO_OUTPUT 规则之后就进入下一条链 POSTROUTING。如果目的地非 localhost 就跳转到 ISTIO_REDIRECT；如果流量是来自 istio-proxy 用户空间的，那么就跳出该链，返回它的调用链继续执行下一条规则（OUPT 的下一条规则，无需对流量进行处理）；所有的非 istio-proxy 用户空间的目的地是 localhost 的流量就跳转到 ISTIO_REDIRECT
+Chain ISTIO_OUTPUT (1 references)
+ pkts bytes target     prot opt in     out     source               destination
+    0     0 ISTIO_REDIRECT  all  --  any    lo      anywhere            !localhost
+   40  2400 RETURN     all  --  any    any     anywhere             anywhere             owner UID match istio-proxy
+    0     0 RETURN     all  --  any    any     anywhere             anywhere             owner GID match istio-proxy	
+    0     0 RETURN     all  --  any    any     anywhere             localhost
+   53  3180 ISTIO_REDIRECT  all  --  any    any     anywhere             anywhere
+
+# ISTIO_REDIRECT 链：将所有流量重定向到 Envoy（即本地） 的 15001 端口
+Chain ISTIO_REDIRECT (2 references)
+ pkts bytes target     prot opt in     out     source               destination
+   53  3180 REDIRECT   tcp  --  any    any     anywhere             anywhere             redir ports 15001
+```
+
+根据图进一步理解上述 iptables 自定义链（以 ISTIO_开头）处理流量的逻辑。
+![[Pasted image 20250613175218.png]]
+
+使用 iptables 实现流量劫持是最经典的方式。不过，客户端 Pod 和服务端 Pod 之间的网络数据路径需要至少经过三次 TCP/IP 堆栈（出站、客户端边车代理到服务端的边车代理、入站）。如何降低流量劫持的延迟和资源消耗，是服务网格未来的主要研究方向，笔者将在 8.5 节探讨这一问题。
+
+##### 实现可靠通信
+
+通过 iptables 劫持流量，转发至边车代理后，边车代理根据配置接管应用程序之间的通信。
+
+传统的代理（如 HAProxy 或 Nginx）依赖静态配置文件来定义资源和数据转发规则，而 Envoy 则几乎所有配置都可以动态获取。Envoy 将代理转发行为的配置抽象为三类资源：Listener、Cluster 和 Router，并基于这些资源定义了一系列标准数据面 API，用于发现和操作这些资源，这套标准数据面 API 被称为 xDS。
+
+xDS 的全称是“x Discovery Service”，“x” 指的是表中的协议族。
+
+xDS v3.0 协议族
+
+| 简写   | 全称                                 | 描述         |
+| ---- | ---------------------------------- | ---------- |
+| LDS  | Listener Discovery Service         | 监听器发现服务    |
+| RDS  | Route Discovery Service            | 路由发现服务     |
+| CDS  | Cluster Discovery Service          | 集群发现服务     |
+| EDS  | Endpoint Discovery Service         | 集群成员发现服务   |
+| ADS  | Aggregated Discovery Service       | 聚合发现服务     |
+| HDS  | Health Discovery Service           | 健康度发现服务    |
+| SDS  | Secret Discovery Service           | 密钥发现服务     |
+| MS   | Metric Service                     | 指标服务       |
+| RLS  | Rate Limit Service                 | 限流发现服务     |
+| LRS  | Load Reporting service             | 负载报告服务     |
+| RTDS | Runtime Discovery Service          | 运行时发现服务    |
+| CSDS | Client Status Discovery Service    | 客户端状态发现服务  |
+| ECDS | Extension Config Discovery Service | 扩展配置发现服务   |
+| xDS  | X Discovery Service                | 以上诸多API的统称 |
+
+具体到每个 xDS 协议都包含大量的内容，笔者无法一一详述。但通过这些协议操作的资源，再结合下图理解，可大致说清楚它们的工作原理。
+
+- **Listener**：Listener 可以理解为 Envoy 打开的一个监听端口，用于接收来自 Downstream（下游服务，即客户端）连接。每个 Listener 配置中核心包括监听地址、插件（Filter）等。Envoy 支持多个 Listener，不同 Listener 之间几乎所有的配置都是隔离的。
+    
+    Listener 对应发现服务称之为 LDS。LDS 是 Envoy 正常工作的基础，没有 LDS，Envoy 就不能实现端口监听，其他所有 xDS 服务也失去了作用。
+    
+- **Cluster**：在 Envoy 中，每个 Upstream（上游服务，即业务后端，具体到 Kubernetes，则对应某个 Service）被抽象成一个 Cluster。Cluster 包含该服务的连接池、超时时间端口、类型等等。
+    
+    Cluster 对应的发现服务称之为 CDS。一般情况下，CDS 服务会将其发现的所有可访问服务全量推送给 Envoy。与 CDS 紧密相关的另一种服务称之为 EDS。CDS 服务负责 Cluster 资源的推送。当该 Cluster 类型为 EDS 时，说明该 Cluster 的所有 endpoints 需要由 xDS 服务下发，而不使用 DNS 等去解析。下发 endpoints 的服务就称之为 EDS；
+    
+- **Router**：Listener 接收来自下游的连接，Cluster 将流量发送给具体的上游服务，而 Router 定义了数据分发的规则，决定 Listener 在接收到下游连接和数据之后，应该将数据交给哪一个 Cluster 处理。虽然说 Router 大部分时候都可以默认理解为 HTTP 路由，但是 Envoy 支持多种协议，如 Dubbo、Redis 等，所以此处 Router 泛指所有用于桥接 Listener 和后端服务（不限定 HTTP）的规则与资源集合。
+    
+    Route 对应的发现服务称之为 RDS。Router 中最核心配置包含匹配规则和目标 Cluster。此外，也可能包含重试、分流、限流等等。
+
+![[Pasted image 20250613175230.png]]
+
+Envoy 的另一项重要设计是其可扩展的 Filter 机制，通俗地讲就是 Envoy 的插件系统。
+
+Envoy 的插件机制允许开发者通过基于 xDS 的数据流管道，插入自定义逻辑，从而扩展和定制 Envoy 的功能。Envoy 的很多核心功能是通过 Filter 实现的。例如，HTTP 流量的处理和服务治理依赖于两个关键插件 HttpConnectionManager（网络 Filter，负责协议解析）和 Router（负责流量分发）。通过 Filter 机制，Envoy 理论上能够支持任意协议，并对请求流量进行全面的修改和定制。
+
+#### 控制平面的设计
+本节，继续以 Istio 的架构为例，探讨控制平面的设计。
+
+Istio 自发布首个版本以来，有着一套“堪称优雅”的架构设计，它的架构由数据面和控制面两部分组成，前者通过代理组件 Envoy 负责流量处理；后者根据功能职责不同，由多个微服务（如 Pilot、Galley、Citadel、Mixer）组成。
+
+Istio 控制面组件的拆分设计看似充分体现了微服务架构的优点，如职责分离、独立部署和伸缩能力，但在实际场景中，并未实现预期的效果。
+
+Isito 控制平面的问题
+
+当业务调用出现异常时，由于接入了服务网格，工程师首先需要排查控制面内各个组件的健康状态：首先检查 Pilot 是否正常工作，配置是否正确下发至 Sidecar；然后检查 Galley 是否正常同步服务实例信息；同时，还需要确认 Sidecar 是否成功注入。
+
+一方面，控制面组件的数量越多，排查问题时需要检查的故障点也就越多。另一方面，过多的组件设计也会增加部署、维护的复杂性。
+
+服务网格被誉为下一代微服务架构，用来解决微服务间的运维管理问题。但在服务网格的设计过程中，又引入了一套新的微服务架构，这岂不是**用一种微服务架构设计的系统来解决另一种微服务架构的治理问题**。那么，谁来解决 Istio 系统本身的微服务架构问题呢？
+
+在 Istio 推出三年后，即 Istio 1.5 版本，开发团队对控制面架构进行了重大调整，摒弃了之前的设计，转而采用了“复古”的单体架构。组件 istiod 整合了 Pilot、Citadel 和 Galley 的功能，以单个二进制文件的形式部署，承担起之前组件的所有职责：
+
+- **服务发现与配置分发**：从 Kubernetes 等平台获取服务信息，将路由规则和策略转换为 xDS 协议下发至 Envoy 代理；
+- **流量管理**：管理流量路由规则，包括负载均衡、分流、镜像、熔断、超时与重试等功能；
+- **安全管理**：生成、分发和轮换服务间的身份认证证书，确保双向 TLS 加密通信、基于角色的访问控制（RBAC）和细粒度的授权策略，限制服务间的访问权限；
+- **可观测性支持**：协助 Envoy 采集系统输出的遥测数据（日志、指标、追踪），并将数据发送到外部监控系统（如 Prometheus、Jaeger、OpenTelemetry 等）；
+- **配置验证与管理**：验证用户提交的网格配置，并将其分发到数据平面，确保一致性和正确性；
+![[service-mesh-arc-Boo1iIx-.svg]]
+
+Istio 1.5 版本的架构变化，实际上是将原有的多进程设计转换为单进程模式，以最小的成本实现最高的运维收益。
+
+- 运维配置变得更加简单，用户只需要部署或升级一个单独的服务组件。
+- 更加容易排查错误，因为不需要再横跨多个组件去排查各种错误。
+- 更加利于做灰度发布，因为是单一组件，可以非常灵活切换至不同的控制面。
+- 避免了组件间的网络开销，因为组件内部可直接共享缓存、配置等，也会降低资源开销。
+
+通过以上分析，你是否对 Istio 控制平面的拆分架构有了新的理解？看似优雅的架构设计，落地过程中往往给工程师带来意料之外的困难。正如一句老话，没有完美的架构，只有最合适的架构！
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
