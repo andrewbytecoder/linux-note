@@ -1240,6 +1240,18 @@ To completely disable this security protection add
 
 
 
+## 协程
+linux上基准测试套件，测试相同核心两个线程之间发送消息需要多长时间
+```bash
+taskset -c 0 perf bench sched pipe -T
+```
+因为消息发送需要发送和接收算一次，一次这个时间可以除以2算作一次线程切换的时间
+
+
+
+
+
+
 
 
 ## 文章
