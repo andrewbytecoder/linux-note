@@ -433,7 +433,7 @@ the MMU (hardware) and maintained by the kernel.)。
 # si: 换入的内存（换页）
 # so: 换出的内存（换页）
 [root@k8smaster-ims ~]# vmstat 1
-procs -----------memory---------- ---swap-- -----io``` -system-- ------cpu-----
+procs -----------memory---------- ---swap-- -----io--- -system-- ------cpu-----
  r  b   swpd   free   buff  cache   si   so    bi    bo   in   cs us sy id wa st
  9  0      0 1961552 890952 20010716    0    0    10   187    8    9  3  2 94  0  0
 ```
