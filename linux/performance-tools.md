@@ -432,10 +432,14 @@ the MMU (hardware) and maintained by the kernel.)。
 # cache: 用于页缓存的内存
 # si: 换入的内存（换页）
 # so: 换出的内存（换页）
+# cs: (context switch) 是每秒上下文切换的次数
+# in: (interrupt) 则是每秒中断的次数
+# r: (Running or Runnable)就绪队列长度，也就是正在运行和等待CPU的进程数
+# b: (Blocked) 处于不可中断睡眠状态的进程数
 [root@k8smaster-ims ~]# vmstat 1
 procs -----------memory---------- ---swap-- -----io--- -system-- ------cpu-----
- r  b   swpd   free   buff  cache   si   so    bi    bo   in   cs us sy id wa st
- 9  0      0 1961552 890952 20010716    0    0    10   187    8    9  3  2 94  0  0
+ r  b      swpd   free    buff   cache       si   so    bi    bo    in    cs us sy id  wa st
+ 9  0      0      1961552 890952 20010716     0    0    10    187    8    9  3  2  94  0  0
 ```
 
 ### mpstat
