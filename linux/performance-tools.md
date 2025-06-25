@@ -438,7 +438,7 @@ the MMU (hardware) and maintained by the kernel.)。
 # b: (Blocked) 处于不可中断睡眠状态的进程数
 [root@k8smaster-ims ~]# vmstat 1
 procs -----------memory---------- ---swap-- -----io--- -system-- ------cpu-----
- r  b      swpd   free    buff   cache       si   so    bi    bo    in    cs us sy id  wa st
+ r  b      swpd   free    buff   cache       si   so    bi    bo    in    cs us sy id wa st
  9  0      0      1961552 890952 20010716     0    0    10    187    8    9  3  2  94  0  0
 ```
 
