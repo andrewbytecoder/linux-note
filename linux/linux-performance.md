@@ -1081,16 +1081,130 @@ TID  PRIO  USER     DISK READ  DISK WRITE  SWAPIN     IO> �
 
 ## 网络
 ### 网络原理
+同 CPU、内存以及 I/O 一样，网络也是 Linux 系统最核心的功能。网络是一种把不同计算机或网络设备连接到一起的技术，它本质上是一种进程间通信方式，特别是跨系统的进程间通信，必须要通过网络才能进行。随着高并发、分布式、云计算、微服务等技术的普及，网络的性能也变得越来越重要。
+
+
+
 #### 网络配置
-#### TCP/IP协议
+分析网络问题的第一步，通常是查看网络接口的配置和状态。你可以使用 ifconfig 或者 ip命令，来查看网络的配置。
+```bash
+$ ifconfig eth0
+$ ip -s addr show dev eth0
+```
+
+#### 套接字信息
+ifconfig 和 ip 只显示了网络接口收发数据包的统计信息，但在实际的性能问题中，网络协议栈中的统计信息，我们也必须关注。你可以用 netstat 或者 ss ，来查看套接字、网络栈、网络接口以及路由表的信息。
+
+> 我个人更推荐，使用 ss 来查询网络的连接信息，因为它比 netstat 提供了更好的性能（速度更快）。
+
+```bash
+# head -n 3 表示只显示前面 3 行
+# -l 表示只显示监听套接字
+# -n 表示显示数字地址和端口 (而不是名字)
+# -p 表示显示进程信息
+$ netstat -nlp | head -n 3
+Active Internet connections (only servers)
+Proto Recv-Q Send-Q Local Address           Foreign Address         State       PID/Program name
+tcp        0      0 127.0.0.53:53           0.0.0.0:*               LISTEN      840/systemd-resolve 
+# -l 表示只显示监听套接字
+# -t 表示只显示 TCP 套接字
+# -n 表示显示数字地址和端口 (而不是名字)
+# -p 表示显示进程信息
+$ss -ltnp | head -n 3
+State    Recv-Q    Send-Q        Local Address:Port        Peer Address:Port
+LISTEN   0         128           127.0.0.53%lo:53               0.0.0.0:*        users:(("systemd-resolve",pid=840,fd=13))
+LISTEN   0         128                 0.0.0.0:22               0.0.0.0:*        users:(("sshd",pid=1459,fd=3))
+```
+netstat 和 ss 的输出也是类似的，都展示了套接字的状态、接收队列、发送队列、本地地址、远端地址、进程 PID 和进程名称等。
+其中，接收队列（Recv-Q）和发送队列（Send-Q）需要你特别关注，它们通常应该是0。当你发现它们不是 0 时，说明有网络包的堆积发生。当然还要注意，在不同套接字状态下，它们的含义不同。
+
+当套接字处于连接状态（Established）时，
+- Recv-Q 表示套接字缓冲还没有被应用程序取走的字节数（即接收队列长度）。
+- 而 Send-Q 表示还没有被远端主机确认的字节数（即发送队列长度）。
+
+当套接字处于监听状态（Listening）时，
+- Recv-Q 表示 syn backlog 的当前值。
+- 而 Send-Q 表示最大的 syn backlog 值
+而 syn backlog 是 TCP 协议栈中的半连接队列长度，相应的也有一个全连接队列（accept queue），它们都是维护 TCP 状态的重要机制。
+
+顾名思义，所谓半连接，就是还没有完成 TCP 三次握手的连接，连接只进行了一半，而服务器收到了客户端的 SYN 包后，就会把这个连接放到半连接队列中，然后再向客户端发送SYN+ACK 包。
+而全连接，则是指服务器收到了客户端的 ACK，完成了 TCP 三次握手，然后就会把这个连接挪到全连接队列中。这些全连接中的套接字，还需要再被 accept() 系统调用取走，这样，服务器就可以开始真正处理客户端的请求了。
+
+*查看协议栈信息*
+```bash
+$ netstat -s
+...
+Tcp:    3244906 active connection openings    
+23143 passive connection openings    
+115732 failed connection attempts    
+2964 connection resets received    
+1 connections established    
+13025010 segments received    
+17606946 segments sent out
+44438 segments retransmitted    
+42 bad segments received    
+5315 resets sent    
+InCsumErrors: 42
+... 
+$ ss -s
+Total: 186 (kernel 1446)
+TCP:   4 (estab 1, closed 0, orphaned 0, synrecv 0, timewait 0/0), ports 0 
+Transport Total     IP        IPv6
+*	  1446      -         -
+RAW	  2         1         1
+UDP	  2         2         0
+TCP	  4         3         1
+...
+```
+
 #### 网络收发流程
+当一个网络帧到达网卡后，网卡会通过 DMA 方式，把这个网络包放到收包队列中；然后通过硬中断，告诉中断处理程序已经收到了网络包。
+接着，网卡中断处理程序会为网络帧分配内核数据结构（sk_buff），并将其拷贝到sk_buff 缓冲区中；然后再通过软中断，通知内核收到了新的网络帧
+接下来，内核协议栈从缓冲区中取出网络帧，并通过网络协议栈，从下到上逐层处理这个网络帧。比如，
+在链路层检查报文的合法性，找出上层协议的类型（比如 IPv4 还是 IPv6），再去掉帧头、帧尾，然后交给网络层。
+网络层取出 IP 头，判断网络包下一步的走向，比如是交给上层处理还是转发。当网络层确认这个包是要发送到本机后，就会取出上层协议的类型（比如 TCP 还是 UDP），去掉IP 头，再交给传输层处理
+传输层取出 TCP 头或者 UDP 头后，根据 < 源 IP、源端口、目的 IP、目的端口 > 四元组作为标识，找出对应的 Socket，并把数据拷贝到 Socket 的接收缓存中
+最后，应用程序就可以使用 Socket 接口，读取到新接收到的数据了
+
+
+
 #### 高级路由
 #### 网络QoS
 #### 网络防火墙
 #### C10K与C100K
 
 ### 性能指标
-#### 吞吐量
+实际上，我们通常用带宽、吞吐量、延时、PPS（Packet Per Second）等指标衡量网络的性能
+
+- 带宽，表示链路的最大传输速率，单位通常为 b/s （比特 / 秒）。
+- 吞吐量，表示单位时间内成功传输的数据量，单位通常为 b/s（比特 / 秒）或者 B/s（字节 / 秒）。吞吐量受带宽限制，而吞吐量 / 带宽，也就是该网络的使用率。
+- 延时，表示从网络请求发出后，一直到收到远端响应，所需要的时间延迟。在不同场景中，这一指标可能会有不同含义。比如，它可以表示，建立连接需要的时间（比如 TCP握手延时），或一个数据包往返所需的时间（比如 RTT）。
+- PPS，是 Packet Per Second（包 / 秒）的缩写，表示以网络包为单位的传输速率。PPS通常用来评估网络的转发能力，比如硬件交换机，通常可以达到线性转发（即 PPS 可以达到或者接近理论最大值）。而基于 Linux 服务器的转发，则容易受网络包大小的影响。
+除了这些指标，网络的可用性（网络能否正常通信）、并发连接数（TCP 连接数量）、丢包率（丢包百分比）、重传率（重新传输的网络包比例）等也是常用的性能指标。
+
+#### 网络吞吐和 PPS
+给 sar 增加 -n 参数就可以查看网络的统计信息，比如网络接口（DEV）、网络接口错误（EDEV）、TCP、UDP、ICMP 等等。
+
+```bash
+# 数字 1 表示每隔 1 秒输出一组数据
+$ sar -n DEV 1
+Linux 4.15.0-1035-azure (ubuntu) 	01/06/19 	_x86_64_	(2 CPU) 
+13:21:40        IFACE   rxpck/s   txpck/s    rxkB/s    txkB/s   rxcmp/s   txcmp/s  rxmcst/s   %ifutil
+13:21:41         eth0     18.00     20.00      5.79      4.25      0.00      0.00      0.00      0.00
+13:21:41      docker0      0.00      0.00      0.00      0.00      0.00      0.00      0.00      0.00
+13:21:41           lo      0.00      0.00      0.00      0.00      0.00      0.00      0.00      0.00
+```
+
+- rxpck/s 和 txpck/s 分别是接收和发送的 PPS，单位为包 / 秒
+- rxkB/s 和 txkB/s 分别是接收和发送的吞吐量，单位是 KB/ 秒
+- rxcmp/s 和 txcmp/s 分别是接收和发送的压缩数据包数，单位是包 / 秒
+- %ifutil 是网络接口的使用率，即半双工模式下为 (rxkB/s+txkB/s)/Bandwidth，而全双工模式下为 max(rxkB/s, txkB/s)/Bandwidth。
+
+```bash
+# 查看网卡Bandwidth相关信息
+$ethtool eth0
+```
+
 ##### BPS
 ##### QPS
 ##### PPS 
