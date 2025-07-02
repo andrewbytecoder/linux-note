@@ -1168,11 +1168,6 @@ TCP	  4         3         1
 
 
 
-#### 高级路由
-#### 网络QoS
-#### 网络防火墙
-#### C10K与C100K
-
 ### 性能指标
 实际上，我们通常用带宽、吞吐量、延时、PPS（Packet Per Second）等指标衡量网络的性能
 
@@ -1181,6 +1176,10 @@ TCP	  4         3         1
 - 延时，表示从网络请求发出后，一直到收到远端响应，所需要的时间延迟。在不同场景中，这一指标可能会有不同含义。比如，它可以表示，建立连接需要的时间（比如 TCP握手延时），或一个数据包往返所需的时间（比如 RTT）。
 - PPS，是 Packet Per Second（包 / 秒）的缩写，表示以网络包为单位的传输速率。PPS通常用来评估网络的转发能力，比如硬件交换机，通常可以达到线性转发（即 PPS 可以达到或者接近理论最大值）。而基于 Linux 服务器的转发，则容易受网络包大小的影响。
 除了这些指标，网络的可用性（网络能否正常通信）、并发连接数（TCP 连接数量）、丢包率（丢包百分比）、重传率（重新传输的网络包比例）等也是常用的性能指标。
+
+![[Pasted image 20250701162821.png]]
+
+
 
 #### 网络吞吐和 PPS
 给 sar 增加 -n 参数就可以查看网络的统计信息，比如网络接口（DEV）、网络接口错误（EDEV）、TCP、UDP、ICMP 等等。
@@ -1205,29 +1204,428 @@ Linux 4.15.0-1035-azure (ubuntu) 	01/06/19 	_x86_64_	(2 CPU) 
 $ethtool eth0
 ```
 
-##### BPS
-##### QPS
-##### PPS 
-#### 延迟
-#### 丢包
-####  TCP重传
+性能测试工具
+- iperf3 
+```bash
+# -s 表示启动服务端，-i 表示汇报间隔， -p 表示监听端口
+$ iperf3 -s -i 1 -p 10000
+# -c 表示启动客户端，192.168.0.30 为目标服务器的IP
+# -b 表示目标带宽(单位是 bits/s)
+# -t 表示测试时间
+# -P 表示并发数， -p 表示目标服务器监听端口
+$ iperf3 -c 192.168.0.30 -b 1G -t 15 -P 2 -p 10000
+```
+
+- pktgen - linux自带高性能网络测试工具
+```bash
+# 默认没启动模块需要安装一下
+$ modprobe pktgen
+$ ps -ef | grep pktgen | grep -v grep
+$ ls /proc/net/pktgen/
+```
+- ab
+```bash
+# 安装ab工具，ab 是 Apache 自带的 HTTP 压测工具，主要测试 HTTP 服务的每秒请求数、请求延迟、吞吐量以及请求延迟的分布情况等
+$ apt-get install -y apache2-utils
+# -c 表示并发请求数为1000，-n 表示总的请求数为 10000
+$ ab -c 1000 -n 10000 http://192.168.0.30/
+```
+- wrk
+```bash
+# https://github.com/wg/wrk
+# -c 表示并发连接数 1000，-t 表示线程数为 2
+$ wrk -c 1000 -t 2 http://192.168.0.30/
+```
+
+
+
 
 ### 性能剖析
-#### ethtool
-#### sar
-#### ping 
-#### netstat/ss
-#### ifsta
-#### ifconfig 
-#### tcpdump 
-#### wireshark
-#### iptables
-#### traceroute
-#### ipcontrack
-#### perf
+
+![[Pasted image 20250701101718.png]]
+
+
+![[Pasted image 20250701101731.png]]
+
+
+
+![[Pasted image 20250701162802.png]]
+
+#### 网络丢包排查思路
+1. 使用hping3查看是否存在丢包
+```bash
+$ hping3 -c 10 -S -p 80 192.168.0.30
+```
+1. 使用netstat -i 查看各个网卡的丢包统计信息
+```bash
+$ netstat -i 
+Kernel Interface table
+Iface      MTU    RX-OK RX-ERR RX-DRP RX-OVR    TX-OK TX-ERR TX-DRP TX-OVR Flg
+eth0       100       31      0      0 0             8      0      0      0 BMRU
+lo       65536        0      0      0 0             0      0      0      0 LRU
+```
+- RX-OK：总包数
+- RX-ERR：总错误数
+- RX-DRP：进入Ring Buffer后因为其他原因(内存不足)导致的丢包数
+- RX-OVR： Ring Buffer溢出导致的丢包数
+
+> 注意，由于 Docker 容器的虚拟网卡，实际上是一对 veth pair，一端接入容器中用作 eth0，另一端在主机中接入 docker0 网桥中。veth 驱动并没有实现网络统计的功能，所以使用 ethtool -S 命令，无法得到网卡收发数据的汇总信息。
+
+2. 检查tc规则
+从这个输出中，我们没有发现任何错误，说明容器的虚拟网卡没有丢包。不过要注意，如果用 tc 等工具配置了 QoS，那么 tc 规则导致的丢包，就不会包含在网卡的统计信息中。
+所以接下来，我们还要检查一下 eth0 上是否配置了 tc 规则，并查看有没有丢包。我们继续容器终端中，执行下面的 tc 命令，不过这次注意添加 -s 选项，以输出统计信息：
+```bash
+root@nginx:/# tc -s qdisc show dev eth0
+qdisc netem 800d: root refcnt 2 limit 1000 loss 30% 
+Sent 432 bytes 8 pkt (dropped 4, overlimits 0 requeues 0) 
+backlog 0b 0p requeues 0
+```
+从 tc 的输出中可以看到， eth0 上面配置了一个网络模拟排队规则（qdisc netem），并且配置了丢包率为 30%（loss 30%）。再看后面的统计信息，发送了 8 个包，但是丢了 4个
+
+既然发现了问题，解决方法也就很简单了，直接删掉 netem 模块就可以了。我们可以继续在容器终端中，执行下面的命令，删除 tc 中的 netem 模块：
+
+```bash
+$ tc qdisc del dev eth0 root netem loss 30%
+```
+3. 如果删除之后丢包还没有解决就需要向网络层和传输层找问题了
+在容器终端执行 netstat -s查看网络统计信息
+```bash
+root@nginx:/# netstat -s
+Ip:    
+Forwarding: 1					// 开启转发    
+31 total packets received		// 总收包数    
+0 forwarded						// 转发包数    
+0 incoming packets discarded	// 接收丢包数    
+25 incoming packets delivered	// 接收的数据包数  
+15 requests sent out			// 发出的数据包数Icmp:  
+0 ICMP messages received		// 收到的 ICMP 包数  
+0 input ICMP message failed		// 收到 ICMP 失败数  
+ICMP input histogram:  
+0 ICMP messages sent			//ICMP 发送数  
+0 ICMP messages failed			//ICMP 失败数    
+ICMP output histogram:Tcp:    
+0 active connection openings	// 主动连接数   
+0 passive connection openings	// 被动连接数   
+11 failed connection attempts	// 失败连接尝试数   
+0 connection resets received	// 接收的连接重置数    
+0 connections established		// 建立连接数   
+25 segments received			// 已接收报文数   
+21 segments sent out			// 已发送报文数  
+4 segments retransmitted		// 重传报文数   
+0 bad segments received			// 错误报文数   
+0 resets sent					// 发出的连接重置数
+Udp:    
+0 packets received    
+...
+TcpExt:    
+11 resets received for embryonic SYN_RECV sockets	// 半连接重置数    
+0 packet headers predicted    
+TCPTimeouts: 7		// 超时数    
+TCPSynRetrans: 4	//SYN 重传数
+```
+
+netstat 汇总了 IP、ICMP、TCP、UDP 等各种协议的收发统计信息。不过，我们的目的是排查丢包问题，所以这里主要观察的是错误数、丢包数以及重传数。
+根据上面的输出，你可以看到，只有 TCP 协议发生了丢包和重传，分别是：
+11 次连接失败重试（11 failed connection attempts）
+4 次重传（4 segments retransmitted）
+11 次半连接重置（11 resets received for embryonic SYN_RECV sockets）
+4 次 SYN 重传（TCPSynRetrans）
+7 次超时（TCPTimeouts）
+这个结果告诉我们，TCP 协议有多次超时和失败重试，并且主要错误是半连接重置。换句话说，主要的失败，都是三次握手失败。
+
+iptables 和内核的连接跟踪机制也可能会导致丢包。不过，由于连接跟踪在 Linux 内核中是全局的（不属于网络命名空间），我们需要退出容器终端，回到主机中来查看
+```bash
+# 容器终端中执行 exit
+root@nginx:/# exit
+exit 
+
+# 主机终端中查询内核配置
+$ sysctl net.netfilter.nf_conntrack_max
+net.netfilter.nf_conntrack_max = 262144
+$ sysctl net.netfilter.nf_conntrack_count
+net.netfilter.nf_conntrack_count = 182
+```
+从这儿你可以看到，连接跟踪数只有 182，而最大连接跟踪数则是 262144。显然，这里的丢包，不可能是连接跟踪导致的
+接着，再来看 iptables。回顾一下 iptables 的原理，它基于 Netfilter 框架，通过一系列的规则，对网络数据包进行过滤（如防火墙）和修改（如 NAT）。
+这些 iptables 规则，统一管理在一系列的表中，包括 filter（用于过滤）、nat（用于NAT）、mangle（用于修改分组数据） 和 raw（用于原始数据包）等。而每张表又可以包括一系列的链，用于对 iptables 规则进行分组管理。
+对于丢包问题来说，最大的可能就是被 filter 表中的规则给丢弃了。要弄清楚这一点，就需要我们确认，那些目标为 DROP 和 REJECT 等会弃包的规则，有没有被执行到。
+
+你可以把所有的 iptables 规则列出来，根据收发包的特点，跟 iptables 规则进行匹配。不过显然，如果 iptables 规则比较多，这样做的效率就会很低。
+简单的方法，就是直接查询 DROP 和 REJECT 等规则的统计信息，看看是否为0。如果统计值不是 0 ，再把相关的规则拎出来进行分析。
+我们可以通过 iptables -nvL 命令，查看各条规则的统计信息。比如，你可以执行下面的docker exec 命令，进入容器终端；然后再执行下面的 iptables 命令，就可以看到 filter表的统计数据了：
+
+```bash
+# 在主机中执行
+$ docker exec -it nginx bash 
+# 在容器中执行root@nginx:/# iptables -t filter -nvL
+Chain INPUT (policy ACCEPT 25 packets, 1000 bytes) 
+ pkts bytes target     prot opt in     out     source               destination    
+    6   240 DROP       all  --  *      *       0.0.0.0/0            0.0.0.0/0            statistic mode random probability 0.29999999981 
+    
+Chain FORWARD (policy ACCEPT 0 packets, 0 bytes) 
+  pkts bytes target     prot opt in     out     source               destination 
+Chain OUTPUT (policy ACCEPT 15 packets, 660 bytes) 
+  pkts bytes target     prot opt in     out     source               destination    
+    6   264   DROP       all  --  *      *       0.0.0.0/0            0.0.0.0/0   
+```
+
+从 iptables 的输出中，你可以看到，两条 DROP 规则的统计数值不是 0，它们分别在 INPUT 和 OUTPUT 链中。这两条规则实际上是一样的，指的是使用 statistic 模块，进行随机 30% 的丢包。
+
+再观察一下它们的匹配规则。0.0.0.0/0 表示匹配所有的源 IP 和目的 IP，也就是会对所有包都进行随机 30% 的丢包。看起来，这应该就是导致部分丢包的“罪魁祸首”了。
+
+既然找出了原因，接下来的优化就比较简单了。比如，把这两条规则直接删除就可以了。我们可以在容器终端中，执行下面的两条 iptables 命令，删除这两条 DROP 规则：
+
+```bash
+root@nginx:/# iptables -t filter -D INPUT -m statistic --mode random --probability 0.30 -j DROP
+root@nginx:/# iptables -t filter -D OUTPUT -m statistic --mode random --probability 0.30 -j DROP
+```
+
+*总结*
+如果网络问题查看是丢包了还是数据没返回可以使用 `netstat -i` 查看网卡丢包数来确定
+
+#### 内核线程CPU使用率太高排查思路
+Linux 在启动过程中，有三个特殊的进程，也就是 PID 号最小的三个进程
+- 0 号进程为 idle 进程，这也是系统创建的第一个进程，它在初始化 1 号和 2 号进程后，演变为空闲任务。当 CPU 上没有其他任务执行时，就会运行它。
+- 1 号进程为 init 进程，通常是 systemd 进程，在用户态运行，用来管理其他用户态进程
+- 2 号进程为 kthreadd 进程，在内核态运行，用来管理内核线程
+
+所以，要查找内核线程，我们只需要从 2 号进程开始，查找它的子孙进程即可。
+
+```bash
+$ ps -f --ppid 2  -p 2 
+UID          PID    PPID  C STIME TTY          TIME CMD
+root           2       0  0 Jun29 ?        00:00:00 [kthreadd]
+root           3       2  0 Jun29 ?        00:00:00 [rcu_gp]
+root           4       2  0 Jun29 ?        00:00:00 [rcu_par_gp]
+root           5       2  0 Jun29 ?        00:00:00 [slub_flushwq]
+root           6       2  0 Jun29 ?        00:00:00 [netns]
+root           8       2  0 Jun29 ?        00:00:00 [kworker/0:0H-events_highpri]
+```
+可以看到内核线程都带有 `[]` 因此更简单的查找内核线程的方式是
+```bash
+$ps -ef |grep "\[.*\]"
+```
+
+了解内核线程的基本功能，对我们排查问题有非常大的帮助。比如网络问题， 我们首先想到的是ksoftirqd内核线程
+
+- kswapd0：用于内存回收，在Swap变高时关心该线程
+- kworker：用于执行内核工作队列，分为绑定CPU（名称格式为kworker/CPU86330）和未绑定 CPU（名称格式为 kworker/uPOOL86330）两类
+- migration： 在负载均衡过程中，把进程迁移到CPU上，每个CPU都有一个migration内核线程
+- jbd2/sda1-8：jbd 是 Journaling Block Device 的缩写，用来为文件系统提供日志功能，以保证数据的完整性；名称中的 sda1-8，表示磁盘分区名称和设备号。每个使用了ext4 文件系统的磁盘分区，都会有一个 jbd2 内核线程
+- pdflush：用于将内存中的脏页（被修改过，但还未写入磁盘的文件页）写入磁盘（已经在 3.10 中合并入了 kworker 中）
+
+1. docker启动nginx
+```bash
+$ docker run -itd --name=nginx -p 80:80 nginx
+```
+2. 用hping3启动网络请求
+```bash
+# -S 参数表示设置TCP协议的SYN（同步序号）， -p 表示目标端口80
+# -i u10 表示10微秒发送一个网络帧，如果实际中不明显适当缩小
+$ hping3 -S -p 80 -i u10 192.168.0.30
+```
+3. 在另外一个终端发现操作变得很慢
+```bash
+$ top
+top - 08:31:43 up 17 min,  1 user,  load average: 0.00, 0.00, 0.02
+Tasks: 128 total,   1 running,  69 sleeping,   0 stopped,   0 zombie
+%Cpu0  :  0.3 us,  0.3 sy,  0.0 ni, 66.8 id,  0.3 wa,  0.0 hi, 32.4 si,  0.0 st
+%Cpu1  :  0.0 us,  0.3 sy,  0.0 ni, 65.2 id,  0.0 wa,  0.0 hi, 34.5 si,  0.0 st
+KiB Mem :  8167040 total,  7234236 free,   358976 used,   573828 buff/cache
+KiB Swap:        0 total,        0 free,        0 used.  7560460 avail Mem   
+PID USER      PR  NI    VIRT    RES    SHR S  %CPU %MEM     TIME+ COMMAND    
+9 root        20   0       0      0      0 S   7.0  0.0   0:00.48 ksoftirqd/0   
+18 root       20   0       0      0      0 S   6.9  0.0   0:00.56 ksoftirqd/1 
+2489 root     20   0  876896  38408  21520 S   0.3  0.5   0:01.50 docker-containe 
+3008 root     20   0   44536   3936   3304 R   0.3  0.0   0:00.09 top    
+1 root        20   0   78116   9000   6432 S   0.0  0.1   0:11.77 systemd 
+...
+```
+从 top 的输出中，你可以看到，两个 CPU 的软中断使用率都超过了 30%；而 CPU 使用率最高的进程，正好是软中断内核线程 ksoftirqd/0 和 ksoftirqd/1
+于普通进程，我们要观察其行为有很多方法，比如 strace、pstack、lsof 等等。但这些工具并不适合内核线程
+既然是内核线程，自然应该用到内核中提供的机制。回顾一下我们之前用过的 CPU 性能工具，我想你肯定还记得 perf ，这个内核自带的性能剖析工具。
+
+perf 可以对指定的进程或者事件进行采样，并且还可以用调用栈的形式，输出整个调用链上的汇总信息。 我们不妨就用 perf ，来试着分析一下进程号为 9 的 ksoftirqd。
+```bash
+# 采样 30s 后退出
+$perf record -a -g -p 9 -- sleep 30
+#使用 perf report查看报告，并可展看查看内核函数具体调用过程，也就能追踪内核接收网络数据的处理流程 
+# 为了更方便观察可以使用火焰图观察
+$git clone https://github.com/brendangregg/FlameGraph
+$cd FlameGraph
+# -i指向使用perf record生成的报告文件
+$perf script -i /root/perf.data | ./stackcollapse-perf.pl --all |  ./flamegraph.pl > ksoftirqd.svg
+```
+
+#### 服务吞吐量下降怎么分析
+1. 安装压测工具
+```bash
+$ git clone https://github.com/wg/wrk
+$ cd wrk && make && sudo cp wrk /usr/local/bin/
+```
+2. 运行nginx服务
+```bash
+$ docker run --name nginx --network host --privileged -itd nginx/nginx
+```
+3. 压测
+```bash
+# 默认时间为10s
+# 创建1000个连接
+$ wrk --latency -c 1000 http://192.168.0.30
+```
+4. 连接池优化
+http底层是用tcp实现的，因此要从TCP入手
+要查看 TCP 连接数的汇总情况，首选工具自然是 ss 命令。
+```bash
+# 测试时间30分钟
+$ wrk --latency -c 1000 -d 1800 http://192.168.0.30
+# 观察tcp连接数目
+$ ss -s
+Total: 177 (kernel 1565)
+TCP:   1193 (estab 5, closed 1178, orphaned 0, synrecv 0, timewait 1178/0), ports 0 
+Transport Total     IP        IPv6
+   *	  1565      -         -
+   RAW	  1         0         1
+   UDP	  2         2         0
+   TCP	  15        12        3
+   INET	  18        14        4
+   FRAG	  0         0         0
+```
+从这里看出，wrk 并发 1000 请求时，建立连接数只有 5，而 closed 和 timewait 状态的连接则有 1100 多 。其实从这儿你就可以发现两个问题：
+- 一个是建立连接数太少了；
+- 另一个是 timewait 状态连接太多了。
+分析问题，自然要先从相对简单的下手。我们先来看第二个关于 timewait 的问题。在之前的 NAT 案例中，我已经提到过，内核中的连接跟踪模块，有可能会导致 timewait 问题。我们今天的案例还是基于 Docker 运行，而 Docker 使用的 iptables ，就会使用连接跟踪模块来管理 NAT。那么，怎么确认是不是连接跟踪导致的问题呢？
+其实，最简单的方法，就是通过 dmesg 查看系统日志，如果有连接跟踪出了问题，应该会看到 nf_conntrack 相关的日志。
+```bash
+$ dmesg | tail
+[88356.354329] nf_conntrack: nf_conntrack: table full, dropping packet
+[88356.354374] nf_conntrack: nf_conntrack: table full, dropping packet
+```
+从日志中，你可以看到 nf_conntrack: table full, dropping packet 的错误日志。这说明，正是连接跟踪导致的问题。
+
+这种情况下，我们应该想起前面学过的两个内核选项——连接跟踪数的最大限制 nf_conntrack_max ，以及当前的连接跟踪数 nf_conntrack_count。执行下面的命令，你就可以查询这两个选项：
+```bash
+$ sysctl net.netfilter.nf_conntrack_max
+net.netfilter.nf_conntrack_max = 200
+$ sysctl net.netfilter.nf_conntrack_count
+net.netfilter.nf_conntrack_count = 200
+```
+
+这次的输出中，你可以看到最大的连接跟踪限制只有 200，并且全部被占用了。200 的限制显然太小，不过相应的优化也很简单，调大就可以了。
+
+```bash
+# 将连接跟踪限制增大到 1048576
+$ sysctl -w net.netfilter.nf_conntrack_max=1048576
+```
+
+5. 套接字优化
+回想一下网络性能的分析套路，以及 Linux 协议栈的原理，我们可以从从套接字、TCP 协议等逐层分析。而分析的第一步，自然还是要观察有没有发生丢包现象。
+
+```bash
+# 只关注套接字统计
+$ netstat -s | grep socket
+    73 resets received for embryonic SYN_RECV sockets
+    308582 TCP sockets finished time wait in fast timer    
+    8 delayed acks further delayed because of locked socket 
+    290566 times the listen queue of a socket overflowed
+    290566 SYNs to LISTEN sockets dropped 
+# 稍等一会，再次运行
+$ netstat -s | grep socket  
+    73 resets received for embryonic SYN_RECV sockets 
+    314722 TCP sockets finished time wait in fast timer
+    8 delayed acks further delayed because of locked socket 
+    344440 times the listen queue of a socket overflowed 
+    344440 SYNs to LISTEN sockets dropped
+```
+根据两次统计结果中 socket overflowed 和 sockets dropped 的变化，你可以看到，有大量的套接字丢包，并且丢包都是套接字队列溢出导致的。所以，接下来，我们应该分析连接队列的大小是不是有异常
+你可以执行下面的命令，查看套接字的队列大小:
+```bash
+$ ss -ltnp
+State     Recv-Q     Send-Q            Local Address:Port            Peer Address:Port
+LISTEN    10         10                      0.0.0.0:80                   0.0.0.0:*         users:(("nginx",pid=10491,fd=6),("nginx",pid=10490,fd=6),("nginx",pid=10487,fd=6))
+LISTEN    7          10                            *:9000                       *:*         users:(("php-fpm",pid=11084,fd=9),...,("php-fpm",pid=10529,fd=7))
+```
+这次可以看到，Nginx 和 php-fpm 的监听队列 （Send-Q）只有 10，而 nginx 的当前监听队列长度 （Recv-Q）已经达到了最大值，php-fpm 也已经接近了最大值。很明显，套接字监听队列的长度太小了，需要增大。
+关于套接字监听队列长度的设置，既可以在应用程序中，通过套接字接口调整，也支持通过内核选项来配置。我们继续在终端一中，执行下面的命令，分别查询 Nginx 和内核选项对监听队列长度的配置：
+
+```bash
+# 查询 nginx 监听队列长度配置
+$ docker exec nginx cat /etc/nginx/nginx.conf | grep backlog        
+listen       80  backlog=10; 
+# 查询 php-fpm 监听队列长度
+$ docker exec phpfpm cat /opt/bitnami/php/etc/php-fpm.d/www.conf | grep backlog
+; Set listen(2) backlog.
+;listen.backlog = 511 
+# somaxconn 是系统级套接字监听队列上限
+$ sysctl net.core.somaxconn
+net.core.somaxconn = 10
+```
+三个程序最大的是511显然后比较小，统一增大
+6. 端口号优化
+我们执行下面的命令，就可以查询系统配置的临时端口号范围：
+```bash
+$ sysctl net.ipv4.ip_local_port_range
+net.ipv4.ip_local_port_range=20000 20050
+```
+你可以看到，临时端口的范围只有 50 个，显然太小了 。优化方法很容易想到，增大这个范围就可以了。比如，你可以执行下面的命令，把端口号范围扩展为 “10000 65535”：
+
+```bash
+$ sysctl -w net.ipv4.ip_local_port_range="10000 65535"
+net.ipv4.ip_local_port_range = 10000 65535
+```
+
+接着查看还是会有报错的问题，我们可以使用火焰图观察下是什么函数导致的
+
+![[Pasted image 20250701154733.png]]
+这儿中间的 do_syscall_64、tcp_v4_connect、inet_hash_connect 这个堆栈，很明显就是最需要关注的地方。inet_hash_connect() 是 Linux 内核中负责分配临时端口号的函数。所以，这个瓶颈应该还在临时端口的分配上。
+
+在上一步的“端口号”优化中，临时端口号的范围，已经优化成了 “10000 65535”。这显然是一个非常大的范围，那么，端口号的分配为什么又成了瓶颈呢？
+
+一时想不到也没关系，我们可以暂且放下，先看看其他因素的影响。再顺着 inet_hash_connect 往堆栈上面查看，下一个热点是 __init_check_established 函数。而这个函数的目的，是检查端口号是否可用。结合这一点，你应该可以想到，如果有大量连接占用着端口，那么检查端口号可用的函数，不就会消耗更多的 CPU 吗？
+
+实际是否如此呢？我们可以继续在终端一中运行 ss 命令， 查看连接状态统计：
+```bash
+$ ss -sTCP:   32775 (estab 1, closed 32768, orphaned 0, synrecv 0, timewait 32768/0), ports 0
+...
+```
+这回可以看到，有大量连接（这儿是 32768）处于 timewait 状态，而 timewait 状态的连接，本身会继续占用端口号。如果这些端口号可以重用，那么自然就可以缩短 __init_check_established 的过程。而 Linux 内核中，恰好有一个 tcp_tw_reuse 选项，用来控制端口号的重用。
+
+我们在终端一中，运行下面的命令，查询它的配置：
+
+```bash
+$ sysctl net.ipv4.tcp_tw_reuse
+net.ipv4.tcp_tw_reuse = 0
+```
+你可以看到，tcp_tw_reuse 是 0，也就是禁止状态。其实看到这里，我们就能理解，为什么临时端口号的分配会是系统运行的热点了。当然，优化方法也很容易，把它设置成 1 或者2 就可以开启了
+- 0 禁止端口复用
+- 1 开启接收端端口复用
+- 2 接收端和发送端都开启端口复用
+
 
 ### 调优方法
-#### 网卡调优
+
+![[Pasted image 20250701101822.png]]
+
+
+![[Pasted image 20250701101848.png]]
+
+#### 网络层
+网络层，负责网络包的封装、寻址和路由，包括 IP、ICMP 等常见协议。在网络层，最主要的优化，其实就是对路由、 IP 分片以及 ICMP 等进行调优。
+第一种，从路由和转发的角度出发，你可以调整下面的内核选项。
+- 在需要转发的服务器中，比如用作 NAT 网关的服务器或者使用 Docker 容器时，开启 IP转发，即设置 net.ipv4.ip_forward = 1
+- 调整数据包的生存周期 TTL，比如设置 net.ipv4.ip_default_ttl = 64。注意，增大该值会降低系统性能。
+- 开启数据包的反向地址校验，比如设置 net.ipv4.conf.eth0.rp_filter = 1。这样可以防止IP 欺骗，并减少伪造 IP 带来的 DDoS 问题
+
+第二种，从分片的角度出发，最主要的是调整 MTU（Maximum Transmission Unit）的大小
+通常，MTU 的大小应该根据以太网的标准来设置。以太网标准规定，一个网络帧最大为1518B，那么去掉以太网头部的 18B 后，剩余的 1500 就是以太网 MTU 的大小。
+在使用 VXLAN、GRE 等叠加网络技术时，要注意，网络叠加会使原来的网络包变大，导致MTU 也需要调整。
+比如，就以 VXLAN 为例，它在原来报文的基础上，增加了 14B 的以太网头部、 8B 的VXLAN 头部、8B 的 UDP 头部以及 20B 的 IP 头部。换句话说，每个包比原来增大了50B。
+所以，我们就需要把交换机、路由器等的 MTU，增大到 1550， 或者把 VXLAN 封包前（比如虚拟化环境中的虚拟网卡）的 MTU 减小为 1450。
+另外，现在很多网络设备都支持巨帧，如果是这种环境，你还可以把 MTU 调大为 9000，以提高网络吞吐量。
+第三种，从 ICMP 的角度出发，为了避免 ICMP 主机探测、ICMP Flood 等各种网络问题，你可以通过内核选项，来限制 ICMP 的行为。
+比如，你可以禁止 ICMP 协议，即设置 net.ipv4.icmp_echo_ignore_all = 1。这样，外部主机就无法通过 ICMP 来探测主机。
+
+或者，你还可以禁止广播 ICMP，即设置 net.ipv4.icmp_echo_ignore_broadcasts = 1
 ##### MTU
 ##### 队列长度
 ##### 链路聚合
