@@ -74,9 +74,20 @@ print fmt: "%d,%d %s %u (%s) %llu + %u [%s]", ((unsigned int) ((REC->dev) >> 20)
 
 - 使用 `perf trace -p $(pgrep mysql)` 来调用跟踪具体的应用进程
 
+##### 缓存命中率
+
+perf监听原理是在内部使用性能监视单元，也就是 PMU（Performance Monitoring Units）硬件，来收集各种相关 CPU 硬件事件的数据（例如缓存访问和缓存未命中），并且不会给系统带来太大开销。
+```bash
+perf stat -e LLC-loads,LLC-load-misses,LLC-stores,LLC-store-misses
+```
+
+
 #### 内核时间分析
 
 - 使用 `perf trace -s -p $(pgrep mysql)` 来调用跟踪具体的应用进程
+
+
+
 
 #### I/O 剖析
 
