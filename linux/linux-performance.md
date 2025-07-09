@@ -482,7 +482,7 @@ PID USER      PR  NI    VIRT    RES    SHR S  %CPU %MEM
 
 通过 /proc/softirqs 文件内容的变化情况，你可以发现， TIMER（定时中断）、NET_RX（网络接收）、SCHED（内核调度）、RCU（RCU 锁）等这几个软中断都在不停变化
 ```bash
-$ watch -d cat /proc/softirqs
+$ watch -d cat /proc/softirqs
                     CPU0       CPU1
           HI:          0          0
        TIMER:    1083906    2368646
