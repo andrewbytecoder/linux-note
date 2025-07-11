@@ -483,7 +483,7 @@ http_requests_total{instance!="localhost:9090"}
 - 使用`label=~regx`表示选择那些标签符合正则表达式定义的时间序列；
 - 反之使用`label!~regx`进行排除；
 
-> ~ 为正则选中， !~ 为正则排除
+> =~ 为正则选中， !~ 为正则排除
 
 ```bash
 # 获取所有指标
@@ -826,6 +826,12 @@ quantile用于计算当前样本数据值的分布情况quantile(φ, express)其
 ```bash
 quantile(0.5, http_requests_total)
 ```
+
+#### topk
+```bash
+topk(3, bicycle_speed_meters_per_second)
+```
+
 
 ### PromQL 内置函数
 
