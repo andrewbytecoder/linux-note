@@ -484,22 +484,113 @@ protocol = https
 Grafana 支持将面板自动渲染为 PNG 图像。这使得 Grafana 可以自动生成面板图像，以包含在警报通知、 [PDF 导出](https://grafana.com/docs/grafana/latest/dashboards/create-reports/#export-dashboard-as-pdf)和[报告](https://grafana.com/docs/grafana/latest/dashboards/create-reports/)中。
 渲染图形需要用专用的渲染插件
 
-## Administration
+## Data sources 
+### Alertmanager
+
+#### 添加alertmanager数据源
+
+```yaml
+apiVersion: 1
+
+datasources:
+  - name: Alertmanager
+    type: alertmanager
+    url: http://localhost:9093
+    access: proxy
+    jsonData:
+      # Valid options for implementation include mimir, cortex and prometheus
+      implementation: prometheus
+      # Whether or not Grafana should send alert instances to this Alertmanager
+      handleGrafanaManagedAlerts: false
+    # optionally
+    basicAuth: true
+    basicAuthUser: my_user
+    secureJsonData:
+      basicAuthPassword: test_password
+```
+
+[Alertmanager数据源配置](https://grafana.com/docs/grafana/latest/datasources/alertmanager/)
+
+### prometheus
+
+#### 添加prometheus数据源
+
+```yaml
+apiVersion: 1
+
+datasources:
+  - name: Prometheus
+    type: prometheus
+    access: proxy
+    # Access mode - proxy (server in the UI) or direct (browser in the UI).
+    url: http://localhost:9090
+    jsonData:
+      httpMethod: POST
+      manageAlerts: true
+      prometheusType: Prometheus
+      prometheusVersion: 2.44.0
+      cacheLevel: 'High'
+      disableRecordingRules: false
+      incrementalQueryOverlapWindow: 10m
+      exemplarTraceIdDestinations:
+        # Field with internal link pointing to data source in Grafana.
+        # datasourceUid value can be anything, but it should be unique across all defined data source uids.
+        - datasourceUid: my_jaeger_uid
+          name: traceID
+
+        # Field with external link.
+        - name: traceID
+          url: 'http://localhost:3000/explore?orgId=1&left=%5B%22now-1h%22,%22now%22,%22Jaeger%22,%7B%22query%22:%22$${__value.raw}%22%7D%5D'
+```
+
+#### 使用区间和范围变量
+
+您可以在查询变量中使用一些全局内置变量，例如 `$__interval` 、 `$__interval_ms` 、 `$__range` 、 `$__range_s` 和 `$__range_ms` 。 有关详细信息，请参阅 [全局内置变量](https://grafana.com/docs/grafana/latest/dashboards/variables/add-template-variables/#global-variables) ，`label_values` 函数不支持查询，因此您可以将这些变量与 `query_result` 函数结合使用，以筛选变量查询。
 
 
+#### 使用示例
+
+1. 使用 `$__rate_interval`
+我们建议在 `rate` 和 `increase` 函数中使用 `$__rate_interval` 而不是 `$__interval` 或固定间隔值。由于 `$__rate_interval` 始终至少为 Scrape 间隔值的四倍，因此可以避免 Prometheus 特有的问题。
+不要使用
+```bash
+rate(http_requests_total[5m])
+```
+或者
+```bash
+rate(http_requests_total[$__interval])
+```
+建议使用
+```bash
+rate(http_requests_total[$__rate_interval])
+```
+`$__rate_interval` 的值定义为 _max( `$__interval` + _Scrape interval_ , 4 * _Scrape interval_ )_ ，其中 _Scrape interval_ 是“最小步长”设置（也称为 `query*interval` ，每个 PromQL 查询的设置）（如果已设置）。否则，Grafana 将使用 Prometheus 数据源的“Scrape interval”设置。
+rate在进行计算的过程中至少要提供两个以上才能进行计算，因此interval选择至少要2倍的抓取间隔
+
+见博客 : [使用 rate interval](https://grafana.com/blog/2020/09/28/new-in-grafana-7.2-__rate_interval-for-prometheus-rate-queries-that-just-work/)
+
+#### 变量语法
+
+Prometheus 数据源支持两种在**查询**字段中使用的变量语法：
+- `$<varname>` ，例如 `rate(http_requests_total{job=~"$job"}[$_rate_interval])` ，这更易于读写，但不允许在单词中间使用变量。
+- `[[varname]]` ，例如 `rate(http_requests_total{job=~"[[job]]"}[$_rate_interval])`
 
 
+## Dashboards
 
+### 添加标签
+1. 在界面上可以点击 **设置** 然后 在tags里面添加
+2. 在json中可以在根目录的tags对象中添加
+```json
+"tags": [
+	"Kubernetes",
+	"Prometheus"
+],
+```
 
+### 添加变量
 
+变量让您能够创建更具交互性和动态性的仪表板。
 
-
-
-
-
-
-
-
-
-
+在设置界面变量页面可以查看已有变量和添加新变量。
 
