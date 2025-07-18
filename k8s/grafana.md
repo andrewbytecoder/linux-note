@@ -579,6 +579,7 @@ Prometheus 数据源支持两种在**查询**字段中使用的变量语法：
 ## Dashboards
 
 ### 添加标签
+标签是整理仪表板的绝佳方式，尤其是在仪表板数量不断增长的情况下。
 1. 在界面上可以点击 **设置** 然后 在tags里面添加
 2. 在json中可以在根目录的tags对象中添加
 ```json
@@ -587,10 +588,195 @@ Prometheus 数据源支持两种在**查询**字段中使用的变量语法：
 	"Prometheus"
 ],
 ```
+tags可以用于在主仪表盘界面过滤仪表盘，和k8s里面的label差不多，因此最好每个一类仪表盘都有自己的独特的tag
 
-### 添加变量
+
+### 变量
 
 变量让您能够创建更具交互性和动态性的仪表板。
-
 在设置界面变量页面可以查看已有变量和添加新变量。
+变量是值的占位符。您可以在指标查询和面板标题中使用变量。因此，当您使用仪表板顶部的下拉菜单更改值时，面板的指标查询将会更改以反映新值。
+对于希望允许 Grafana 查看器调整可视化效果但不授予其完全编辑权限的管理员来说，变量非常有用。Grafana 查看器可以使用变量。
+查询变量可让您编写数据源查询，该查询可返回指标名称、标签值或键的列表。例如，查询变量可能返回服务器名称、传感器 ID 或数据中心的列表。变量值会随着数据源查询动态获取选项而变化。
 
+
+*变量使用*
+首先定义个变量，变量可以是根据查询语句查询出来的，然后变量的值是可以在面板直接选择的，一旦选择其他表格里面的查询语句直接可以根据需要指定变量的名字，比如定义的有Node变量，那么查询的时候直接就可以指定表格到指定的Node，当更改变量指向的Node时，对应的表格数据也会跟着改变。
+```bash
+1 - avg by(instance)(irate(node_cpu_seconds_total{origin_prometheus="$origin_prometheus", mode="idle", instance=~"^$Node$"}[5m]))
+```
+
+#### 全局变量
+- `__dashboard`
+此变量代表当前仪表盘的名称
+
+- `__from` 和 `__to`
+
+Grafana 有两个内置的时间范围变量： `$__from` 和 `$__to` 。它们目前默认总是以纪元毫秒为单位进行插值，但您可以控制日期格式。
+
+Expand table  展开表格
+
+| Syntax  句法               | Example result                                     | Description                                                                                                                                                      |
+| ------------------------ | -------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `${__from}`              | 1594671549254                                      | Unix millisecond epoch  Unix                                                                                                                                     |
+| `${__from:date}`         | 2020-07-13T20:19:09.254Z  2020-07-13T20：19：09.254Z | No arguments, defaults to ISO 8601/RFC 3339                                                                                                                      |
+| `${__from:date:iso}`     | 2020-07-13T20:19:09.254Z  2020-07-13T20：19：09.254Z | ISO 8601/RFC 3339                                                                                                                                                |
+| `${__from:date:seconds}` | 1594671549                                         | Unix seconds epoch  Unix                                                                                                                                         |
+| `${__from:date:YYYY-MM}` | 2020-07                                            | Any custom [date format](https://momentjs.com/docs/#/displaying/) that does not include the `:` character. Uses browser time. Use `:date` or `:date:iso` for UTC |
+ 
+上述语法也适用于 `${__to}` 。
+
+- `__interval`
+Grafana 会自动计算查询中按时间分组的时间间隔。当数据点数量超过图表所能显示的数量时，按较大时间间隔分组可以提高查询效率。例如，查看 3 个月的数据时，按 1 天分组比按 10 秒分组更高效。图表看起来相同，查询速度也更快。 `$__interval` 是根据时间范围和图表宽度（像素数）计算得出的。
+
+-  `__interval_ms`
+以毫秒为单位的interval变量
+
+- `__name`
+此变量仅在 **Singlestat** 面板中可用，可在“选项”选项卡上的前缀或后缀字段中使用。该变量将被替换为系列名称或别名。
+
+- `__org`
+该变量是当前组织的 ID。 `${__org.name}` 是当前组织的名称
+- `__user`
+`${__user.id}` 是当前用户的 ID。 `${__user.login}` 是当前用户的登录句柄。 `${__user.email}` 是当前用户的电子邮件。
+
+- `__range`
+目前仅支持 Prometheus 和 Loki 数据源。此变量表示当前仪表板的范围。它通过 `to - from` 计算得出。它以毫秒和秒为单位，分别称为 `$__range_ms` 和 `$__range_s` 。
+
+- `__rate_interval`
+目前仅支持 Prometheus 数据源。 `$__rate_interval` 变量用于 rate 函数。请参阅 [Prometheus 查询变量](https://grafana.com/docs/grafana/latest/datasources/prometheus/template-variables/#use-**rate_interval)以了解详细信息。
+
+- `__rate_interval_ms`
+`$__rate_interval` 为 `20m` ，则 `$__rate_interval_ms` 为 `1200000` 。
+
+- `timeFilter` 或 `__timeFilter`
+`$timeFilter` 变量以表达式形式返回当前选定的时间范围。例如，时间范围间隔 `Last 7 days` 的表达式为 `time > now() - 7d` 。
+
+- `__timezone`
+`$__timezone` 变量返回当前选定的时区，可以是 `utc` 或 IANA 时区数据库的条目（例如 `America/New_York` ）。
+
+[仪表盘变量](https://grafana.com/docs/grafana/latest/dashboards/variables/)
+
+#### 链式变量
+_链式变量_ （也称为_链接变量_或_嵌套变量_ ）是指在其变量查询中包含一个或多个其他变量的查询变量。
+
+#### 变量语法
+面板标题和指标查询可以使用两种不同的语法引用变量：
+`$varname` 这种语法很容易阅读，但它不允许你在单词中间使用变量。 **例如：** apps.frontend.$server.requests.count
+`${var_name}` 当您想在表达式中间插入变量时使用此语法。
+`${var_name:<format>}` 此格式可让您更好地控制 Grafana 插值的方式。有关所有格式类型的更多详细信息，请参阅[高级变量格式选项](https://grafana.com/docs/grafana/latest/dashboards/variables/variable-syntax/#advanced-variable-format-options) 。
+`[[varname]]` 请勿使用。旧语法已弃用，将在后续版本中删除。
+在将查询发送到数据源之前，查询会_进行插值_ ，这意味着变量会被替换为其当前值。在插值过程中，变量值可能会_进行转义_ ，以符合查询语言的语法及其使用位置。
+
+#### 高级变量格式选项
+变量插值的格式取决于数据源，但在某些情况下您可能需要更改默认格式
+
+- General syntax  常规语法
+语法： `${var_name:option}`
+
+- CSV
+将具有多个值的变量格式化为逗号分隔的字符串。
+```bash
+servers = ['test1', 'test2']
+String to interpolate: '${servers:csv}'
+Interpolation result: 'test1,test2'
+```
+- Distributed - OpenTSDB  分布式——OpenTSDB
+为 OpenTSDB 以自定义格式格式化具有多个值的变量。
+```bash
+servers = ['test1', 'test2']
+String to interpolate: '${servers:distributed}'
+Interpolation result: 'test1,servers=test2'
+```
+- Doublequote
+将单值和多值变量格式化为逗号分隔的字符串，用 `\"` 转义每个值中的 `"` ，并用 `"` 引用每个值。
+```bash
+servers = ['test1', 'test2']
+String to interpolate: '${servers:doublequote}'
+Interpolation result: '"test1","test2"'
+```
+- Glob - Graphite 
+将具有多个值的变量格式化为一个 glob（用于 Graphite 查询）。
+```bash
+servers = ['test1', 'test2']
+String to interpolate: '${servers:glob}'
+Interpolation result: '{test1,test2}'
+```
+- JSON
+将具有多个值的变量格式化为逗号分隔的字符串
+```bash
+servers = ['test1', 'test2']
+String to interpolate: '${servers:json}'
+Interpolation result: '["test1", "test2"]'
+```
+- Percentencode
+格式化单值和多值变量以用于 URL 参数
+```bash
+servers = ['foo()bar BAZ', 'test2']
+String to interpolate: '${servers:percentencode}'
+Interpolation result: 'foo%28%29bar%20BAZ%2Ctest2'
+```
+- Pipe
+将具有多个值的变量格式化为以竖线分隔的字符串。
+```bash
+servers = ['test1.', 'test2']
+String to interpolate: '${servers:pipe}'
+Interpolation result: 'test1.|test2'
+```
+- Raw
+不对变量进行任何操作
+例如，在本例中，有一个包含 Prometheus 数据源和多值变量的仪表板。Grafana 通常会按如下方式转换变量值以适应 Prometheus：
+```bash
+servers = ['test1.', 'test2']
+String to interpolate: '${servers}'
+Interpolation result: '(test1 | test2)'
+```
+使用原始格式，返回的值不带该格式：
+```bash
+servers = ['test1.', 'test2']
+String to interpolate: '${servers:raw}'
+Interpolation result: 'test1,test2'
+```
+- Regex
+将具有多个值的变量格式化为正则表达式字符串。
+```bash
+servers = ['test1.', 'test2']
+String to interpolate: '${servers:regex}'
+Interpolation result: '(test1\.|test2)'
+```
+- Singlequote
+将单值和多值变量格式化为逗号分隔的字符串，用 `\'` 转义每个值中的 `'` ，并用 `'` 引用每个值。
+```bash
+servers = ['test1', 'test2']
+String to interpolate: '${servers:singlequote}'
+Interpolation result: "'test1','test2'"
+```
+
+- Sqlstring
+将单值和多值变量格式化为逗号分隔的字符串，用 `'` `''` 转义每个值中的 ' ，并用 `'` 引用每个值。
+```bash
+servers = ["test'1", "test2"]
+String to interpolate: '${servers:sqlstring}'
+Interpolation result: "'test''1','test2'"
+```
+
+- Text
+将单值变量和多值变量格式化为其文本表示形式。对于单值变量，它将仅返回文本表示形式。对于多值变量，它将返回文本表示形式加上 `+` 。
+```bash
+servers = ["test1", "test2"]
+String to interpolate: '${servers:text}'
+Interpolation result: "test1 + test2"
+```
+- Query parameters
+将单值变量和多值变量格式化为查询参数表示形式。例如： `var-foo=value1&var-foo=value2`
+```bash
+servers = ["test1", "test2"]
+String to interpolate: '${servers:queryparam}'
+Interpolation result: "var-servers=test1&var-servers=test2"
+```
+
+### playlist
+grafana支持播放列表，添加之后可以在大屏或者其他设备上全屏显示监控内容
+
+
+## Panels and visualizations
