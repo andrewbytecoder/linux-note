@@ -4,6 +4,15 @@
 ![[Pasted image 20250620100517.png]]
 
 
+| 模块      | 监控命令                                                                            |     |
+| ------- | ------------------------------------------------------------------------------- | --- |
+| CPU     | lscpu、cpuinfo、top、atop、vmstat、mpstat、pidstat、Dstat、Nmon、sar、cpupower、irqbalance |     |
+| Memory  | top、atop、vmstat、pidstat、Dstat、Nmon、sar、free、smem                                |     |
+| I/O     | iostat、iotop、pidstat、Dstat、Nmon、sar                                             |     |
+| Network | netstat、ifstat、iftop、Ethtool                                                    |     |
+| System  | top、atop、vmstat、pidstat、Nmon、sar                                                |     |
+| Swap    | vmstat、Nmon、sar、Meminfo、smem                                                    |     |
+
 
 ### USE 方法
 

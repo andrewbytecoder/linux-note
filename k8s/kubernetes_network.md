@@ -12,10 +12,11 @@ Kubernetes集群至少应该包含三个网络，如图网络环境所示。一�
 
 ![[image-2025-01-27-01-07-54-828.png]]
 
-
 ## Docker网络基础
 
 Docker技术依赖于近年来Linux内核虚拟化技术的发展， 所以Docker对Linux内核有很强的依赖。 Docker使用到的技术有网络命名空间（ Network Namespace） 、 Veth设备对、 网桥、 ipatables和路由。
+
+
 
 ### 网络命名空间
 
@@ -45,6 +46,7 @@ ip netns exec <name> bash
 # 退出到外部网络命名空间
 exit
 ```
+
 
 ### Veth设备对
 
@@ -88,11 +90,27 @@ ip link set <veth1> up
 在bridge模式下， Docker Daemon首次启动时会创建一个虚拟网桥，默认的名称是docker0， 然后按照RPC1918的模型在私有网络空间中给这个网桥分配一个子网。 针对由Docker创建的每一个容器， 都会创建一个虚拟以太网设备（Veth设备对） ， 其中一端关联到网桥上， 另一端使用Linux的网络命名空间技术映射到容器内的eth0设备， 然后在网桥的地址段内给eth0接口分配一个IP地址。
 
 ## Kubernetes的网络实现
-
 - 容器到容器之间的直接通信。
 - 抽象的Pod到Pod之间的通信。
 - Pod到Service之间的通信。
 - 集群内部与外部组件之间的通信
+
+### 网络模型
+#### 宿主机网络
+pod可以使用宿主节点的网络接口，而不是拥有自己独立的网络。这意味着这个pod没有自己的IP地址；如果这个pod中的某一进程绑定了某个端口，那么该进程将被绑定到宿主节点的端口上。一个配置了hostNetwork:true的pod使用宿主节点的网络接口，而不是它自己的
+![[Image00649.jpg]]
+查看宿主机网络网卡信息
+```bash
+kubectl exec <pod-name> ifconfig
+```
+
+#### hostPort与nodePort
+通过配置pod的spec.containers.ports字段中某个容器某一端口的hostPort属性来实现。
+不要混淆使用hostPort的pod和通过NodePort服务暴露的pod。
+
+在图中首先注意到的是，对于一个使用hostPort的pod，到达宿主节点的端口的连接会被直接转发到pod的对应端口上；然而在NodePort服务中，到达宿主节点的端口的连接将被转发到随机选取的pod上（这个pod可能在其他节点上）。另外一个区别是，对于使用hostPort的pod，仅有运行了这类pod的节点会绑定对应的端口；而NodePort类型的服务会在所有的节点上绑定端口，即使这个节点上没有运行对应的pod
+![[Image00653.jpg]]
+
 
 ### 容器到容器的通信
 
