@@ -78,7 +78,7 @@ system:serviceaccount:<namespace>:default
 
 如果希望kube-system命名空间下的Service Account "default" 具有所有权限，就需要再策略文件中加入如下内容
 
-```bash
+```yaml
 apiVersion: abac.authorization.kubernetes.io/v1beta1
 kind: Policy
 spec:
@@ -92,6 +92,8 @@ spec:
 ### RBAC授权模式详解
 
 要使用RBAC授权模式， 首先需要在kube-apiserver服务的启动参数authorization-mode（ 授权模式） 的列表中加上RBAC， 例如--authorization-mode=...， RBAC。
+
+ServiceAccount, ClusterRole, ClusterRoleBinding之间的关系就是ClusterRole用来确定权限，ClusterRoleBinding用来绑定 ServiceAccount和ClusterRole，而一个pod像要有权限需要创建ServiceAccount账户，然后凭借绑定关系获取权限 ，可以参考 [部署prometheus实例](https://prometheus-operator.dev/docs/platform/platform-guide/)
 
 - RBAC的API资源对象说明
 
