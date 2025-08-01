@@ -30,6 +30,35 @@ func main() {
 }
 ```
 
+**闭包就是一个函数与相关的引用环境组成的一个整体（实体）**
+
+Go 语言支持匿名函数，可作为闭包。匿名函数是一个"内联"语句或表达式。匿名函数的优越性在于可以直接使用函数内的变量，不必申明。
+
+> 在本质上，闭包是函数内部和函数外部连接起来的桥梁，或者说是函数和其引用环境的组合体
+
+闭包存在延迟绑定，其实质是因为闭包是采用的引用方式进行闭包，就算是值类型，一旦被匿名函数闭包值也是采用的引用
+```go
+func foo5() {
+    values := []int{1, 2, 3, 5}
+    // 注意如果这里val值是range创建   _, val := range values将会闭包很多变量，不能实现全部都输出5的效果
+    val := 0
+    for _, val = range values {
+        go func() {
+            fmt.Printf("foo5 val = %v\n", val)
+        }()
+    }
+}
+​
+foo5()
+//foo3 val = 5
+//foo3 val = 5
+//foo3 val = 5
+//foo3 val = 5
+```
+其实也很好理解，如果学过C语言，val的值拿的是引用，当执行闭包的函数时，会重新索引val的值
+
+
+
 https://blog.csdn.net/u010429831/article/details/108641919[闭包]
 
 ## 关键字
@@ -1135,6 +1164,21 @@ go tool compile -S pkg.go
 ```
 
 
+```go
+package main
+
+func main() {
+  _ = add(3,5)
+}
+
+func add(a, b int) int {
+  return a+b
+}
+```
+
+`go tool compile -S main.go`
+
+
 
 
 
@@ -1249,6 +1293,10 @@ taskset -c 0 perf bench sched pipe -T
 
 
 
+
+
+
+[GMP原理](https://www.topgoer.com/%E5%B9%B6%E5%8F%91%E7%BC%96%E7%A8%8B/GMP%E5%8E%9F%E7%90%86%E4%B8%8E%E8%B0%83%E5%BA%A6.html)
 
 
 

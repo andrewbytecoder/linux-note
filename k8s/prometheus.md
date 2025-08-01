@@ -42,426 +42,244 @@ curl -X POST http://localhost:9090/-/reload
 - labelkeep：针对所有标签名来匹配regex，任何不匹配的标签将从标签集中删除。
 - labeldrop：针对所有标签来匹配regex，任何匹配的标签将从标签集中删除。
 
-
-## Alertmanager
-
 ### 配置
+```yaml
+# 全局配置
+global:
+  scrape_interval:     15s
+  evaluation_interval: 15s
 
+rule_files:
+  # - "first.rules"
+  # - "second.rules"
 
-### 告警分组
-分组机制（Grouping）是指，AlertManager将同类型的告警进行分组，合并多条告警到一个通知中。在实际环境中，特别是云计算环境中的业务线之间密集耦合时，若出现多台设备宕机，可能会导致成百上千个告警被触发。在这种情况下使用分组机制，可以将这些被触发的告警合并为一个告警进行通知，从而避免瞬间突发性地接收大量的告警通知，使得管理员无法对问题进行快速定位。
+scrape_configs:
+  - job_name: prometheus
+    static_configs:
+      - targets: ['localhost:9090']
+```
 
-例如，在一个Kubernetes集群中，运行着重量级规模数量的实例，即便是集群中持续一小段时间的网络延时或间歇式断开，也会引起大量应用程序无法连接数据库的故障。如果我们在Prometheus告警规则中配置为每一个服务实例都发送告警，那么最后的结果就是大量的告警被发送到Alertmanager中心。
+### 配置规则
+Prometheus 支持两种类型的规则，它们可以配置并定期评估：记录规则和[警报规则](https://prometheus.io/docs/prometheus/latest/configuration/alerting_rules/) 。要在 Prometheus 中添加规则，请创建一个包含必要规则语句的文件，并让 Prometheus 通过 [Prometheus 配置](https://prometheus.io/docs/prometheus/latest/configuration/configuration/)中的 `rule_files` 字段加载该文件。规则文件使用 YAML 格式。
+规则文件可以在运行时通过向 Prometheus 进程发送 `SIGHUP` 来重新加载。只有所有规则文件格式正确时，更改才会生效。
 
-其实，作为集群管理员，可能希望在一个通知中就能快速查看是哪些服务实例被本次故障影响了。此时，对服务所在集群或者告警名称进行分组打包配置，将这些告警紧凑在一起成为一个“大”的通知时，管理员就不会受到告警的频繁“轰炸”。告警分组、告警时间和告警接收器均是通过Alertmanager的配置文件来完成配置的。
-
-### 告警抑制
-
-Alertmanager的抑制机制（Inhibition）是指，当某告警已经发出，停止重复发送由此告警引发的其他异常或故障的告警机制。在生产环境中，例如IDC托管机柜中，若每个机柜接入层仅仅是单台交换机，那么该机柜接入交换机故障会造成机柜中服务器非UP状态告警；再有服务器上部署的应用不可访问也会触发告警。此时，可以配置Alertmanager忽略由交换机故障造成的机柜所有服务器及其应用不可访问而产生的告警。
-
-在我们的灾备体系中，当原集群故障宕机业务彻底无法访问时，会把用户流量切换到灾备集群中，这样为故障集群及其提供的各个微服务状态发送告警就失去了意义，此时，Alertmanager的抑制机制在一定程度上避免了管理员收到过多的触发告警通知。抑制机制也是通过Alertmanager的配置文件进行设置的。
-
-
-### 告警静默
-
-
-告警静默（Silences）提供了一个简单的机制，可以根据标签快速对告警进行静默处理。对传入的告警进行匹配检查，如果接收到的告警符合静默的配置，Alertmanager则不会发送告警通知。管理员可以直接在Alertmanager的Web界面中临时屏蔽指定的告警通知。
-
-
-### prometheus的告警规则
-
-
-
-## prometheus特性列表
-
-### pod停止之后还是能采集到数据
-
-这是因为prometheus为了能够聚合数据，会对原先的数据进行聚合，默认会进行5分钟的聚合，也就是小时5分钟之后还有虚假数据
-
-如果需要修改可以通过以下参数进行修改：
+#### Syntax-checking rules  语法检查规则
+为了在不启动 Prometheus 服务器的情况下快速检查规则文件语法是否正确，可以使用 Prometheus 的 `promtool` 命令行实用工具：
 
 ```bash
---query.lookback-delta
+promtool check rules /path/to/example.rules.yml
 ```
 
-https://github.com/prometheus/prometheus/discussions/11825[discussions:11825]
+#### recording rules 记录规则
+记录规则允许您预先计算常用或计算量大的表达式，并将其结果保存为一组新的时间序列。查询预先计算的结果通常比每次需要时执行原始表达式要快得多。这对于每次刷新时都需要重复查询相同表达式的仪表板尤其有用。
 
-
-
-
-
-## 数据设计
-
-每个监控系统都有自己的一套指标定义和规范。
-
-### 指标
-
-.prometheus指标格式定义
-`<metric name>{<label name>=<label value> , . .. }`
-
-- metric name: 监控指标名称，必须以字母开头，只能包含字母、数字、下划线、点、中划线、冒号，其中冒号不能用于exporter。
-
-- label name: 标签可以提现指标的维度特征，用于过滤和聚合，通过标签名和标签值的组合形式，形成多种维度。
-
-### 指标分类
-
-1. gauge类型，仪表盘，表示一个瞬时值，例如cpu使用率，内存使用率等。
-
-2. counter类型，计数器，表示一个累计值，例如请求总数，错误总数等。
-
-3. histogram类型，直方图，表示一个统计数据，例如请求耗时，响应大小等。
-
-4. summary类型，摘要，表示一个统计数据，例如请求耗时，响应大小等。
-
-### 数据采集
-
-采用pull的方式采集监控数据，因此为了兼容push方式prometheus提供了pushgateway服务。
-
-prometheus支持静态配置文件的服务发现方式和动态发现两种模式：
-
-- 静态配置文件
-
-.指定采集本地8080端口的Agent数据的代码
-```bash
-"targets": ["10.10.10.10:8080"]
-```
-
-- 动态发现
-
-
-**数据采集**
-
-采用Restful API方式获取数据，具体来说就是调用HTTP GET请求或Metrics数据接口获取监控数据。
-
-配置修改之后，有两种方式用来更新配置：
-
-1. 调用reload接口进行配置更新
-2. 发送 `kill -HUP prometheus进程ID` 动态加载配置
-
-**数据处理**
-
-Prometheus 支持数据处理，主要包括 relabel 、 replace 、 keep 、 drop 等操作。
-
-Prometheus 会从 target 中获取所有暴露的数据，但某些数据对 Prometheus 是无用的，如果直接保存这些数据，则不仅浪费空间，还会降低系统的吞吐量 。 Prometheus提供了 keep 或 drop 机制，如果设置了 keep 机制，则会保留所有匹配标签的数据；如果设置了 drop 机制 ， 则会丢弃匹配标签的数据，从而完成数据过滤
-
-### 数据存储
-
-- 本地存储
-
-- 远程存储
-
-通过适配器实现Prometheus的read和write接口来实现。
-
-### 数据查询
-
-数据查询可以通过promQL语法进行查询。和关系数据库的SQL不一样的地方是PromQL只支持查询、聚合、统计等操作，不支持修改、删除等操作。
-
-### 告警
-
-告警机制，Prometheus支持告警机制，alerter通过配置告警规则，当监控指标达到设定的阈值时，alerter会发送告警信息。
-
-```bash
-request latency seconds :mean5m {job="myjob"} > 0.5
-```
-
-告警处理需要依赖告警组件AlertManager
-
-### 集群
-
-多个prometheus实例可以组成一个集群，用来监控多个实例。多个prometheus节点组成两层联邦结构，下层的prometheus充当代理。
-
-![[image-2024-12-25-11-55-51-356.png]]
-
-存在问题：
-
-- 配置复杂
-- 历史数据存储问题没有得到解决，需要依赖第三方存储，并缺少针对历史数据的降准采样能力。
-
-*Thanos*
-
-.Thanos架构图
-![[image-2024-12-25-12-06-25-188.png]]
-
-
-## 数据存储
-
-prometheus数据存储方式有本地存储和远程存储两种方式。
-
-- 本地存储
-
-- 远程存储
-
-### 存储接口
-
-本地存储方式，prometheus会将数据存储在本地文件中，从而实现高性能读写，但是时序性数据库非集群的数据库，为此prometheus提供了远程存储方式，为了适配远端存储，prometheus抽象了一组读写数据接口。
-
-Appender提供批量向数据库添加数据接口
-
-```go
-// 必须调用Commit Rollback等完成数据提交，并且调用之后该appender不能再重复使用。
-// 单次 Commit中如果有重复数据，那么具体行为将是未定义的
-type Appender interface {
-    //  将给定的样本数据添加到对应的序列中，并返回索引
-	Append(ref SeriesRef, l labels.Labels, t int64, v float64) (SeriesRef, error)
-    // 批量提交
-	Commit() error
-    // 回滚操作
-	Rollback() error
-
-	// 为添加数据提供额外的选项，比如 ： out-of-order
-	SetOptions(opts *AppendOptions)
-
-    // 特例提交
-	ExemplarAppender
-	HistogramAppender
-	MetadataUpdater
-	CreatedTimestampAppender
-}
-```
-
-Querier监控数据查询接口，Select方法用于给定的标签查询对应的时序数据。
-
-```go
-type Querier interface {
-	// 根据指定标签进行数据查询
-	LabelQuerier
-
-	// 根据标签查询时序数据
-	Select(ctx context.Context, sortSeries bool, hints *SelectHints, matchers ...*labels.Matcher) SeriesSet
-}
-```
-
-为了兼容本地存储和远端存储，prometheus提供了fanout接口，该接口同样实现了上面的Appender接口。
-
-当执行fanout中的方法时，fanout会首先执行本地存储primary的Add方法，然后便利执行每个远端存储的Add方法。
-
-![[image-2024-12-25-14-37-44-315.png]]
-
-```go
-type fanout struct {
-	logger *slog.Logger
-
-	primary     Storage
-	secondaries ]]Storage
-}
-```
-
-### 本地存储
-
-#### 样本
-
-Prometheus会将所有采集到的样本数据以时间序列（time-series）的方式保存在内存数据库中，并且定时保存到硬盘上。time-series是按照时间戳和值的序列顺序存放的，我们称之为向量(vector). 每条time-series通过指标名称(metrics name)和一组标签集(labelset)命名。如下所示，可以将time-series理解为一个以时间为Y轴的数字矩阵：
-
-```bash
-./data
-   |- 01BKGV7JBM69T2G1BGBGM6KB12 # 块
-      |- meta.json  # 元数据
-      |- wal        # 写入日志
-        |- 000002
-        |- 000001
-   |- 01BKGTZQ1SYQJTR4PB43C8PD98  # 块
-      |- meta.json  #元数据
-      |- index   # 索引文件
-      |- chunks  # 样本数据
-        |- 000001
-      |- tombstones # 逻辑数据
-   |- 01BKGTZQ1HHWHV8FBJXW1Y3W0K
-      |- meta.json
-      |- wal
-        |-000001
-```
-
-```bash
-^
-│   . . . . . . . . . . . . . . . . .   . .   node_cpu{cpu="cpu0",mode="idle"}
-│     . . . . . . . . . . . . . . . . . . .   node_cpu{cpu="cpu0",mode="system"}
-│     . . . . . . . . . .   . . . . . . . .   node_load1{}
-│     . . . . . . . . . . . . . . . .   . .
-v
-<------------------ 时间 ---------------->
-```
-
-在time-series中的每一个点称为一个样本（sample），样本由以下三部分组成：
-
-- 指标(metric)：metric name和描述当前样本特征的labelsets;
-- 时间戳(timestamp)：一个精确到毫秒的时间戳;
-- 样本值(value)： 一个float64的浮点型数据表示当前样本的值
-
-```bash
-<--------------- metric ---------------------><- timestamp -><- value ->
-http_request_total{status="200", method="GET"}@1434417560938 => 94355
-http_request_total{status="200", method="GET"}@1434417561287 => 94334
-
-http_request_total{status="404", method="GET"}@1434417560938 => 38473
-http_request_total{status="404", method="GET"}@1434417561287 => 38544
-
-http_request_total{status="200", method="POST"}@1434417560938 => 4748
-http_request_total{status="200", method="POST"}@1434417561287 => 4785
-```
-
-
-#### TSDB设计理念
-
-TSDB设计有两个核心：block和WAL，而block又包含chunk、index、meta.json、tombstones等。
-
-存储的监控数据按照时间分隔成block，block大小并不固定，按照设定的步长倍数递增，默认情况下最小的block保存2h的监控数据，随着数据的增长，TSDB会将小的block合并成大的block，这样不仅可以减少数据存储还可以方便对数据的快速查询。
-
-*block*
-
-每个block都有全局唯一的名称，通过ULID(Universal Unique Lexicographically Sortable Identifier，全局字典可排序ID)原理生成，可以通过block文件名确认创建时间。
-
-```bash
-0                   1                   2                   3
- 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-|                      32_bit_uint_time_high                    |
-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-|     16_bit_uint_time_low      |       16_bit_uint_random      |
-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-|                       32_bit_uint_random                      |
-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-|                       32_bit_uint_random                      |
-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-```
-
-可以看到ULID的总长度为128字节，为了生成可排序的字符串，Prometheus使用Base32算法，转化为26字节的可排序字符串。
-
-.block 组成示意图
-![[image-2024-12-25-15-06-32-209.png]]
-
-- chunks
-
-chunks用于保存压缩后的时序数据，每个chunk的大小为512MB，如果超过就会被截断成多个chunk保存，并以数字编号命令。
-
-- index
-
-index是为了对监控数据进行快速检索和查询而设计的，主要用来记录chunk中的时序偏移位置。
-
-- tombstones
-
-TSDB在删除block数据块时会将整个目录删除，如果只删除一部分数据块的内容，则可以通过tombstone进行软删除。
-
-- meta.json
-
-用于保存block的元数据信息，主要包括一个数据块记录样本的起始时间minTIme、截止时间maxTime、样本数量numSamples、时序数和数据源等信息。
-
-*WAL*
-
-WAL(Write-Ahead Log，预写日志)，是关系型数据库中利用日志来实现事务性和持久性的一种技术，即在进行某个操作之前先将整个事情记录下来，一遍以后对数据进行回滚、重试等操作保证数据的可靠性。
-
-TSDB存储空间计算：
-
-存储空间 = 每个指标大小(1~2字节) * 采集的周期 * storage.tsdb.retention
-
-## prometheus在kubernetes中的应用
-
-- 使用kubernetes创建命名空间
-
-```bash
-$ kubectl create ns kube-ops
-```
-
-cAdvisor内置在kubelet中 会实时采集所在节点及在节点上运行的容器的性能指标 数据。
-
-项目中使用了更加智能的方式来管理prometheus，也就是 [prometheus-operator](https://github.com/prometheus-operator/prometheus-operator/tree/main)
-
-## prometheus-operator
-
-如果其他项目想自定义集应用管理器，可以使用 `operator` 库，prometheus-operator就是在 `operator` 库的基础上开发出来用来管理 `prometheus` 的。
-
-通过helm布置prometheus-operator，通过prometheus-operator管理prometheus。
-
-```bash
-# 获取自定义资源类型
-kubectl get crd
-# 获取创建的Service
-kubectl get svc
-# 编辑Service的配置，比如将对应的服务类型修改为NodePort，NodePort只是Service的一种类型
-kubectl edit svc prometheus-k8s
-```
-
-- 如何在 prometheus-operator中添加自定义监控项
-
-- 首先，建立一个ServiceMonitor对象，用于为 Prometheus 添加监控项；
-- 然后，将 ServiceMonitor 对象关联 metrics 数据接口的一个 Service 对象；
-- 最后， Service 对象可以正确获取 metrics 数据 。
-
-
-### prometheus pod 数据持久化
-
-查看现有的 `/prometheus` 是挂载在 `emptyDir` 的
-
-```bash
-  volumeMounts:
-    - mountPath: /prometheus
-      name: prometheus-k8s-db
-volumes:
- - emptyDir: {}
-    name: prometheus-k8s-db
-```
-
-那么就会导致一旦出现pod重启，数据就丢失了。为了解决这个问题，需要将数据持久化到磁盘中。在实际部署中prometheus是通过Statefulset控制器进行部署的，所里可以通过storageclass进行数据持久化。
+规则组中存在记录和警报规则。组内的规则包括 按固定间隔按顺序运行，评估时间相同。 记录规则的名称必须是 [有效的指标名称](https://prometheus.io/docs/concepts/data_model/#metric-names-and-labels) 。 警报规则的名称必须是 [有效标签值](https://prometheus.io/docs/concepts/data_model/#metric-names-and-labels) 。
 
 ```yaml
-apiVersion: storage.k8s.io/v1
-kind: StorageClass
-metadata:
-  name: prometheus-data-db
-provisioner: fuseim.pri/ifs
+groups:
+  [ - <rule_group> ]
 ```
 
-这里声明一个 StorageClass 对象，因为在集群中将 NFS 作为存储后端（在线上使用环境中不要将 NFS 作为 Prometheus 的存储后端 因为 Prometheus 对 NFS 的支持很弱，可能会导致数据破坏），所以要使用 StorageClass 对象，就需要创建一个provisioner 的驱动，对应的资源清单如下：
+一个简单的规则示例文件
+```yaml
+groups:
+  - name: example
+    rules:
+    - record: code:prometheus_http_requests_total:sum
+      expr: sum by (code) (prometheus_http_requests_total)
+```
 
-详细可以参考 https://github.com/kubernetes-sigs/nfs-subdir-external-provisioner
+配置字段说明
+```yaml
+# 在同一个规则文件中必须唯一
+name: <string>
 
-k8s中的prometheus中很多配置是通过ConfigMap进行配置的，所以如果想进行热更新可以进行如下操作：
+# 规则运算时间间隔
+[ interval: <duration> | default = global.evaluation_interval ]
+
+# Limit the number of alerts an alerting rule and series a recording
+# rule can produce. 0 is no limit.
+[ limit: <int> | default = 0 ]
+
+# Offset the rule evaluation timestamp of this particular group by the specified duration into the past.
+[ query_offset: <duration> | default = global.rule_query_offset ]
+
+# Labels to add or overwrite before storing the result for its rules.
+# Labels defined in <rule> will override the key if it has a collision.
+labels:
+  [ <labelname>: <labelvalue> ]
+
+rules:
+  [ - <rule> ... ]
+```
+
+
+#### 配置 Prometheus recording rules 记录规则示例
+
+虽然在我们的示例中没有问题，但聚合数千个时间序列的查询在临时计算时可能会很慢。为了提高效率，Prometheus 可以通过配置的_记录规则_将表达式预先记录到新的持久化时间序列中。假设我们想要记录每个实例所有 CPU 的平均每秒 CPU 时间 ( `node_cpu_seconds_total` )（但保留 `job` 、 `instance` 和 `mode` 尺寸）是在 5 分钟的窗口内测量的。我们可以将其写成：
 
 ```bash
-# 直接使用edit编辑
-kubectl edit configmap prometheus-k8s-config
-# 或者手动编辑
-kubectl delete -f prome-cm.yaml
-# 修改好之后再创建
-kubectl create -f prome-cm.yaml
-# 等一会 执行热更新操作
-curl -X POST http://localhost:9090/-/reload
+# 原始指标 node_cpu_seconds_total
+# 对 5m 的数据 求平均值
+# 
+avg by (job, instance, mode) (rate(node_cpu_seconds_total[5m]))
 ```
 
-## prometheus 进阶
-
-- 源码修改
-- log日志替换
-
-
-### prometheus 的初始化过程
-
-初始化主函数在： `prometheus/cmd/prometheus/main.go` 的 `main` 方法中完成。
-
-- 存储组件
-- notifier组件
-- discoveryManagerScrape组件
-- discoveryManagerTNotify组件
-- scrapeManager组件
-- queryEngine组件
-- ruleManager组件
-- Web组件
-
-理解了初始化流程也就理解了程序的一般逻辑，因为所有的prometheus的服务组件的初始化和引用关系都在prometheus初始化节点完成。
-
-```go
-// 开启prometheus调试模式，只需要将系统环境变量设置为DEBUG模式，或者在yaml配置中将debug打开
-if os.Getenv("DEBUG") != "" {
-    // 设置goroutine阻塞分析器的采样频率
-    runtime.SetBlockProfileRate(20)
-    // 设置goroutine互斥锁竞争的采样频率
-    runtime.SetMutexProfileFraction(20)
-}
-```
+要将此表达式产生的时间序列记录到名为 `job_instance_mode:node_cpu_seconds:avg_rate5m` 的新指标中，请创建具有以下记录规则的文件并将其保存为 `prometheus.rules.yml` ：
 
 ```yaml
-  args:
-    - --log.level=debug
+groups:
+- name: cpu-node
+  rules:
+  - record: job_instance_mode:node_cpu_seconds:avg_rate5m
+    expr: avg by (job, instance, mode) (rate(node_cpu_seconds_total[5m]))
 ```
+
+为了让 Prometheus 启用这条新规则，请在 `prometheus.yml` 文件中添加 `rule_files` 语句。配置现在应该如下所示：
+
+```yaml
+global:
+  scrape_interval:     15s # By default, scrape targets every 15 seconds.
+  evaluation_interval: 15s # Evaluate rules every 15 seconds.
+
+  # Attach these extra labels to all timeseries collected by this Prometheus instance.
+  external_labels:
+    monitor: 'codelab-monitor'
+
+# 用于自定义规则在这里添加
+rule_files:
+  - 'prometheus.rules.yml'
+
+scrape_configs:
+  - job_name: 'prometheus'
+
+    # Override the global default and scrape targets from this job every 5 seconds.
+    scrape_interval: 5s
+
+    static_configs:
+      - targets: ['localhost:9090']
+
+  - job_name:       'node'
+
+    # Override the global default and scrape targets from this job every 5 seconds.
+    scrape_interval: 5s
+
+    static_configs:
+      - targets: ['localhost:8080', 'localhost:8081']
+        labels:
+          group: 'production'
+
+      - targets: ['localhost:8082']
+        labels:
+          group: 'canary'
+```
+使用新配置重启 Prometheus，并验证指标名称为 `job_instance_mode:node_cpu_seconds:avg_rate5m` 的新时间序列 现在可以通过表达式浏览器进行查询或绘制图形来获得。
+
+Prometheus 实例可以使用 `SIGHUP` 信号重新加载其配置，而无需重新启动进程。如果您在 Linux 上运行，可以使用 `kill -s SIGHUP <PID>` 来执行此操作，其中 `<PID>` 替换为您的 Prometheus 进程 ID
+
+
+
+#### 警报规则的语法是
+```yaml
+# The name of the alert. Must be a valid label value.
+alert: <string>
+
+# The PromQL expression to evaluate. Every evaluation cycle this is
+# evaluated at the current time, and all resultant time series become
+# pending/firing alerts.
+expr: <string>
+
+# Alerts are considered firing once they have been returned for this long.
+# Alerts which have not yet fired for long enough are considered pending.
+[ for: <duration> | default = 0s ]
+
+# How long an alert will continue firing after the condition that triggered it
+# has cleared.
+[ keep_firing_for: <duration> | default = 0s ]
+
+# Labels to add or overwrite for each alert.
+labels:
+  [ <labelname>: <tmpl_string> ]
+
+# Annotations to add to each alert.
+annotations:
+  [ <labelname>: <tmpl_string> ]
+```
+#### 配置报警规则示例
+```yaml
+# 报警分组，prometheus将报警规则分组进行管理
+groups:
+# 定义一个告警规则组，名字用来标识，用于组织和管理报警规则
+- name: example
+  # 这个报警规则组级别的标签，会附加到该组的所有报警上面
+  labels:
+    team: myteam
+  # 具体报警规则
+  rules:
+  - alert: HighRequestLatency
+    expr: job:request_latency_seconds:mean5m{job="myjob"} > 0.5
+    # 状态持续多久进行报警
+    for: 10m
+    # 报警持续时长
+    keep_firing_for: 5m
+    # 如果labels和组报警规则有冲突，以这里为准
+    labels:
+      severity: page
+    annotations:
+      summary: High request latency
+```
+
+可选的 `for` 子句使 Prometheus 在首次遇到新的表达式输出向量元素和将该元素的警报计为触发之间等待一段时间。在这种情况下，Prometheus 会在每次评估期间检查警报是否持续处于活动状态，持续 10 分钟，然后再触发警报。处于活动状态但尚未触发的元素处于待处理状态。不包含 `for` 子句的警报规则将在首次评估时生效。
+
+#### 自定义告警规则模板
+标签和注释值可以使用[控制台模板](https://prometheus.io/docs/visualization/consoles/)进行模板化。 `$labels` 变量保存警报实例的标签键/值对。配置的 可以通过 `$externalLabels` 变量访问外部标签。 `$value` 变量保存警报实例的评估值。
+
+```yaml
+# To insert a firing element's label values:
+{{ $labels.<labelname> }}
+# To insert the numeric expression value of the firing element:
+{{ $value }}
+```
+模板示例
+```yaml
+groups:
+- name: example
+  rules:
+  # Alert for any instance that is unreachable for >5 minutes.
+  - alert: InstanceDown
+    expr: up == 0
+    for: 5m
+    labels:
+      severity: page
+    annotations: 
+      summary: "Instance {{ $labels.instance }} down"  # 常用于通知标题。`{{ $labels.instance }}` 是模板变量，会被实际的实例名替换
+      description: "{{ $labels.instance }} of job {{ $labels.job }} has been down for more than 5 minutes." #`{{ $labels.job }}` 会被任务名（如 `node`, `prometheus`）替换。
+
+  # Alert for any instance that has a median request latency >1s.
+  - alert: APIHighRequestLatency
+    expr: api_http_request_latencies_second{quantile="0.5"} > 1
+    for: 10m
+    annotations:
+      summary: "High request latency on {{ $labels.instance }}"
+      description: "{{ $labels.instance }} has a median request latency above 1s (current value: {{ $value }}s)"
+```
+
+##### Simple iteration  简单迭代
+显示实例列表以及它们是否启动
+```yaml
+{{ range query "up" }}
+  {{ .Labels.instance }} {{ .Value }}
+{{ end }}
+```
+特殊的 `.` 变量包含每次循环迭代的当前样本的值。
+
+##### 显示一个值
+```yaml
+{{ with query "some_metric{instance='someinstance'}" }}
+  {{ . | first | value | humanize }}
+{{ end }}
+```
+
 
 ## PromQL
 
@@ -497,16 +315,17 @@ http_requests_total{instance=~"localhost:9090|localhost:9091"}
 ```
 
 *按照范围查询*
-
+范围向量选择器
+范围向量文字的工作方式类似于即时向量文字，不同之处在于它们 从当前时刻开始选择一系列样本。从语法上讲， [浮点文字](https://prometheus.io/docs/prometheus/latest/querying/basics/#float-literals-and-time-durations)附加在向量选择器末尾的方括号（ `[]` ）中，以指定秒数 应该为每个结果范围向量元素获取时间回溯值。 通常，浮点文字使用具有一个或多个时间单位的语法，例如 `[5m]` 。该范围是一个左开右闭的区间，即时间戳与范围左边界一致的样本将被排除在选择之外，而与范围右边界一致的样本将被纳入选择之中。
 直接通过类似于PromQL表达式`http_requests_total`查询时间序列时，返回值中只会包含该时间序列中的最新的一个样本值，这样的返回结果我们称之为**瞬时向量**。而相应的这样的表达式称之为**瞬时向量表达式**。
 
-而如果我们想过去一段时间范围内的样本数据时，我们则需要使用**区间向量表达式**。区间向量表达式和瞬时向量表达式之间的差异在于在区间向量表达式中我们需要定义时间选择的范围，时间范围通过时间范围选择器`]]`进行定义。例如，通过以下表达式可以选择最近5分钟内的所有样本数据：
+而如果我们想过去一段时间范围内的样本数据时，我们则需要使用**区间向量表达式**。区间向量表达式和瞬时向量表达式之间的差异在于在区间向量表达式中我们需要定义时间选择的范围，时间范围通过时间范围选择器`[]`进行定义。例如，通过以下表达式可以选择最近5分钟内的所有样本数据：
 
 ```bash
 http_requests_total{}[5m]
 ```
 
-该表达式将会返回查询到的时间序列中最近5分钟的所有样本数据：
+该表达式将会返回查询到的时间序列中最近5分钟(向前追溯)的所有样本数据：
 
 ```bash
 http_requests_total{code="200",handler="alerts",instance="localhost:9090",job="prometheus",method="get"}=[
@@ -546,6 +365,8 @@ http_requests_total{code="200",handler="graph",instance="localhost:9090",job="pr
 http_request_total{} # 瞬时向量表达式，选择当前最新的数据
 http_request_total{}[5m] # 区间向量表达式，选择以当前时间为基准，5分钟内的数据
 ```
+
+#### Offset modifier  偏移修改器
 
 而如果我们想查询，5分钟前的瞬时样本数据，或昨天一天的区间内的样本数据呢? 这个时候我们就可以使用位移操作，位移操作的关键字为**offset**。
 
@@ -892,142 +713,406 @@ Four Golden Signals是Google针对大量分布式监控的经验总结，4个黄
 - 错误：监控当前系统所有发生的错误请求，衡量当前系统错误发生的速率。
 - 饱和度：衡量当前服务的饱和度。
 
-## Prometheus告警处理
-
-告警能力在Prometheus的架构中被划分成两个独立的部分。如下所示，通过在Prometheus中定义AlertRule（告警规则），Prometheus会周期性的对告警规则进行计算，如果满足告警触发条件就会向Alertmanager发送告警信息。
-
-![[image-2025-01-11-15-40-34-346.png]]
-
-- 告警名称：用户需要为告警规则命名，当然对于命名而言，需要能够直接表达出该告警的主要内容
-- 告警规则：告警规则实际上主要由PromQL进行定义，其实际意义是当表达式（PromQL）查询结果持续多长时间（During）后出发告警
-
-在Prometheus中，还可以通过Group（告警组）对一组相关的告警进行统一定义。当然这些定义都是通过YAML文件来统一管理的。
-
-Alertmanager作为一个独立的组件，负责接收并处理来自Prometheus Server(也可以是其它的客户端程序)的告警信息。Alertmanager可以对这些告警信息进行进一步的处理，比如当接收到大量重复告警时能够消除重复的告警信息，同时对告警信息进行分组并且路由到正确的通知方，Prometheus内置了对邮件，Slack等多种通知方式的支持，同时还支持与Webhook的集成，以支持更多定制化的场景。例如，目前Alertmanager还不支持钉钉，那用户完全可以通过Webhook与钉钉机器人进行集成，从而通过钉钉接收告警信息。同时AlertManager还提供了静默和告警抑制机制来对告警通知行为进行优化。
 
 
-### Alertmanager特性
 
-Alertmanager除了提供基本的告警通知能力以外，还主要提供了如：分组、抑制以及静默等告警特性：
 
-![[image-2025-01-11-15-45-38-890.png]]
 
-- 分组
+## prometheus特性列表
 
-分组机制可以将详细的告警信息合并成一个通知。在某些情况下，比如由于系统宕机导致大量的告警被同时触发，在这种情况下分组机制可以将这些被触发的告警合并为一个告警通知，避免一次性接受大量的告警通知，而无法对问题进行快速定位。
+### pod停止之后还是能采集到数据
 
-例如，当集群中有数百个正在运行的服务实例，并且为每一个实例设置了告警规则。假如此时发生了网络故障，可能导致大量的服务实例无法连接到数据库，结果就会有数百个告警被发送到Alertmanager。
+这是因为prometheus为了能够聚合数据，会对原先的数据进行聚合，默认会进行5分钟的聚合，也就是小时5分钟之后还有虚假数据
 
-而作为用户，可能只希望能够在一个通知中中就能查看哪些服务实例收到影响。这时可以按照服务所在集群或者告警名称对告警进行分组，而将这些告警内聚在一起成为一个通知。
-
-告警分组，告警时间，以及告警的接受方式可以通过Alertmanager的配置文件进行配置。
-
-- 抑制
-
-抑制是指当某一告警发出后，可以停止重复发送由此告警引发的其它告警的机制。
-
-例如，当集群不可访问时触发了一次告警，通过配置Alertmanager可以忽略与该集群有关的其它所有告警。这样可以避免接收到大量与实际问题无关的告警通知。
-
-抑制机制同样通过Alertmanager的配置文件进行设置。
-
-- 静默
-
-静默提供了一个简单的机制可以快速根据标签对告警进行静默处理。如果接收到的告警符合静默的配置，Alertmanager则不会发送告警通知。
-
-静默设置需要在Alertmanager的Werb页面上进行设置。
-
-### 自定义prometheus告警规则
-
-*定义告警规则*
-
-```yaml
-# 规则被分为不同的组，相同的告警规则定义在同一个组中
-groups:
-# 告警规则组名
-- name: example
-  # 规则列表
-  rules:
-  # 告警规则名称
-  - alert: HighErrorRate
-    # 告警规则表达式
-    expr: job:request_latency_seconds:mean5m{job="myjob"} > 0.5
-    # 评估等待时间，可选参数，只有持续一段时间后才触发报警，等待期间发生告警状态为pending
-    for: 10m
-    # 自定义标签，允许用户自定义附加到告警上的一组附加标签信息
-    labels:
-      severity: page
-    # 自定义注解，允许用户自定义附加到告警上的一组附加信息
-    annotations:
-      summary: High request latency
-      description: description info
-```
-
-为了能够启用定义的告警规则，我们需要在prometheus全局配置文件中通过rule_files指定一组告警规则文件的访问路径，prometheus启动后会自动扫描这些路径下规则文件中定义的内容，并根据这些规则计算是否向外部发送通知。
-
-```yaml
-rule_files:
-  [ - <filepath_glob> ... ]
-```
-
-默认情况下Prometheus每分钟对这些告警规则进行计算， 如果用户想定义自己的告警计算周期， 则可以通过 `evaluation_interval` 来覆盖默认的计算周期：
-
-```yaml
-global:
-  [ evaluation_interval: <duration> | default = 1m ]
-```
-
-### 模板化
-
-一般来说，在告警规则文件的annotations中使用summary描述告警的概要信息，description用于描述告警的详细信息。同时Alertmanager的UI也会根据这两个标签值，显示告警信息。为了让告警信息具有更好的可读性，Prometheus支持模板化label和annotations的中标签的值。
-
-通过$labels.<labelname>变量可以访问当前告警实例中指定标签的值。$value则可以获取当前PromQL表达式计算的样本值。
+如果需要修改可以通过以下参数进行修改：
 
 ```bash
-# To insert a firing element's label values:
-{{ $labels.<labelname> }}
-# To insert the numeric expression value of the firing element:
-{{ $value }}
+--query.lookback-delta
 ```
 
-通过模板能很好的优化summary和description的描述信息的可读性。
-
-```yaml
-groups:
-- name: example
-  rules:
-
-  # Alert for any instance that is unreachable for >5 minutes.
-  - alert: InstanceDown
-    # 下线
-    expr: up == 0
-    # 持续5分钟下线
-    for: 5m
-    # 用户定义的自定义标签，会附加到告警信息上
-    labels:
-      severity: page
-    annotations:
-      # {{ $labels.instance }} 会替换成具体的实例名
-      summary: "Instance {{ $labels.instance }} down"
-      description: "{{ $labels.instance }} of job {{ $labels.job }} has been down for more than 5 minutes."
-
-  # Alert for any instance that has a median request latency >1s.
-  - alert: APIHighRequestLatency
-    expr: api_http_request_latencies_second{quantile="0.5"} > 1
-    for: 10m
-    annotations:
-      summary: "High request latency on {{ $labels.instance }}"
-      description: "{{ $labels.instance }} has a median request latency above 1s (current value: {{ $value }}s)"
-```
+https://github.com/prometheus/prometheus/discussions/11825[discussions:11825]
 
 
-https://yunlzheng.gitbook.io/prometheus-book/parti-prometheus-ji-chu/alert/prometheus-alert-rule[配置CPU告警，然后手动拉起cpu使用率]
+
+
+
+## 数据设计与采集
+
+每个监控系统都有自己的一套指标定义和规范。
+
+### 指标
+
+.prometheus指标格式定义
+`<metric name>{<label name>=<label value> , . .. }`
+
+- metric name: 监控指标名称，必须以字母开头，只能包含字母、数字、下划线、点、中划线、冒号，其中冒号不能用于exporter。
+
+- label name: 标签可以提现指标的维度特征，用于过滤和聚合，通过标签名和标签值的组合形式，形成多种维度。
+
+### 指标分类
+
+1. gauge类型，仪表盘，表示一个瞬时值，例如cpu使用率，内存使用率等。
+	仪表盘表示可以任意上升或下降的单个数值的指标。
+    
+
+2. counter类型，计数器，表示一个累计值，例如请求总数，错误总数等。
+   计数器_是一种累积指标，表示单个[单调递增的计数器](https://en.wikipedia.org/wiki/Monotonic_function)其值只能在重启时增加或重置为零。不要使用计数器来显示可能减少的值。例如，不要使用计数器来显示当前正在运行的进程数，而应该使用仪表。
+
+3. histogram类型，直方图，表示一个统计数据，例如请求耗时，响应大小等。
+	直方图会采集观测值（通常是请求时长或响应大小等）并按可配置的桶进行计数。它还会计算所有观测值的总和。
+
+4. summary类型，摘要，表示一个统计数据，例如请求耗时，响应大小等。
+   与直方图类似，摘要会从观察结果中_抽样_ （通常是请求时长和响应大小等）。它不仅提供观察结果的总数以及所有观察值的总和，还会计算滑动时间窗口内可配置的分位数。
+
+### 作业和实例
+在 Prometheus 术语中，一个可以抓取的端点被称为一个_实例 (instance)_ ，通常对应一个进程。具有相同用途的实例集合（例如，为了实现可扩展性或可靠性而复制的进程）被称为一个_作业_ (job)。
+
+#### 自动生成的标签和时间序列
+当 Prometheus 抓取目标时，它会自动在抓取的时间序列上附加一些标签，用于识别抓取的目标
+- `job` ：目标所属的配置作业名称。
+- `instance` ：被抓取的目标 URL 的 `<host>:<port>` 部分。
+如果抓取的数据中已经存在这两个标签，则具体行为取决于 `honor_labels` 配置选项。请参阅 [抓取配置文档](https://prometheus.io/docs/prometheus/latest/configuration/configuration/#scrape_config) 了解更多信息。
+
+对于每个实例抓取，Prometheus 都会按以下时间序列存储一个[样本](https://prometheus.io/docs/introduction/glossary/#sample) ：
+- `up{job="<job-name>", instance="<instance-id>"}` ：如果实例健康即可访问，则为 `1` 如果抓取失败，则为 `0` 。 -- 可用于排查抓取的目标或者job是否正常
+- `scrape_duration_seconds{job="<job-name>", instance="<instance-id>"}` ：抓取的持续时间。 -- 可用于判断抓取目标是否健康，网络是否通畅，如果耗时异常升高可能是网络差或者被抓取对象响应慢导致的
+- `scrape_samples_post_metric_relabeling{job="<job-name>", instance="<instance-id>"}` ：应用指标重新标记后剩余的样本数。
+- `scrape_samples_scraped{job="<job-name>", instance="<instance-id>"}` ：目标暴露的样本数。
+- `scrape_series_added{job="<job-name>", instance="<instance-id>"}` ：本次抓取的新系列的大致数量。v2.10 _中的新功能_
+
+使用 [`extra-scrape-metrics` 功能标志](https://prometheus.io/docs/prometheus/latest/feature_flags/#extra-scrape-metrics)可以获得几个附加指标：
+- `scrape_timeout_seconds{job="<job-name>", instance="<instance-id>"}` ：为目标配置的 `scrape_timeout` 。
+- `scrape_sample_limit{job="<job-name>", instance="<instance-id>"}` ：为目标配置的 `sample_limit` 。如果未配置限制，则返回零。
+- `scrape_body_size_bytes{job="<job-name>", instance="<instance-id>"}` ：如果成功，则为最近一次抓取响应的未压缩大小。由于超出 `body_size_limit` 而导致抓取失败时报告 -1，其他抓取失败时报告 0。
+
+
+### 数据采集
+
+### 数据存储
+
+- 本地存储
+
+- 远程存储
+
+通过适配器实现Prometheus的read和write接口来实现。
+
+### 数据查询
+
+数据查询可以通过promQL语法进行查询。和关系数据库的SQL不一样的地方是PromQL只支持查询、聚合、统计等操作，不支持修改、删除等操作。
+
+### 告警
+
+告警机制，Prometheus支持告警机制，alerter通过配置告警规则，当监控指标达到设定的阈值时，alerter会发送告警信息。
 
 ```bash
-# 从/de/zero源源不断取出字符，然后传入到 /dev/null中，过程会大量占用cpu资源
-cat /dev/zero>/dev/null
+request latency seconds :mean5m {job="myjob"} > 0.5
 ```
 
-## 部署alertmanager
+告警处理需要依赖告警组件AlertManager
+
+### 集群
+
+多个prometheus实例可以组成一个集群，用来监控多个实例。多个prometheus节点组成两层联邦结构，下层的prometheus充当代理。
+
+![[image-2024-12-25-11-55-51-356.png]]
+
+存在问题：
+
+- 配置复杂
+- 历史数据存储问题没有得到解决，需要依赖第三方存储，并缺少针对历史数据的降准采样能力。
+
+*Thanos*
+
+.Thanos架构图
+![[image-2024-12-25-12-06-25-188.png]]
+
+
+## 数据存储
+
+prometheus数据存储方式有本地存储和远程存储两种方式。
+
+- 本地存储
+
+- 远程存储
+
+### 存储接口
+
+本地存储方式，prometheus会将数据存储在本地文件中，从而实现高性能读写，但是时序性数据库非集群的数据库，为此prometheus提供了远程存储方式，为了适配远端存储，prometheus抽象了一组读写数据接口。
+
+Appender提供批量向数据库添加数据接口
+
+```go
+// 必须调用Commit Rollback等完成数据提交，并且调用之后该appender不能再重复使用。
+// 单次 Commit中如果有重复数据，那么具体行为将是未定义的
+type Appender interface {
+    //  将给定的样本数据添加到对应的序列中，并返回索引
+	Append(ref SeriesRef, l labels.Labels, t int64, v float64) (SeriesRef, error)
+    // 批量提交
+	Commit() error
+    // 回滚操作
+	Rollback() error
+
+	// 为添加数据提供额外的选项，比如 ： out-of-order
+	SetOptions(opts *AppendOptions)
+
+    // 特例提交
+	ExemplarAppender
+	HistogramAppender
+	MetadataUpdater
+	CreatedTimestampAppender
+}
+```
+
+Querier监控数据查询接口，Select方法用于给定的标签查询对应的时序数据。
+
+```go
+type Querier interface {
+	// 根据指定标签进行数据查询
+	LabelQuerier
+
+	// 根据标签查询时序数据
+	Select(ctx context.Context, sortSeries bool, hints *SelectHints, matchers ...*labels.Matcher) SeriesSet
+}
+```
+
+为了兼容本地存储和远端存储，prometheus提供了fanout接口，该接口同样实现了上面的Appender接口。
+
+当执行fanout中的方法时，fanout会首先执行本地存储primary的Add方法，然后便利执行每个远端存储的Add方法。
+
+![[image-2024-12-25-14-37-44-315.png]]
+
+```go
+type fanout struct {
+	logger *slog.Logger
+
+	primary     Storage
+	secondaries ]]Storage
+}
+```
+
+### 本地存储
+
+#### 样本
+
+Prometheus会将所有采集到的样本数据以时间序列（time-series）的方式保存在内存数据库中，并且定时保存到硬盘上。time-series是按照时间戳和值的序列顺序存放的，我们称之为向量(vector). 每条time-series通过指标名称(metrics name)和一组标签集(labelset)命名。如下所示，可以将time-series理解为一个以时间为Y轴的数字矩阵：
+
+```bash
+./data
+   |- 01BKGV7JBM69T2G1BGBGM6KB12 # 块
+      |- meta.json  # 元数据
+      |- wal        # 写入日志
+        |- 000002
+        |- 000001
+   |- 01BKGTZQ1SYQJTR4PB43C8PD98  # 块
+      |- meta.json  #元数据
+      |- index   # 索引文件
+      |- chunks  # 样本数据
+        |- 000001
+      |- tombstones # 逻辑数据
+   |- 01BKGTZQ1HHWHV8FBJXW1Y3W0K
+      |- meta.json
+      |- wal
+        |-000001
+```
+
+```bash
+^
+│   . . . . . . . . . . . . . . . . .   . .   node_cpu{cpu="cpu0",mode="idle"}
+│     . . . . . . . . . . . . . . . . . . .   node_cpu{cpu="cpu0",mode="system"}
+│     . . . . . . . . . .   . . . . . . . .   node_load1{}
+│     . . . . . . . . . . . . . . . .   . .
+v
+<------------------ 时间 ---------------->
+```
+
+在time-series中的每一个点称为一个样本（sample），样本由以下三部分组成：
+
+- 指标(metric)：metric name和描述当前样本特征的labelsets;
+- 时间戳(timestamp)：一个精确到毫秒的时间戳;
+- 样本值(value)： 一个float64的浮点型数据表示当前样本的值
+
+```bash
+<--------------- metric ---------------------><- timestamp -><- value ->
+http_request_total{status="200", method="GET"}@1434417560938 => 94355
+http_request_total{status="200", method="GET"}@1434417561287 => 94334
+
+http_request_total{status="404", method="GET"}@1434417560938 => 38473
+http_request_total{status="404", method="GET"}@1434417561287 => 38544
+
+http_request_total{status="200", method="POST"}@1434417560938 => 4748
+http_request_total{status="200", method="POST"}@1434417561287 => 4785
+```
+
+
+#### TSDB设计理念
+
+TSDB设计有两个核心：block和WAL，而block又包含chunk、index、meta.json、tombstones等。
+
+存储的监控数据按照时间分隔成block，block大小并不固定，按照设定的步长倍数递增，默认情况下最小的block保存2h的监控数据，随着数据的增长，TSDB会将小的block合并成大的block，这样不仅可以减少数据存储还可以方便对数据的快速查询。
+
+*block*
+
+每个block都有全局唯一的名称，通过ULID(Universal Unique Lexicographically Sortable Identifier，全局字典可排序ID)原理生成，可以通过block文件名确认创建时间。
+
+```bash
+0                   1                   2                   3
+ 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|                      32_bit_uint_time_high                    |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|     16_bit_uint_time_low      |       16_bit_uint_random      |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|                       32_bit_uint_random                      |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|                       32_bit_uint_random                      |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+```
+
+可以看到ULID的总长度为128字节，为了生成可排序的字符串，Prometheus使用Base32算法，转化为26字节的可排序字符串。
+
+.block 组成示意图
+![[image-2024-12-25-15-06-32-209.png]]
+
+- chunks
+
+chunks用于保存压缩后的时序数据，每个chunk的大小为512MB，如果超过就会被截断成多个chunk保存，并以数字编号命令。
+
+- index
+
+index是为了对监控数据进行快速检索和查询而设计的，主要用来记录chunk中的时序偏移位置。
+
+- tombstones
+
+TSDB在删除block数据块时会将整个目录删除，如果只删除一部分数据块的内容，则可以通过tombstone进行软删除。
+
+- meta.json
+
+用于保存block的元数据信息，主要包括一个数据块记录样本的起始时间minTIme、截止时间maxTime、样本数量numSamples、时序数和数据源等信息。
+
+*WAL*
+
+WAL(Write-Ahead Log，预写日志)，是关系型数据库中利用日志来实现事务性和持久性的一种技术，即在进行某个操作之前先将整个事情记录下来，一遍以后对数据进行回滚、重试等操作保证数据的可靠性。
+
+TSDB存储空间计算：
+
+存储空间 = 每个指标大小(1~2字节) * 采集的周期 * storage.tsdb.retention
+
+## prometheus在kubernetes中的应用
+
+- 使用kubernetes创建命名空间
+
+```bash
+$ kubectl create ns kube-ops
+```
+
+cAdvisor内置在kubelet中 会实时采集所在节点及在节点上运行的容器的性能指标 数据。
+
+项目中使用了更加智能的方式来管理prometheus，也就是 [prometheus-operator](https://github.com/prometheus-operator/prometheus-operator/tree/main)
+
+## prometheus-operator
+
+如果其他项目想自定义集应用管理器，可以使用 `operator` 库，prometheus-operator就是在 `operator` 库的基础上开发出来用来管理 `prometheus` 的。
+
+通过helm布置prometheus-operator，通过prometheus-operator管理prometheus。
+
+```bash
+# 获取自定义资源类型
+kubectl get crd
+# 获取创建的Service
+kubectl get svc
+# 编辑Service的配置，比如将对应的服务类型修改为NodePort，NodePort只是Service的一种类型
+kubectl edit svc prometheus-k8s
+```
+
+- 如何在 prometheus-operator中添加自定义监控项
+
+- 首先，建立一个ServiceMonitor对象，用于为 Prometheus 添加监控项；
+- 然后，将 ServiceMonitor 对象关联 metrics 数据接口的一个 Service 对象；
+- 最后， Service 对象可以正确获取 metrics 数据 。
+
+
+### prometheus pod 数据持久化
+
+查看现有的 `/prometheus` 是挂载在 `emptyDir` 的
+
+```bash
+  volumeMounts:
+    - mountPath: /prometheus
+      name: prometheus-k8s-db
+volumes:
+ - emptyDir: {}
+    name: prometheus-k8s-db
+```
+
+那么就会导致一旦出现pod重启，数据就丢失了。为了解决这个问题，需要将数据持久化到磁盘中。在实际部署中prometheus是通过Statefulset控制器进行部署的，所里可以通过storageclass进行数据持久化。
+
+```yaml
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: prometheus-data-db
+provisioner: fuseim.pri/ifs
+```
+
+这里声明一个 StorageClass 对象，因为在集群中将 NFS 作为存储后端（在线上使用环境中不要将 NFS 作为 Prometheus 的存储后端 因为 Prometheus 对 NFS 的支持很弱，可能会导致数据破坏），所以要使用 StorageClass 对象，就需要创建一个provisioner 的驱动，对应的资源清单如下：
+
+详细可以参考 https://github.com/kubernetes-sigs/nfs-subdir-external-provisioner
+
+k8s中的prometheus中很多配置是通过ConfigMap进行配置的，所以如果想进行热更新可以进行如下操作：
+
+```bash
+# 直接使用edit编辑
+kubectl edit configmap prometheus-k8s-config
+# 或者手动编辑
+kubectl delete -f prome-cm.yaml
+# 修改好之后再创建
+kubectl create -f prome-cm.yaml
+# 等一会 执行热更新操作
+curl -X POST http://localhost:9090/-/reload
+```
+
+## prometheus 进阶
+
+- 源码修改
+- log日志替换
+
+
+### prometheus 的初始化过程
+
+初始化主函数在： `prometheus/cmd/prometheus/main.go` 的 `main` 方法中完成。
+
+- 存储组件
+- notifier组件
+- discoveryManagerScrape组件
+- discoveryManagerTNotify组件
+- scrapeManager组件
+- queryEngine组件
+- ruleManager组件
+- Web组件
+
+理解了初始化流程也就理解了程序的一般逻辑，因为所有的prometheus的服务组件的初始化和引用关系都在prometheus初始化节点完成。
+
+```go
+// 开启prometheus调试模式，只需要将系统环境变量设置为DEBUG模式，或者在yaml配置中将debug打开
+if os.Getenv("DEBUG") != "" {
+    // 设置goroutine阻塞分析器的采样频率
+    runtime.SetBlockProfileRate(20)
+    // 设置goroutine互斥锁竞争的采样频率
+    runtime.SetMutexProfileFraction(20)
+}
+```
+
+```yaml
+  args:
+    - --log.level=debug
+```
+
+
+## Alertmanager
+
+### 配置
+
+### 部署alertmanager
 
 ```yaml
 global:
@@ -1236,6 +1321,86 @@ source_match_re:
 例如当集群中的某一个主机节点异常宕机导致告警NodeDown被触发，同时在告警规则中定义了告警级别severity=critical。由于主机异常宕机，该主机上部署的所有服务，中间件会不可用并触发报警。根据抑制规则的定义，如果有新的告警级别为severity=critical，并且告警中标签node的值与NodeDown告警的相同，则说明新的告警是由NodeDown导致的，则启动抑制机制停止向接收器发送通知。
 
 
+
+
+### 告警分组
+分组机制（Grouping）是指，AlertManager将同类型的告警进行分组，合并多条告警到一个通知中。在实际环境中，特别是云计算环境中的业务线之间密集耦合时，若出现多台设备宕机，可能会导致成百上千个告警被触发。在这种情况下使用分组机制，可以将这些被触发的告警合并为一个告警进行通知，从而避免瞬间突发性地接收大量的告警通知，使得管理员无法对问题进行快速定位。
+
+例如，在一个Kubernetes集群中，运行着重量级规模数量的实例，即便是集群中持续一小段时间的网络延时或间歇式断开，也会引起大量应用程序无法连接数据库的故障。如果我们在Prometheus告警规则中配置为每一个服务实例都发送告警，那么最后的结果就是大量的告警被发送到Alertmanager中心。
+
+其实，作为集群管理员，可能希望在一个通知中就能快速查看是哪些服务实例被本次故障影响了。此时，对服务所在集群或者告警名称进行分组打包配置，将这些告警紧凑在一起成为一个“大”的通知时，管理员就不会受到告警的频繁“轰炸”。告警分组、告警时间和告警接收器均是通过Alertmanager的配置文件来完成配置的。
+
+### 告警抑制
+
+Alertmanager的抑制机制（Inhibition）是指，当某告警已经发出，停止重复发送由此告警引发的其他异常或故障的告警机制。在生产环境中，例如IDC托管机柜中，若每个机柜接入层仅仅是单台交换机，那么该机柜接入交换机故障会造成机柜中服务器非UP状态告警；再有服务器上部署的应用不可访问也会触发告警。此时，可以配置Alertmanager忽略由交换机故障造成的机柜所有服务器及其应用不可访问而产生的告警。
+
+在我们的灾备体系中，当原集群故障宕机业务彻底无法访问时，会把用户流量切换到灾备集群中，这样为故障集群及其提供的各个微服务状态发送告警就失去了意义，此时，Alertmanager的抑制机制在一定程度上避免了管理员收到过多的触发告警通知。抑制机制也是通过Alertmanager的配置文件进行设置的。
+
+
+### 告警静默
+
+
+告警静默（Silences）提供了一个简单的机制，可以根据标签快速对告警进行静默处理。对传入的告警进行匹配检查，如果接收到的告警符合静默的配置，Alertmanager则不会发送告警通知。管理员可以直接在Alertmanager的Web界面中临时屏蔽指定的告警通知。
+
+
+
+
+## Prometheus告警
+
+### prometheus告警规则
+活跃的报警可以在prometheus报警示例页面直接查看，如果是待处理护着已经触发过的报警，prometheus会存储成格式为 `ALERTS{alertname="<alert name>", alertstate="<pending or firing>", <additional alert labels>}` 的合成时间序列。只要警报处于指示的活动状态（待处理或触发），样本值就会设置为 `1` ；如果警报状态不再为活动状态，则该序列会被标记为过时。
+
+
+### prometheus告警处理
+
+告警能力在Prometheus的架构中被划分成两个独立的部分。如下所示，通过在Prometheus中定义AlertRule（告警规则），Prometheus会周期性的对告警规则进行计算，如果满足告警触发条件就会向Alertmanager发送告警信息。
+
+![[image-2025-01-11-15-40-34-346.png]]
+
+- 告警名称：用户需要为告警规则命名，当然对于命名而言，需要能够直接表达出该告警的主要内容
+- 告警规则：告警规则实际上主要由PromQL进行定义，其实际意义是当表达式（PromQL）查询结果持续多长时间（During）后出发告警
+
+在Prometheus中，还可以通过Group（告警组）对一组相关的告警进行统一定义。当然这些定义都是通过YAML文件来统一管理的。
+
+Alertmanager作为一个独立的组件，负责接收并处理来自Prometheus Server(也可以是其它的客户端程序)的告警信息。Alertmanager可以对这些告警信息进行进一步的处理，比如当接收到大量重复告警时能够消除重复的告警信息，同时对告警信息进行分组并且路由到正确的通知方，Prometheus内置了对邮件，Slack等多种通知方式的支持，同时还支持与Webhook的集成，以支持更多定制化的场景。例如，目前Alertmanager还不支持钉钉，那用户完全可以通过Webhook与钉钉机器人进行集成，从而通过钉钉接收告警信息。同时AlertManager还提供了静默和告警抑制机制来对告警通知行为进行优化。
+
+
+### Alertmanager特性
+
+Alertmanager除了提供基本的告警通知能力以外，还主要提供了如：分组、抑制以及静默等告警特性：
+
+![[image-2025-01-11-15-45-38-890.png]]
+
+- 分组
+
+分组机制可以将详细的告警信息合并成一个通知。在某些情况下，比如由于系统宕机导致大量的告警被同时触发，在这种情况下分组机制可以将这些被触发的告警合并为一个告警通知，避免一次性接受大量的告警通知，而无法对问题进行快速定位。
+
+例如，当集群中有数百个正在运行的服务实例，并且为每一个实例设置了告警规则。假如此时发生了网络故障，可能导致大量的服务实例无法连接到数据库，结果就会有数百个告警被发送到Alertmanager。
+
+而作为用户，可能只希望能够在一个通知中中就能查看哪些服务实例收到影响。这时可以按照服务所在集群或者告警名称对告警进行分组，而将这些告警内聚在一起成为一个通知。
+
+告警分组，告警时间，以及告警的接受方式可以通过Alertmanager的配置文件进行配置。
+
+- 抑制
+
+抑制是指当某一告警发出后，可以停止重复发送由此告警引发的其它告警的机制。
+
+例如，当集群不可访问时触发了一次告警，通过配置Alertmanager可以忽略与该集群有关的其它所有告警。这样可以避免接收到大量与实际问题无关的告警通知。
+
+抑制机制同样通过Alertmanager的配置文件进行设置。
+
+- 静默
+
+静默提供了一个简单的机制可以快速根据标签对告警进行静默处理。如果接收到的告警符合静默的配置，Alertmanager则不会发送告警通知。
+
+静默设置需要在Alertmanager的Werb页面上进行设置。
+
+```bash
+# 从/de/zero源源不断取出字符，然后传入到 /dev/null中，过程会大量占用cpu资源
+cat /dev/zero  >  /dev/null
+```
+
+
 ## exporter
 
 广义上讲所有可以向Prometheus提供监控样本数据的程序都可以被称为一个Exporter。而Exporter的一个实例称为target，如下所示，Prometheus通过轮询的方式定期从这些target中获取样本数据:
@@ -1422,6 +1587,11 @@ https://prometheus.io/docs/prometheus/latest/configuration/configuration/[promet
 - `prometheus_target_scrape_pools_failed_total` : scrape失败总数
 1. 查询和 `target` 相关的指标，可以看那些指标抓取出现了问题
 
+[[prometheus#作业和实例]]
+每个job都会附带生成如下数据：
+- `up{job="<job-name>", instance="<instance-id>"}` ：如果实例健康即可访问，则为 `1` 如果抓取失败，则为 `0` 。 -- 可用于排查抓取的目标或者job是否正常
+- `scrape_duration_seconds{job="<job-name>", instance="<instance-id>"}` ：抓取的持续时间。 -- 可用于判断抓取目标是否健康，网络是否通畅，如果耗时异常升高可能是网络差或者被抓取对象响应慢导致的
+- `scrape_samples_scraped{job="<job-name>", instance="<instance-id>"}` ：目标暴露的样本数。 -- 用于裁剪指标，可以提前统计采集的所有指标数量
 
 
 
