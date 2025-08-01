@@ -43,6 +43,10 @@ curl -X POST http://localhost:9090/-/reload
 - labeldrop：针对所有标签来匹配regex，任何匹配的标签将从标签集中删除。
 
 ### 配置
+
+#### flag
+[flag参数](https://prometheus.io/docs/prometheus/latest/command-line/prometheus/)
+
 ```yaml
 # 全局配置
 global:
@@ -366,7 +370,7 @@ http_request_total{} # 瞬时向量表达式，选择当前最新的数据
 http_request_total{}[5m] # 区间向量表达式，选择以当前时间为基准，5分钟内的数据
 ```
 
-#### Offset modifier  偏移修改器
+#### Offset modifier  偏移修饰符
 
 而如果我们想查询，5分钟前的瞬时样本数据，或昨天一天的区间内的样本数据呢? 这个时候我们就可以使用位移操作，位移操作的关键字为**offset**。
 
@@ -376,6 +380,16 @@ http_request_total{}[5m] # 区间向量表达式，选择以当前时间为基�
 http_request_total{} offset 5m
 http_request_total{}[1d] offset 1d
 ```
+`offset` 修饰符始终需要紧跟选择器，即以下内容是正确的：
+```yaml
+sum(http_requests_total{method="GET"} offset 5m) // GOOD.
+sum(http_requests_total{method="GET"}) offset 5m // INVALID.
+```
+可以结合范围向量一起使用
+```bash
+rate(http_requests_total[5m] offset 1w)
+```
+
 
 *支持时间位移操作*
 
@@ -395,6 +409,29 @@ http_request_total{}[5m] # 区间向量表达式，选择以当前时间为基�
 http_request_total{} offset 5m
 http_request_total{}[1d] offset 1d
 ```
+
+#### @ 修饰符
+`@` 修饰符允许更改查询中单个瞬时向量和范围向量的计算时间。传递给 `@` 修饰符的时间是一个 Unix 时间戳，以浮点字面量表示。
+
+例如，以下表达式返回的值 `http_requests_total` 于 `2021-01-04T07:40:00+00:00` :
+ `@` 修饰符始终需要紧跟选择器
+```bash
+http_requests_total @ 1609746000
+```
+
+与offset配合使用
+```
+# offset after @
+http_requests_total @ 1609746000 offset 5m
+# offset before @
+http_requests_total offset 5m @ 1609746000
+```
+
+此外， `start()` 和 `end()` 也可以用作 `@` 修饰符的特殊值。
+
+
+
+
 
 *使用聚合操作*
 
@@ -442,6 +479,9 @@ http_request_total{} # 合法
 {__name__=~"http_request_total"} # 合法
 {__name__=~"node_disk_bytes_read|node_disk_bytes_written"} # 合法
 ```
+
+
+
 
 ### PromQL 操作符
 
@@ -655,6 +695,8 @@ topk(3, bicycle_speed_meters_per_second)
 
 
 ### PromQL 内置函数
+
+[内置函数](https://prometheus.io/docs/prometheus/latest/querying/functions/)
 
 *计算Counter指标增长率*
 
