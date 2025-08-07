@@ -1154,6 +1154,29 @@ CMD ["flask", "run", "--host=0.0.0.0"]
 
 docker使用虚拟网桥技术实现宿主机和docker容器之间的互联互通。
 
+### 使用已有的多个基础镜像制作新的镜像
+
+以下dockerfile将 2.4.2内容中的nginx-ingress，复制到5.1.0版本的镜像中，并生成一个新的镜像，新的镜像以5.1.0为基础镜像。
+```dockerfile
+# syntax=docker/dockerfile:1.4
+
+# 阶段1：使用 nginx:2.4.2 作为源镜像
+FROM nginx/nginx-ingress:2.4.2 AS source
+
+# 阶段2：使用目标基础镜像
+FROM nginx/nginx-ingress:5.1.0 AS target
+
+# 从源镜像复制 nginx 二进制文件到目标镜像
+COPY --from=source /nginx-ingress /
+
+# 可选：复制 nginx 配置文件目录（如果需要）
+# COPY --from=source /etc/nginx /etc/nginx
+
+# 标签（可选）
+LABEL org.example.nginx.version="2.4.2 extracted"
+```
+
+
 ### 实战
 
 因为平时使用的 go 语言开发，所以使用 go 语言开发一个简单的 web 服务，并使用 Dockerfile 构建镜像。

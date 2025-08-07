@@ -1014,7 +1014,27 @@ func main() {
 }
 ```
 
+## net 网络
 
+### go程序解析DNS失败但是curl解析正常
+DNS解析时go使用的可以是系统自带的也可以是go本身的，当系统中的DNS解析有问题（特别是裁剪之后的镜像），可以开启go的自带DNS解析
+
+```bash
+GODEBUG=netdns=go ./myapp
+```
+或者
+```go
+type Resolver struct {  
+    // PreferGo controls whether Go's built-in DNS resolver is preferred    // on platforms where it's available. It is equivalent to setting    // GODEBUG=netdns=go, but scoped to just this resolver.    
+    PreferGo bool
+	...
+}
+
+func init() {
+    // 设置 GODEBUG 环境变量以强制使用 Go 自带的 DNS 解析器
+    os.Setenv("GODEBUG", "netdns=go")
+}
+```
 
 
 

@@ -1,11 +1,5 @@
 
 
-
-
-
-
-
-
 ## nginx ingress
 ### nginx ingress redirect
 ```yaml
@@ -246,3 +240,38 @@ spec:
             port:
               number: 80
 ```
+
+
+## NGINX Ingress Controller pod
+![[Pasted image 20250805111001.png]]
+
+
+### 处理新的ingress资源
+
+![[Pasted image 20250805111221.png]]
+
+1. _User_ creates a new Ingress resource.  
+    _用户_ 创建一个新的 Ingress 资源。
+2. The NGINX Ingress Controller process has a _Cache_ of the resources in the cluster. The _Cache_ includes only the resources NGINX Ingress Controller is concerned with such as Ingresses. The _Cache_ stays in sync with the Kubernetes API by [watching for changes to the resources](https://kubernetes.io/docs/reference/using-api/api-concepts/#efficient-detection-of-changes).  
+    NGINX Ingress Controller 进程拥有集群资源的_缓存_ 。该_缓存_仅包含 NGINX Ingress Controller 关注的资源，例如 Ingress。该_缓存_通过[监视资源的变化](https://kubernetes.io/docs/reference/using-api/api-concepts/#efficient-detection-of-changes)与 Kubernetes API 保持同步。
+3. Once the _Cache_ has the new Ingress resource, it notifies the _Control Loop_ about the changed resource.  
+    一旦_缓存_有了新的入口资源，它就会通知_控制循环_有关更改的资源。
+4. The _Control Loop_ gets the latest version of the Ingress resource from the _Cache_. Since the Ingress resource references other resources, such as TLS Secrets, the _Control loop_ gets the latest versions of those referenced resources as well.  
+    _控制循环_从 _Cache_ 获取 Ingress 资源的最新版本。由于 Ingress 资源引用了其他资源（例如 TLS Secrets），因此_控制循环_也会获取这些引用资源的最新版本。
+5. The _Control Loop_ generates TLS certificates and keys from the TLS Secrets and writes them to the filesystem.  
+    _控制循环_ 从 TLS 机密生成 TLS 证书和密钥，并将它们写入文件系统。
+6. The _Control Loop_ generates and writes the NGINX _configuration files_, which correspond to the Ingress resource, and writes them to the filesystem.  
+    _控制循环_ 生成并写入与 Ingress 资源对应的 NGINX  _配置文件_  ，并将其写入文件系统。
+7. The _Control Loop_ reloads _NGINX_ and waits for _NGINX_ to successfully reload. As part of the reload:  
+    _控制循环_ 重新加载  _NGINX_ ，并等待 _NGINX_ 成功重新加载。重新加载过程中：
+    1. _NGINX_ reads the _TLS certs and keys_.  
+        _NGINX_ 读取 _TLS 证书和密钥_ 。
+    2. _NGINX_ reads the _configuration files_.  
+        _NGINX_ 读取_配置文件_ 。
+8. The _Control Loop_ emits an event for the Ingress resource and updates its status. If the reload fails, the event includes the error message.  
+    _控制循环_ 会为 Ingress 资源发出事件并更新其状态。如果重新加载失败，该事件会包含错误消息。
+
+### NGINX Ingress Controller 是一个 Kubernetes 控制器
+
+NGINX Ingress Controller 持续处理集群中的新增资源和现有资源的变更。因此，NGINX 配置始终与集群中的资源保持同步更新。
+NGINX Ingress Controller 是 [Kubernetes 控制器](https://kubernetes.io/docs/concepts/architecture/controller/)的一个示例：NGINX Ingress Controller 运行一个控制循环，确保 NGINX 根据所需状态（Ingress 和其他资源）进行配置。
