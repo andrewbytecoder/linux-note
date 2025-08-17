@@ -115,11 +115,26 @@ lsns
 
 
 
+## 命令行工具
 
+1. 安装zsh
+```bash
+sudo apt install zsh
+```
 
+2. 将zsh设置为默认shell
+```bash
+chsh -s $(which zsh)
+```
 
-
-
+2. 设置主题
+```bash
+# 先下载主题
+sh -c "$(curl -fsSL https://raw.githubusercontent.com/ohmyzsh/ohmyzsh/master/tools/install.sh)"
+# 设置 .zshrc
+ZSH_THEME="agnoster"
+plugins=(git)
+```
 
 
 
