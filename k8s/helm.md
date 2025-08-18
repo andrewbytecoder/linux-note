@@ -263,8 +263,6 @@ data:
   {{- end }}
 ```
 
-
-
 ```bash
 cat anvil/config/jetpack.ini                         
 enabled = true
@@ -272,11 +270,44 @@ cat anvil/config/rocket.yaml
 enabled = true
 ```
 
+ ##### `if/else/with`
 
+```yaml
+{{- if .Values.ingress.enabled -}}
+...
+{{- else -}}
+# ingress not enabled
+{{- end }}
+# 使用and 和 or 实现多个条件判断
+{{- if and .Values.ingress.enabled .Values.products -}}
 
+{{- end }}
+```
 
+##### 变量
+在模板中你可以创建自己的变量，并将变量作为参数传递给函数、打印输出等
 
+```yaml
+# 使用 := 创建变量，变量一旦创建就不能再次赋值成其他类型的变量，只能用于同类型变量之间的相互赋值 
+{{ $var := .Values.character }}
+# 变量的使用
+character: {{ $var | default "Sylvester" | quete }}
+```
+在本例中，变量在另一个动作中被更改。变量在模板执行的生命周期内一直存在，并且在模板后面的相同动作或不同动作中可用
 
+##### 循环
+```yaml
+# 假设 values.yaml 中有以下list 
+characters:
+  - Syslvester
+  - Tweety
+  - Road Runner
+  - Wile E. Coyote
 
-
+# 如果想使用range可以用如下方式
+characters:
+{{- range .Values.characters }}
+  - {{ . | quete }}
+{{- end }}
+```
 

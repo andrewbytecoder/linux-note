@@ -13,12 +13,12 @@
             "state": {
               "type": "markdown",
               "state": {
-                "file": "k8s/prometheus.md",
+                "file": "k8s/helm.md",
                 "mode": "source",
                 "source": false
               },
               "icon": "lucide-file",
-              "title": "prometheus"
+              "title": "helm"
             }
           }
         ]
@@ -53,7 +53,7 @@
             "state": {
               "type": "search",
               "state": {
-                "query": "",
+                "query": "zsh",
                 "matchingCase": false,
                 "explainSearch": false,
                 "collapseAll": false,
@@ -142,21 +142,31 @@
             "state": {
               "type": "outline",
               "state": {
-                "file": "k8s/prometheus.md",
+                "file": "k8s/helm.md",
                 "followCursor": false,
                 "showSearch": false,
                 "searchQuery": ""
               },
               "icon": "lucide-list",
-              "title": "prometheus 的大纲"
+              "title": "helm 的大纲"
+            }
+          },
+          {
+            "id": "ecb9e7b0b411b258",
+            "type": "leaf",
+            "state": {
+              "type": "mp-preview",
+              "state": {},
+              "icon": "eye",
+              "title": "公众号预览"
             }
           }
         ],
-        "currentTab": 3
+        "currentTab": 4
       }
     ],
     "direction": "horizontal",
-    "width": 300
+    "width": 1023.5
   },
   "left-ribbon": {
     "hiddenItems": {
@@ -170,44 +180,44 @@
       "markdown-importer:打开 Markdown 格式转换器": false
     }
   },
-  "active": "c01be63f39f330de",
+  "active": "ecb9e7b0b411b258",
   "lastOpenFiles": [
-    "k8s/kube_prometheus.md",
     "linux/linux-performance.md",
+    "k8s/helm.md",
+    "linux/linux.md",
+    "eBPF/bcc.md",
+    "go/高并发.md",
+    "go/设计模式.md",
+    "go/go.md",
+    "go/go_module.md",
+    "go/go_package.md",
+    "go/gRPC.md",
+    "go/network.md",
+    "go/memory.md",
+    "k8s/attachments/Pasted image 20250805111221.png",
+    "k8s/attachments/Pasted image 20250805111001.png",
+    "k8s/ingress.md",
+    "k8s/grafana.md",
+    "k8s/harbor.md",
+    "containerd/docker.md",
+    "image/Linux_kernel_map.svg",
+    "image/docker-image.gif",
+    "image/2023-03-13-16-06-07-b7ae3eac42c0988854e79505d44a0d2.jpg",
+    "image/2023-03-13-16-05-13-image.png",
+    "k8s/prometheus.md",
+    "k8s/kubernetes_security.md",
+    "k8s/kube_prometheus.md",
+    "k8s/attachments/Image00653.jpg",
+    "k8s/attachments/Image00649.jpg",
+    "k8s/attachments/Image00587.jpg",
+    "k8s/attachments/Image00586.jpg",
     "linux/perf.md",
     "containerd/containerd.md",
-    "架构/attachments/Pasted image 20250430151319.png",
     "Excalidraw/linux内核网络.excalidraw.md",
     "架构/分布式.md",
     "linux/ftrace.md",
     "架构/架构设计.md",
     "架构/架构设计模板.md",
-    "架构/知识学习模板.md",
-    "linux/attachments/Pasted image 20250701162821.png",
-    "linux/attachments/Pasted image 20250701162802.png",
-    "linux/attachments/Pasted image 20250701154733.png",
-    "network/Linux内核网络.md",
-    "linux/attachments/Pasted image 20250701101848.png",
-    "linux/attachments/Pasted image 20250701101822.png",
-    "linux/attachments/Pasted image 20250701101731.png",
-    "linux/attachments/Pasted image 20250701101718.png",
-    "linux/memory.md",
-    "linux/algorithm.md",
-    "linux/attachments/Pasted image 20250630093928.png",
-    "linux/attachments/Pasted image 20250630092729.png",
-    "linux/performance-tools.md",
-    "linux/Pasted image 20250627181937.png.md",
-    "linux/network.md",
-    "linux/linux.md",
-    "network/负载均衡与代理技术.md",
-    "k8s/prometheus.md",
-    "doc/readme.md",
-    "eBPF/bcc.md",
-    "eBPF/ebpf专家.md",
-    "eBPF/ebpf.md",
-    "eBPF/bpftrace.md",
-    "linux/常见问题及排查手段.md",
-    "tools/使用说明.md",
     "Excalidraw/attachments",
     "Excalidraw",
     "network/协议/attachments",
