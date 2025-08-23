@@ -311,3 +311,175 @@ characters:
 {{- end }}
 ```
 
+##### 模板
+在 `_helpers.tpl`中会存储大量的用于后期Yaml配置的模板，yaml配置中通过include可引入这些模板
+```yaml
+{{/*
+Expand the name of the chart.
+*/}}
+{{- define "anvil.name" -}}
+{{- default .Chart.Name .Values.nameOverride | trunc 63 | trimSuffix "-" }}
+{{- end }}
+
+{{/*
+Create a default fully qualified app name.
+We truncate at 63 chars because some Kubernetes name fields are limited to this (by the DNS naming spec).
+If release name contains chart name it will be used as a full name.
+*/}}
+{{- define "anvil.fullname" -}}
+{{- if .Values.fullnameOverride }}
+{{- .Values.fullnameOverride | trunc 63 | trimSuffix "-" }}
+{{- else }}
+{{- $name := default .Chart.Name .Values.nameOverride }}
+{{- if contains $name .Release.Name }}
+{{- .Release.Name | trunc 63 | trimSuffix "-" }}
+{{- else }}
+{{- printf "%s-%s" .Release.Name $name | trunc 63 | trimSuffix "-" }}
+{{- end }}
+{{- end }}
+{{- end }}
+
+{{/*
+Create chart name and version as used by the chart label.
+*/}}
+{{- define "anvil.chart" -}}
+{{- printf "%s-%s" .Chart.Name .Chart.Version | replace "+" "_" | trunc 63 | trimSuffix "-" }}
+{{- end }}
+
+{{/*
+Common labels
+*/}}
+{{- define "anvil.labels" -}}
+helm.sh/chart: {{ include "anvil.chart" . }}
+{{ include "anvil.selectorLabels" . }}
+{{- if .Chart.AppVersion }}
+app.kubernetes.io/version: {{ .Chart.AppVersion | quote }}
+{{- end }}
+app.kubernetes.io/managed-by: {{ .Release.Service }}
+{{- end }}
+
+{{/*
+Selector labels
+*/}}
+{{- define "anvil.selectorLabels" -}}
+app.kubernetes.io/name: {{ include "anvil.name" . }}
+app.kubernetes.io/instance: {{ .Release.Name }}
+{{- end }}
+
+{{/*
+Create the name of the service account to use
+*/}}
+{{- define "anvil.serviceAccountName" -}}
+{{- if .Values.serviceAccount.create }}
+{{- default (include "anvil.fullname" .) .Values.serviceAccount.name }}
+{{- else }}
+{{- default "default" .Values.serviceAccount.name }}
+{{- end }}
+{{- end }}
+```
+
+##### 依赖项目
+从提供的文本中，我们可以提取出一系列关于版本范围指定的规则和示例。这些规则主要描述了如何使用特定符号（如`^`和`~`）来定义软件版本的兼容范围。以下是提取的关键信息：
+
+使用`^`符号的规则
+- `^1.2.x`等价于`>=1.2.0<2.0.0`：表示任何大于等于1.2.0且小于2.0.0的版本。
+- `^2.3`等价于`>=2.3<3`：表示任何大于等于2.3且小于3的版本。
+- `^2.x`等价于`>=2.0.0<3`：表示任何大于等于2.0.0且小于3的版本。
+- `^0.2.3`等价于`>=0.2.3<0.3.0`：表示任何大于等于0.2.3且小于0.3.0的版本。
+- `^0.2`等价于`>=0.2.0<0.3.0`：表示任何大于等于0.2.0且小于0.3.0的版本。
+- `^0.0.3`等价于`>=0.0.3<0.0.4`：表示任何大于等于0.0.3且小于0.0.4的版本。
+- `^0.0`等价于`>=0.0.0<0.1.0`：表示任何大于等于0.0.0且小于0.1.0的版本。
+- `^0`等价于`>=0.0.0<1.0.0`：表示任何大于等于0.0.0且小于1.0.0的版本。
+
+使用`~`符号的规则
+- `~用于指定补丁程序范围`：这表明`~`通常用于在主版本或次要版本范围内选择最新的补丁版本。
+- `~1.2.3`等价于`>=1.2.3<1.3.0`：表示任何大于等于1.2.3且小于1.3.0的版本，特别强调在1.2.x系列中的最新补丁版本。
+- `~1`等价于`>=1<2`：表示任何大于等于1且小于2的版本，在1.x系列中的最新版本。
+- `~2.3`等价于`>=2.3<2.4`：表示任何大于等于2.3且小于2.4的版本，在2.3.x系列中的最新补丁版本。
+- `~1.2.x`等价于`>=1.2.0<1.3.0`：表示任何大于等于1.2.0且小于1.3.0的版本，在1.2.x系列中的最新补丁版本。
+- `~1.x`等价于`>=1<2`：表示任何大于等于1且小于2的版本，在1.x系列中的最新版本。
+
+这些规则和示例展示了如何灵活地使用`^`和`~`符号来精确控制软件依赖的版本范围，这对于确保软件项目的稳定性和兼容性至关重要。
+
+```yaml
+dependencies: 
+- name: booster 
+  version: ^1.0.0 
+  condition: booster.enabled
+  repository: https://raw.githubusercontent.com/Masterminds/learning-helm/main/chapter6/repository/
+```
+
+依赖项详情
+
+- **名称（name）**: `booster`
+    - 这是依赖项的标识符，用于在项目中引用该依赖。
+
+- **版本（version）**: `^1.0.0`
+    - 这表示对`booster`依赖项的版本要求。使用了caret (^) 版本范围指定符，意味着任何大于等于1.0.0但小于2.0.0的版本都可以满足此依赖要求。例如，1.0.1, 1.1.0, 1.2.3等版本都符合条件，但2.0.0及其以上版本则不被接受。
+
+- **条件（condition）**: `booster.enabled`
+    - 这是一个布尔表达式，用于决定是否启用该依赖项。只有当`booster.enabled`为真时，才会加载和使用这个依赖项。这通常用于配置文件中，允许用户根据需要动态地开启或关闭某些功能或组件。
+
+- **仓库（repository）**: `https://raw.githubusercontent.com/Masterminds/learning-helm/main/chapter6/repository/`
+    - 这指定了`booster`依赖项的来源位置。它是一个URL，指向GitHub上一个特定项目的资源。具体来说，这是`Masterminds`组织下的`learning-helm`仓库中的`chapter6/repository/`目录。这可能是一个包含Helm图表或其他相关资源的目录，用于构建和部署应用程序。
+
+##### exports属性
+chart可以将另外一个chart作为自己的子chart，在子chart中通过 `exports` 可以导出部分配置
+```yaml
+# example-child/values.yaml 
+exports: 
+  types: 
+    foghorn: rooster
+```
+在父chart中可以通过 `import-values` 将对应的配置导入
+```yaml
+# parent-chart/Chart.yaml
+apiVersion: v2
+name: parent-chart
+version: 0.1.0
+dependencies:
+  - name: example-child
+    version: ^1.0.0
+    repository: https://charts.example.com/
+    import-values:
+      - types
+```
+通过这种方式，你可以轻松地在父 chart 中使用子 chart 导出的值
+
+##### 子-父格式
+当子cahrt没有导出值但是父chart想用，可以通过父依赖直接声明就行
+```yaml
+dependencies:
+  - name: example-child
+    version: ^1.0.0
+    repository: https://charts.example.com/
+    import-values:
+      - child: types
+        parent: characters
+```
+
+#### 库chart
+在创建多个共享许多相同模板的类似chart。对于这些情况，可以使用库chart。
+
+库chart在概念上类似于软件库。它们提供了可重用的功能，这些功能可以被导入并由其他chart使用，但它们本身不能被安装。
+使用helm create创建新的库chart时，第一步是删除templates目录和values.yaml文件，因为二者都不会被使用。然后，你需要告诉Helm这是一个库chart。在Chart.
+```yaml
+apiVersion: v2
+name: mylib
+type: library
+description: an example library chart
+version: 0.1.0
+```
+
+在编辑好辅助函数和需要的数据之后，通过 `helm package .` 将模板库进行打包
+```yaml
+apiVersion: v2 
+name: myapp 
+version: 0.1.0 
+dependencies: 
+  - name: mylib 
+    version: 0.1.0 
+    repository: "file://path/to/mylib"
+```
+
+
