@@ -462,7 +462,7 @@ dependencies:
 在创建多个共享许多相同模板的类似chart。对于这些情况，可以使用库chart。
 
 库chart在概念上类似于软件库。它们提供了可重用的功能，这些功能可以被导入并由其他chart使用，但它们本身不能被安装。
-使用helm create创建新的库chart时，第一步是删除templates目录和values.yaml文件，因为二者都不会被使用。然后，你需要告诉Helm这是一个库chart。在Chart.
+使用helm create创建新的库chart时，第一步是删除templates目录和values.yaml文件，因为二者都不会被使用。然后，你需要告诉Helm这是一个库chart。在Chart。
 ```yaml
 apiVersion: v2
 name: mylib
