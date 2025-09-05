@@ -487,13 +487,101 @@ L2 underlay网络就是链路层（L2） 互通的底层网络。 IPvlan L2模�
 IPvlan的L3模式， flannel的host-gw模式和Calico的BGP组网方式都是L3 underlay类型的网络。
 
 
+### DNS服务基本框架
+Kubernetes的DNS应用部署好后， 会对外暴露一个服务， 集群内的容器通过访问该服务的Cluster IP+53端口获得域名解析服务， 而这个Service的Cluster IP一般情况下都是固定的。
+一般应用程序是无须感知DNS服务器的IP地址的， 以Linux系统为例， 容器内进程想要获得域名解析服务， 只需把DNS Server写入/etc/resolv.conf文件。 那么刷新/etc/resolv.conf配置这个动作是谁完成的呢？ 答案是Kubelet。
+原来， 当Kubernetes的DNS服务Cluster IP分配后， 系统（一般是指安装程序） 会给Kubelet配置 `--cluster-dns=<dns service ip>` 启动参数，
+DNS服务的IP地址将在用户容器启动时传递， 并写入每个容器的/etc/resolv.conf文件。 DNS服务IP即上文提到的DNS Service的Cluster IP， 可以配置成--cluster-dns=10.0.0.1。
+除此之外， Kubelet的 `--cluster_domain=<default-local-domain>` 参数支持配置集群域名后缀， 默认是`cluster.local`。
+
+
+
 ## k8s的网络策略
 
 为了实现细粒度的容器间网络访问隔离策略， Kubernetes从1.3版本开始引入了Network Policy机制， 到1.8版本升级为networking.k8s.io/v1稳定版本。 Network Policy的主要功能是对Pod或者Namespace之间的网络通信进行限制和准入控制， 设置方式为将目标对象的Label作为查询条件， 设置允许访问或禁止访问的客户端Pod列表。 目前查询条件可以作用于Pod和Namespace级别。
 
 为了使用Network Policy， Kubernetes引入了一个新的资源对象NetworkPolicy， 供用户设置Pod之间的网络访问策略。 但这个资源对象配置的仅仅是策略规则， 还需要一个策略控制器（Policy Controller） 进行策略规则的具体实现。 策略控制器由第三方网络组件提供， 目前Calico、 Cilium、 Kube-router、 Romana、 Weave Net等开源项目均支持网络策略的实现。
 
+
+网络策略作为Pod网络隔离的一层抽象， 用白名单实现了一个访问控制列表（ACL） ， 从Label Selector、 namespace selector、 端口、CIDR这4个维度限制Pod的流量进出。
+
 网络策略的设置主要用于对目标Pod的网络访问进行控制， 在默认情况下对所有Pod都是允许访问的， 在设置了指向Pod的NetworkPolicy网络策略后， 到Pod的访问才会被限制。
+
+### 网络策略应用举例
+
+- Deny all ingress and egress
+```yaml
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+    - Egress
+```
+这个策略会阻止所有入站和出站流量到达或离开匹配的 Pod。这意味着没有任何流量可以进入或离开这些 Pod，除非有其他更具体的网络策略允许特定的流量。
+
+- Allow all ingress
+```yaml
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-all
+spec:
+  podSelector: {}
+  ingress:
+  - {}
+```
+这个策略允许所有入站流量到达匹配的 Pod。这意味着任何外部流量都可以访问这些 Pod，但不包括出站流量控制。
+
+- Allow all egress
+```yaml
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-all
+spec:
+  podSelector: {}
+  egress:
+  - {}
+```
+这个策略允许所有出站流量从匹配的 Pod 发出。这意味着这些 Pod 可以发送任何类型的流量到外部目的地，但不包括入站流量控制
+
+> {} 代表允许所有流量， []代表拒绝所有流量
+
+```yaml
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny
+spec:
+  podSelector: {}
+  policyTypes:
+  ingress: []
+```
+
+限制只能从指定端口进来
+```yaml
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: api-allow-5000
+spec:
+  podSelector: 
+    matchLabels:
+      app: apiserver
+  ingress:
+  - ports:
+    - port: 5000
+    from:
+    - podSelector:
+      matchLabels:
+        role: monitoring
+```
+
+
 
 ```yaml
 apiVersion: networking.k8s.io/v1
@@ -519,6 +607,9 @@ spec:
     - podSelector:
         matchLabels:
           app.kubernetes.io/name: prometheus
+    - namespaceSelector:
+      matchLabels:
+        project: myproject
     # 允许访问的目标Pod监听的端口号
     ports:
     - port: 3000
@@ -538,6 +629,87 @@ spec:
 ### 为命名空间配置默认的网络策略
 
 在一个命名空间没有设置任何网络策略的情况下， 对其中Pod的ingress和egress网络流量并不会有任何限制。 在命名空间级别可以设置一些默认的全局网络策略， 以便管理员对整个命名空间进行统一的网络策略设置。
+
+## 网络故障定位
+
+### IP转发和桥接
+Kubernetes网络利用Linux内核Netfilter模块设置低级别的集群IP负载均衡， 除了iptables和IPVS， 还需要用到两个关键的模块： IP转发（IP forward） 和桥接。
+
+#### IP转发
+IP转发是一种内核态设置， 允许将一个接口的流量转发到另一个接口， 该配置是Linux内核将流量从容器路由到外部所必需的。 有时， 该项设置可能会被安全团队运行的定期安全扫描重置， 或者没有配置为重启后生效。 在这种情况下， 就会出现网络访问失败的情况， 例如， 访问Pod服务连接超时：
+```bash
+* connect to 10.100.225.223 port 5000 failed: Connection timed out
+* Failed to connect to 10.100.225.223 port 5000: Connection timed out
+* Closing connection 0
+curl: (7) Failed to connect to 10.100.225.223 port 5000: Connection timed out
+```
+Tcpdump可以显示发送了大量重复的SYN数据包， 但没有收到ACK。
+
+那么， 该如何诊断呢？ 请看下面的诊断方法：
+```bash
+# 检查 ipv4 forwarding是否开启
+sysctl net.ipv4.ip_forward
+# 0 意味着未开启
+net.ipv4.ip_forward = 0
+```
+修复也很简单，只需要开启ip转发功能即可
+```bash
+sysctl -w net.ipv4.ip_forward=1
+# 验证并生效
+sysctl -p
+```
+
+
+#### 桥接
+Kubernetes通过bridge-netfilter配置使iptables规则应用在Linux网桥上。 该配置对Linux内核进行宿主机和容器之间数据包的地址转换是必需的。 否则， Pod进行外部服务网络请求时会出现目标主机不可达或者连接拒绝等错误（host unreachable或connection refused） 。
+
+那么， 如何诊断呢？ 请看下面的命令：
+```bash
+# 检查 bridge netfilter是否开启
+sysctl net.bridge.bridge-nf-call-iptables
+# 0 表示未开启
+net.bridge.bridge-nf-call-iptables=0
+```
+
+使用如下方式开启桥接
+```bash
+modprobe br_netfilter
+# 开启
+sysctl -w net.bridge.bridge-nf-call-iptables=1
+
+echo  net.bridge.bridge-nf-call-iptables=1 >> /etc/sysconf.d/10-bridge-nf-call-iptables.conf
+sysctl -p
+```
+
+
+### Pod CIDR冲突
+Kubernetes有时会为容器和容器之间的通信建立一层特殊的overlay网络（取决于你使用什么样的网络插件） 。 使用隔离的Pod网络容器可以获得唯一的IP并且可以避免集群上的端口冲突， 而当Pod子网和主机网络出现冲突时就会出现问题。 Pod和Pod之间通信会因为路由问题被中断：
+```bash
+# curl http://172.28.128.132:5000
+curl: (7) Failed to connect to 172.28.128.132 port 5000: No route to host
+```
+
+使用 `kubectl get pod -n xxx -o wide` 查看 ip地址是否和主机网络出现冲突
+
+### hairpin
+hairpin的含义用一句话表述就是“自己访问自己”。 例如， Pod有时无法通过Service IP访问自己， 这就有可能是hairpin的配置问题了。
+
+Hairpin模式是一种网络配置选项，通常用于虚拟化环境中，特别是当使用Open vSwitch（OVS）或类似的软件定义网络（SDN）解决方案时。启用hairpin模式（即设置为1）允许同一桥接设备上的两个虚拟机之间直接通信，而不需要将数据包发送到外部网络再返回。这可以提高性能和效率，特别是在需要大量内部通信的应用场景中。
+
+通常， 当Kube-proxy以iptables或IPVS模式运行， 并且Pod与桥接网络连接时， 就会发生这种情况。 Kubelet的启动参数提供了一个--hairpin-mode的标志， 支持的值有hairpin-veth和promiscuous-bridge。 检查Kubelet的日志也能看到以下日志行， 例如：
+```bash
+I0629 00:51:43.648698 3252 kubelet.go:380] hairpin mode set to "promiscuous-bridge"
+```
+用户需要检查Kubelet的--hairpin-mode是否被设置为一个合法的值
+`--hairpin-mode`被Kubelet设置成hairpin-veth并且生效后， 底层其实是在修改宿主机操作系统/sys/devices/virtual/net目录下设备文件hairpin_mode的值， 可以通过以下命令确认是否修改成功：
+
+```bash
+# for intf in /sys/devices/virtual/net/cbr0/brif/; do cat $intf/hairpin_mode; done
+1
+1
+1
+1
+```
 
 
 
