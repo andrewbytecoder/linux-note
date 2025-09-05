@@ -197,6 +197,83 @@ IPVS是LVS的负载均衡模块， 亦基于netfilter， 但比iptables性能更
 
 既然Kube-proxy已经有了iptables模式， 为什么Kubernetes还选择IPVS呢？ 随着Kubernetes集群规模的增长， 其资源的可扩展性变得越来越重要， 特别是对那些运行大型工作负载的企业， 其服务的可扩展性尤其重要。 要知道， iptables难以扩展到支持成千上万的服务， 它纯粹是为防火墙而设计的， 并且底层路由表的实现是链表， 对路由规则的增删改查操作都涉及遍历一次链表。
 
+尽管Kubernetes在1.6版本中已经支持5000个节点， 但使用iptables模式的Kube-proxy实际上是将集群扩展到5000个节点的最大瓶颈。 一个例子是， 如果我们有1000个服务并且每个服务有10个后端Pod， 将在每个工作节点上至少产生10000×N（N≥4） 个iptable记录， 这可能使内核非常繁忙地处理每次iptables规则的刷新。
+另外， 使用IPVS做集群内服务的负载均衡可以解决iptables带来的性能问题。 IPVS专门用于负载均衡， 并使用更高效的数据结构（散列表） ， 允许几乎无限的规模扩张。
+
+#### 1.IPVS的工作原理
+IPVS是Linux内核实现的四层负载均衡， 是LVS负载均衡模块的实现。 上文也提到， IPVS基于netfilter的散列表， 相对于同样基于netfilter框架的iptables有更好的性能表现和可扩展性，
+IPVS支持TCP、 UDP、 SCTP、 IPv4、 IPv6等协议， 也支持多种负载均衡策略， 例如rr、 wrr、 lc、 wlc、 sh、 dh、 lblc等。 IPVS通过persistent connection调度算法原生支持会话保持功能。
+![[Pasted image 20250905172611.png]]
+
+简单说， 当外机的数据包首先经过netfilter的PREROUTING链， 然后经过一次路由决策到达INPUT链， 再做一次DNAT后经过FORWARD链离开本机网路协议栈。 由于IPVS的DNAT发生在netfilter的INPUT链，因此如何让网路报文经过INPUT链在IPVS中就变得非常重要了。 一般有两种解决方法， 一种方法是把服务的虚IP写到本机的本地内核路由表中； 另一种方法是在本机创建一个dummy网卡， 然后把服务的虚IP绑定到该网卡上。 Kubernetes使用的是第二种方法， 详见下文
+
+IPVS支持三种负载均衡模式： Direct Routing（简称DR） 、Tunneling（也称ipip模式） 和NAT（也称Masq模式） 。
+
+##### DR
+IPVS的DR模式如图所示。 DR模式是应用最广泛的IPVS模式，它工作在L2， 即通过MAC地址做LB， 而非IP地址。 在DR模式下， 回程报文不会经过IPVS Director而是直接返回给客户端。 因此， DR在带来高性能的同时， 对网络也有一定的限制， 即要求IPVS的Director和客户端在同一个局域网内。 另外， 比较遗憾的是， DR不支持端口映射， 无法支撑Kubernetes Service的所有场景。
+![[Pasted image 20250905173100.png]]
+##### Tunneling
+IPVS的Tunneling模式就是用IP包封装IP包， 因此也称ipip模式， 如图所示。 Tunneling模式下的报文不经过IPVS Director， 而是直接回复给客户端。 Tunneling模式同样不支持端口映射， 因此很难被用在Kubernetes的Service场景中。
+![[Pasted image 20250905173147.png]]
+##### NAT
+IPVS的NAT模式支持端口映射， 回程报文需要经过IPVS Director，因此也称Masq（伪装） 模式， 如图所示。 Kubernetes在用IPVS实现Service时用的正是NAT模式。 当使用NAT模式时， 需要注意对报文进行一次SNAT， 这也是Kubernetes使用IPVS实现Service的微秒（tricky） 之处。
+![[Pasted image 20250905173307.png]]
+
+
+#### 2.Kube-proxy IPVS模式参数
+在运行基于IPVS的Kube-proxy时， 需要注意以下参数
+- --proxy-mode： 除了现有的userspace和iptables模式， IPVS模式通过--proxy-mode=ipvs进行配置；
+- --ipvs-scheduler： 用来指定IPVS负载均衡算法， 如果不配置则默认使用roundrobin（rr） 算法。 支持配置的负载均衡算法有：
+	- rr：轮询
+	- lc：最小连接
+	- dh：目的地址哈希
+	- sh：源地址哈希
+	- sed：最短时延
+- --cleanup-ipvs： 类似于--cleanup-iptables参数。 如果设置为true， 则清除在IPVS模式下创建的IPVS规则；
+- --ipvs-sync-period： 表示Kube-proxy刷新IPVS规则的最大间隔时间， 例如5秒、 1分钟等， 要求大于0
+- -ipvs-min-sync-period： 表示Kube-proxy刷新IPVS规则的最小时间间隔， 例如5秒、 1分钟等， 要求大于0
+- --ipvs-exclude-cidrs： 用于在清除IPVS规则时告知Kube-proxy不要清理该参数配置的网段的IPVS规则。 因为我们无法区分某条IPVS规则到底是Kube-proxy创建的， 还是其他用户程序的， 配置该参数是为了避免误删用户自己的IPVS规则。
+
+#### 3.IPVS模式实现原理
+Kube-proxy IPVS模式的工作原理如图
+![[Pasted image 20250905173806.png]]
+一旦创建一个Service和Endpoints， IPVS模式的Kube-proxy会做以下三件事情。
+1. 确保一块dummy网卡（kube-ipvs0） 存在。 为什么要创建dummy网卡？ 因为IPVS的netfilter钩子挂载INPUT链， 我们需要把Service的访问IP绑定在dummy网卡上让内核“觉得”虚IP就是本机IP， 进而进入INPUT链。
+2. 把Service的访问IP绑定在dummy网卡上
+3. 通过socket调用， 创建IPVS的virtual server和real server， 分别对应Kubernetes的Service和Endpoints。
+
+#### 4.IPVS模式中的iptables和ipset
+IPVS用于流量转发， 它无法处理Kube-proxy中的其他问题， 例如包过滤、 SNAT等。 具体来说， IPVS模式的Kube-proxy将在以下4种情况下依赖iptables：
+
+- Kube-proxy配置启动参数masquerade-all=true， 即集群中所有经过Kube-proxy的包都做一次SNAT；
+- Kube-proxy启动参数指定集群IP地址范围
+- 支持Load Balancer类型的服务， 用于配置白名单
+- 支持NodePort类型的服务， 用于在包跨节点前配置MASQUERADE， 类似于上文提到的iptables模式。
+
+我们不想创建太多的iptables规则， 因此使用ipset减少iptables规则，使得不管集群内有多少服务， IPVS模式下iptables规则的总数在5条以内
+
+### iptables VS.IPVS
+
+| Service 数量 | iptables 规则数量 | 增加 1 条 iptables 规则时延 | 增加 1 条 IPVS 规则时延 |
+| ---------- | ------------- | -------------------- | ---------------- |
+| 1          | 8             | 50 us                | 30 us            |
+| 5000       | 40000         | 11 mins              | 50 us            |
+| 20000      | 160000        | 5 hours              | 70 us            |
+通过上表我们可以发现， IPVS刷新规则的时延明显要低iptables几个数量级。
+
+
+### conntrack
+
+在内核中， 所有由netfilter框架实现的连接跟踪模块称作conntrack（connection tracking） 。 在DNAT的过程中， conntrack使用状态机启动并跟踪连接状态。 为什么需要记录连接的状态呢？ 因为iptables/IPVS做了DNAT后需要记住数据包的目的地址被改成了什么，并且在返回数据包时将目的地址改回来。 除此之外， iptables还可以依靠conntrack的状态（cstate） 决定数据包的命运。 其中最主要的4个conntrack状态如下：
+
+- NEW： 匹配连接的第一个包， 这表示conntrack对该数据包的信息一无所知。 通常发生在收到SYN数据包时。
+- ESTABLISHED： 匹配连接的响应包及后续的包， conntrack知道该数据包属于一个已建立的连接。 通常发生在TCP握手完成之后。
+- RELATED： RELATED状态有点复杂， 当一个连接与另一个ESTABLISHED状态的连接有关时，这意味着， 一个连接要想成为RELATED， 必须先有一条已经是ESTABLISHED状态的连接存在。 这个ESTABLISHED状态连接再产生一个主连接之外的新连接， 这个新连接就是RELATED状态。
+- NVALID： 匹配那些无法识别或没有任何状态的数据包， conntrack不知道如何处理它。 该状态在分析Kubernetes故障的过程中起着重要的作用。
+![[Pasted image 20250905181241.png]]
+
+
+
 
 
 

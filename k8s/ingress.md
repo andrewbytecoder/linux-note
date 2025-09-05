@@ -1,4 +1,15 @@
 
+## Ingress Controller的通用框架
+Ingress Controller实质上可以理解为监视器， Ingress Controller通过不断地跟Kubernetes API打交道， 实时地感知后端Service、 Pod等的变化， 比如新增和减少Pod， Service增加与减少等； 当得到这些变化信息后， Ingress Controller再结合下文的Ingress生成配置， 然后更新反向代理负载均衡器， 并刷新其配置， 起到服务发现的作用。
+
+Ingress Controller将Ingress入口地址和后端Pod地址的映射关系（规则） 实时刷新到Load Balancer的配置文件中， 再让负载均衡器重载（reload） 该规则， 便可实现服务的负载均衡和自动发现。
+
+### Nginx Ingress Controller详解
+对绝大多数刚刚接触Kubernetes的人来说， 都比较熟悉Nginx Ingress Controller， 一个对外暴露Service的7层反向代理。 Nginx Ingress Controller通过Kubernetes的annotations配置， 为Ingress提供丰富的个性化配置。
+
+因为微服务架构及Kubernetes等编排工具最近几年才开始逐渐流行， 所以一开始的反向代理服务器（例如Nginx和HA Proxy） 并未提供对微服务的支持， 才会出现Nginx Ingress Controller这种中间层做Kubernetes和负载均衡器（例如Nginx） 之间的适配器（adapter） 。Nginx Ingress Controller的存在就是为了与Kubernetes交互， 同时刷新Nginx配置， 还能重载Nginx。 而号称云原生边界路由的Traefik设计得更彻底， 首先它是个反向代理， 其次原生提供了对Kubernetes的支持， 也就是说， Traefik本身就能跟Kubernetes打交道， 感知Kubernetes集群服务
+
+的更新。 Traefik是原生支持Kubernetes Ingress的， 因此用户在使用Traefik时无须再开发一套Nginx Ingress Controller， 受到了广大运维人员的好评。 相
 
 ## nginx ingress
 ### nginx ingress redirect
