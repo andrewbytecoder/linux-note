@@ -12,10 +12,19 @@ Kubernetes集群至少应该包含三个网络，如图网络环境所示。一�
 
 ![[image-2025-01-27-01-07-54-828.png]]
 
+一些最常见的术语包括：
+- 第2层网络： OSI（Open Systems Interconnections， 开放系统互连）网络模型的“数据链路”层。 第2层网络会处理网络上两个相邻节点之间的帧传递。 第2层网络的一个典型示例是以太网。
+- 第3层网络： OSI网络模型的“网络”层。 第3层网络的主要关注点，是在第2层连接之上的主机之间路由数据包。 IPv4、 IPv6和ICMP是第3层网络协议的示例。
+- VXLAN： 即虚拟可扩展的LAN。 首先， VXLAN用于通过在UDP数据包中封装第2层以太网帧帮助实现大型云部署。 VXLAN虚拟化与VLAN类似， 但提供更大的灵活性和功能（VLAN仅限于4096个网络ID） 。 VXLAN是一种overlay协议， 可在现有网络之上运行。
+- overlay网络： 是建立在现有网络之上的虚拟逻辑网络。 overlay网络通常用于在现有网络之上提供有用的抽象， 并分离和保护不同的逻辑网络。
+- 封装： 是指在附加层中封装网络数据包以提供其他上下文和信息的过程。 在overlay网络中， 封装被用于从虚拟网络转换到底层地址空间， 从而能路由到不同的位置（数据包可以被解封装， 并继续到其目的地）。
+- 网状网络： 是指每个节点连接到许多其他节点以协作路由， 并实现更大连接的网络。 网状网络（mesh network） 允许通过多个路径进行路由， 从而提供更可靠的网络。 网状网格的缺点是每个附加节点都会增加大量开销。
+- BGP： 代表“边界网关协议”， 用于管理边缘路由器之间数据包的路由方式。 BGP通过考虑可用路径、 路由规则和特定网络策略等因素，将数据包从一个网络发送到另一个网络。 BGP有时被用作容器网络的路由机制， 但不会用在overlay网络中。
+
+
 ## 云网络基础
 
 Docker技术依赖于近年来Linux内核虚拟化技术的发展， 所以Docker对Linux内核有很强的依赖。 Docker使用到的技术有网络命名空间（ Network Namespace） 、 Veth设备对、 网桥、 ipatables和路由。
-
 
 
 ### 网络命名空间
@@ -441,18 +450,41 @@ Pod容器既有可能在同一个Node上运行， 也有可能在不同的Node�
 - 容器运行时必须对容器的ADD和DEL操作设置顺序， 以使得ADD操作最终跟随相应的DEL操作。 DEL操作后面可能会有其他DEL操作， 但插件应自由处理多个DEL操作（即多个DEL操作应该是幂等的）。
 - 容器必须由ContainerID进行唯一标识。 存储状态的插件应使用联合主键（ network name、 CNI_CONTAINERID、 CNI_IFNAME） 进行存储
 
-## Calico插件的原理和部署示例
+## 全能大三层网络插件： Calico
 
-Calico是一个基于BGP的纯三层的网络方案， 与OpenStack、Kubernetes、 AWS、 GCE等云平台都能够良好地集成。 Calico在每个计算节点都利用Linux Kernel实现了一个高效的vRouter来负责数据转发。每个vRouter都通过BGP1协议把在本节点上运行的容器的路由信息向整个Calico网络广播， 并自动设置到达其他节点的路由转发规则。 Calico保证所有容器之间的数据流量都是通过IP路由的方式完成互联互通的。Calico节点组网时可以直接利用数据中心的网络结构（L2或者L3） ， 不需要额外的NAT、 隧道或者Overlay Network， 没有额外的封包解包， 能
-够节约CPU运算， 提高网络效率。
+Calico是一个基于BGP的纯三层的网络方案， 与OpenStack、Kubernetes、 AWS、 GCE等云平台都能够良好地集成。 Calico在每个计算节点都利用Linux Kernel实现了一个高效的vRouter来负责数据转发。每个vRouter都通过BGP1协议把在本节点上运行的容器的路由信息向整个Calico网络广播， 并自动设置到达其他节点的路由转发规则。 Calico保证所有容器之间的数据流量都是通过IP路由的方式完成互联互通的。Calico节点组网时可以直接利用数据中心的网络结构（L2或者L3） ， 不需要额外的NAT、 隧道或者Overlay Network， 没有额外的封包解包， 能够节约CPU运算， 提高网络效率。
+
+Calico作为容器网络方案和我们前面介绍的那些方案最大的不同是它没有采用overlay网络做报文的转发， 而是提供了纯3层的网络模型。三层通信模型表示每个容器都通过IP直接通信， 中间通过路由转发找到对方。 在这个过程中， 容器所在的节点类似于传统的路由器， 提供了路由查找的功能。 要想路由能够正常工作， 每个容器所在的主机节点扮演了虚拟路由器（vRouter） 的功能， 而且这些vRouter必须有某种方法，能够知道整个集群的路由信息。
+
+Calico的设计比较新颖， 之前提到flannel的host-gw模式之所以不能跨二层网络， 是因为它只能修改主机的路由， Calico把改路由表的做法换成了标准的BGP路由协议。 相当于在每个节点上模拟出一个额外的路由器， 由于采用的是标准协议， Calico模拟路由器的路由表信息可以被传播到网络的其他路由设备中， 这样就实现了在三层网络上的高速跨节点网络。
+
+>注： 现实中的网络并不总是支持BGP路由， 因此Calico也设计了一种ipip模式， 使用overlay的方式传输数据。 ipip的包头非常小， 而且是内置在内核中的， 因此它的速度理论上要比VXLAN快， 但是安全性更差。
+
+Calico基于iptables实现了Kubernetes的网络策略， 通过在各个节点上应用ACL（访问控制列表） 提供工作负载的多租户隔离、 安全组及其他可达性限制等功能。 此外， Calico还可以与服务网格Istio集成， 以便在服务网格层和网络基础架构层中解释和实施集群内工作负载的网络策略。
+Calico还支持容器漂移。 因为Calico配置的三层网络使用BGP路由协议在主机之间路由数据包。 BGP路由机制可以本地引导数据包， 这意味着无须overlay网络中额外的封包解包操作。 由于免去了额外包头（大部分情况下依赖宿主机IP地址） 封装数据包， 容器在不同主机之间迁移没有网络的限制。
+
+Calico在每一个计算节点利用Linux内核的一些能力实现了一个高效的vRouter负责数据转发， 而每个vRouter通过BGP把自己运行的工作负载的路由信息向整个Calico网络传播。 小规模部署可以直接互联， 大规模下可以通过指定的BGP Route Reflector（下文会专门介绍） 完成。
+
+### 名词解释
+1. Endpoint： 接入Calico网络中的网卡（IP） ；
+2. iBGP： AS内部的BGP Speaker， 与同一个AS内部的iBGP、 eBGP交换路由信息；
+3. eBGP： AS边界的BGP Speaker， 与同一个AS内部的iBGP、 其他AS的eBGP交换路由信息；
+4. workloadEndpoint： 虚拟机和容器端点， 一般指它们的IP地址；
+5. hostEndpoint： 宿主机端点， 一般指它们的IP地址。
+
 
 ### Calico的主要组件如下
+![[Pasted image 20250908142835.png]]
 
-- Felix： Calico Agent， 运行在每个Node上， 负责为容器设置网络资源（IP地址、 路由规则、 iptables规则等） ， 保证跨主机容器网络互通
+- Felix： Calico Agent， Felix是一个守护程序， 作为agent运行在托管容器或虚拟机的Calico节点上。 Felix负责刷新主机路由和ACL规则等， 以便为该主机上的Endpoint正常运行提供所需的网络连接和管理。 进出容器、 虚拟机和物理主机的所有流量都会遍历Calico， 利用Linux内核原生的路由和iptables生成的规则。
+	- 管理网络接口， Felix将有关网络接口的一些信息编程到内核中，使内核能够正确处理该Endpoint发出的流量。 Felix将确保主机正确响应来自每个工作负载的ARP请求， 并将其管理的网卡启用IP Forward；
+	- 编写路由， Felix负责将到其主机上Endpoint的路由编写到Linux内核FIB（转发信息库） 中。 这可以确保那些发往目标主机的Endpoint的数据包被正确地转发；
+	- 编写ACL， Felix还负责将ACL编程到Linux内核中， 即iptables规则。 这些ACL用于确保只在Endpoints之间发送有效的网络流量， 并确保Endpoint无法绕过Calico的安全措施；
+	- 报告状态， Felix负责提供有关网络健康状况的数据。 例如， 它将报告配置其主机时发生的错误和问题。 该数据会被写入etcd， 并对网络中的其他组件可见。
 - etcd： Calico使用的后端存储
-- BGP Client： 负责把Felix在各Node上设置的路由信息通过BGP广播到Calico网络。
-- Route Reflector： 通过一个或者多个BGP Route Reflector完成大规模集群的分级路由分发。
-- CalicoCtl： Calico命令行管理工具。
+- BGP Client： Calico在每个运行Felix服务的节点上都部署一个BGP Client（BGP客户端） 。 BGP客户端的作用是读取Felix编写到内核中的路由信息， 由BGP客户端对这些路由信息进行分发。 具体来说， 当Felix将路由插入Linux内核FIB时， BGP客户端将接收它们， 并将它们分发到集群中的其他工作节点。
+- Route Reflector： 简单的BGP可能成为较大规模部署的性能瓶颈， 因为它要求每个BGP客户端连接到网状拓扑中的每一个其他BGP客户端。 随着集群规模的增大， 一些设备的路由表甚至会被撑满。因此， 在较大规模的部署中， Calico建议使用BGP Route Reflector（路由器反射器） 。 互联网中通常使用BGP Route Reflector充当BGP客户端连接的中心点， 从而避免与互联网中的每个BGP客户端进行通信。 Calico使用BGP Route Reflector是为了减少给定一个BGP客户端与集群其他BGP客户端的连接。 用户也可以同时部署多个BGP Route Reflector服务实现高可用。 Route Reflector仅仅是协助管理BGP网络， 并没有工作负载的数据包经过它们，
+- CalicoCtl： Calico的命令行工具， 允许从命令行界面配置实现高级策略和网络；
 
 ### calico采用的路由方案
 Calico： 源自Tigera， 基于BGP的路由方案， 支持很细致的ACL控制， 对混合云亲和度比较高；路由方案的另一个优点是出了问题也很容易排查。 路由方案往往需要用户了解底层网络基础结构， 因此使用和运维门槛较高。
@@ -466,6 +498,13 @@ Calico的设计灵感源自通过将整个互联网的可扩展IP网络原则压
 ### 容器的网络组网类型
 
 #### overlay 网络
+
+Calico可以创建并管理一个3层平面网络， 为每个工作负载分配一个完全可路由的IP地址。 工作负载可以在没有IP封装或NAT的情况下进行通信， 以实现裸机性能， 简化故障排除和提供更好的互操作性。 我们称这种网络管理模式为vRtouer模式。 vRouter模式直接使用物理机作为虚拟路由器， 不再创建额外的隧道。 然而在需要使用overlay网络的环境中， Calico也提供了IP-in-IP（简称ipip） 的隧道技术。
+
+和其他overlay模式一样， ipip是在各节点之间“架起”一个隧道， 通过隧道两端节点上的容器网络连接， 实现机制简单说就是用IP包头封装原始IP报文。 启用ipip模式时， Calico将在各个节点上创建一个名为tunl0的虚拟网络接口
+
+![[Pasted image 20250908143612.png]]
+
 overlay网络是在传统网络上虚拟出一个虚拟网络， 承载的底层网络不再需要做任何适配。 在容器的世界里， 物理网络只承载主机网络通信， 虚拟网络只承载容器网络通信。 overlay网络的任何协议都要求在发送方对报文进行包头封装， 接收方剥离包头。
 
 - L2 overlay
@@ -710,6 +749,9 @@ I0629 00:51:43.648698 3252 kubelet.go:380] hairpin mode set to "promiscuous-brid
 1
 1
 ```
+
+## kube-dns
+SkyDNS支持正向查找（A记录） 、 服务查找（SRV记录） 和反向IP地址查找（PTR记录）。
 
 
 

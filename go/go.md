@@ -822,6 +822,65 @@ func main() {
 - 当有多个发送者，多个接收者时，这是最复杂的，不仅要管理通道，还要另起一个专门的媒介协程，新增一个媒介通道，但核心逻辑都是一样。
 
 
+### go range
+
+for range 是如何工作的
+
+以Iter库中的Values为例，当你实现如下代码时，会自动配合range实现数据迭代
+```go
+func Values[Map ~map[K]V, K comparable, V any](m Map) iter.Seq[V] {
+	// 在执行for range 时，将会把 for range中的代码部分注入成 yield 函数，这个是由 range实现的
+    return func(yield func(V) bool) { // 这个函数就是 iter.Seq[V]
+        for _, v := range m {
+            if !yield(v) {
+                return
+            }
+        }
+    }
+}
+```
+
+因此、当你写
+```go
+for value := range Values(m) {
+    // 使用 value
+}
+```
+go编译器会自动将其转化为以下代码
+```go
+// 1. 获取生成器函数
+seq := Values(m) // seq 是一个 func(yield func(V) bool)
+
+// 2. 定义一个 "yield" 函数，它由 for-range 循环内部实现
+var yieldFunc func(V) bool
+yieldFunc = func(v V) bool {
+    // 这个函数由 for-range 循环“注入”
+    // 它会将 v 赋值给循环变量 value
+    value := v // 伪代码：实际由编译器处理
+
+    // 然后执行循环体
+    // {
+    //     // 你的循环体代码
+    // }
+
+    // 检查是否需要中断（如 break, return）
+    // 如果循环体执行了 break 或 return，这个函数会返回 false
+    // 否则返回 true 继续下一次迭代
+    return true // 继续
+    // return false // 停止
+}
+
+// 3. 调用生成器函数，并传入 yield 函数
+seq(yieldFunc)
+```
+
+
+```
+
+```
+
+
+
 ## go 读取文件的多种方式
 
 ### 直接将文件内容读入内存
