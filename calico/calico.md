@@ -156,7 +156,7 @@ spec:
 ```
 bgpPeer的scope可以是node、global。
 ### ipPool
-```
+```yaml
 apiVersion: v1
 kind: ipPool
 metadata:
@@ -170,8 +170,7 @@ spec:
 ```
 
 ### node
-
-```
+```yaml
 apiVersion: v1
 kind: node
 metadata:
@@ -189,7 +188,7 @@ A Policy resource (policy) represents an ordered set of rules which are applied 
 
 Policy resources can be used to define network connectivity rules between groups of calico endpoints and host endpoints, and take precedence over Profile resources if any are defined.
 
-```
+```yaml
 apiVersion: v1
 kind: policy
 metadata:
@@ -212,7 +211,7 @@ spec:
 
 A Profile resource (profile) represents a set of rules which are applied to the individual endpoints to which this profile has been assigned.
 
-```
+```yaml
 apiVersion: v1
 kind: profile
 metadata:
@@ -235,7 +234,7 @@ spec:
 
 A Workload Endpoint resource (workloadEndpoint) represents an interface connecting a calico networked container or VM to its host.
 
-```
+```yaml
 apiVersion: v1
 kind: workloadEndpoint
 metadata:
@@ -257,7 +256,7 @@ spec:
 
 ### hostEndpoint
 
-```
+```yaml
 apiVersion: v1
 kind: hostEndpoint
 metadata:
@@ -279,30 +278,26 @@ spec:
 
 报文处理过程中使用的标记位：
 
-```
 一共使用了3个标记位，0x7000000对应的标记位
 0x1000000:  报文的处理动作，置1表示放行，默认0表示拒绝
 0x2000000:  是否已经经过了policy规则检测，置1表示已经过
 0x4000000:  报文来源，置1，表示来自host-endpoint
-```
 
 流入报文来源:
 
-```
 1. 以cali+命名的网卡收到的报文，这部分报文是node上的endpoint发出的
    (k8s中，容器的内发出的所有报文都会发送到对应的cali网卡上)
    (通过在容器内添加静态arp，将容器网关的IP映射到cali网卡的MAC上实现)
 2. 其他网卡接收的报文，这部分报文是其它node发送或者在node本地发出的
-```
+
 
 流入的报文去向：
 
-```
 1. 访问本node的host endpoint，通过INPUT过程处理
 2. 访问本node的workload endpoint，通过INPUT过程处理
 3. 访问其它node的host endpoint，通过FORWARD过程处理。
 4. 访问其它node的workload endpoint，通过FORWARD过程处理。
-```
+
 
 流入的报文在路由决策之前的处理过程相同的，路由决策之后，分别进入INPUT规则链和FORWARD链。
 
@@ -317,7 +312,7 @@ raw.PREROUTING -> mangle.PREROUTING -> nat.PREROUTING -> mangle.FORWARD -> filte
 
 报文处理流程（全):
 
-```
+```bash
 from-XXX: XXX发出的报文            tw: 简写，to wordkoad endpoint
 to-XXX: 发送到XXX的报文            po: 简写，policy outbound
 cali-: 前缀，calico的规则链        pi: 简写，policy inbound
@@ -383,7 +378,7 @@ cali-PREOUTING@raw -> cali-from-host-endpoint@raw -> cali-PREROUTING@nat
 
 node本地发出的报文，经过路由决策之后，直接进入raw,OUTPUT规则链:
 
-```
+```bash
 raw.OUTPUT -> mangle.OUTPUT -> nat.OUTPUT -> filter.OUTPUT -> mangle.POSTROUTING -> nat.POSTROUTING
 ```
 
@@ -393,7 +388,7 @@ raw.OUTPUT -> mangle.OUTPUT -> nat.OUTPUT -> filter.OUTPUT -> mangle.POSTROUTING
 
 PREROUTING@raw:
 
-```
+```bash
 -A PREROUTING -m comment --comment "cali:6gwbT8clXdHdC1b1" -j cali-PREROUTING
 ```
 
@@ -732,415 +727,6 @@ nat.cali-POSTROUTING:
 -A cali-POSTROUTING -m comment --comment "cali:Z-c7XtVd2Bq7s_hA" -j cali-fip-snat
 -A cali-POSTROUTING -m comment --comment "cali:nYKhEzDlr11Jccal" -j cali-nat-outgoing
 ```
-
-## calico系统的部署
-
-### CentOS上安装
-
-需要提前准备一个etcd，etcd的安装，这里不介绍。
-
-#### 安装calicoctl
-
-calicoctl是calico的管理工具:
-
-```
-wget https://github.com/projectcalico/calicoctl/releases/download/v1.1.0/calicoctl
-chmod +x calicoctl
-```
-
-By default calicoctl looks for a configuration file at /etc/calico/calicoctl.cfg:
-
-```
-apiVersion: v1
-kind: calicoApiConfig
-metadata:
-spec:
-  datastoreType: "etcdv2"
-  etcdEndpoints: "http://etcd1:2379,http://etcd2:2379"
-  ...
-```
-
-如果配置文件不存在，则使用环境变量，spec中的field与环境变量的对应关系:
-
-```
-Spec field     Environment      Examples                 Description   
----------------------------------------------------------------------------
-datastoreType  DATASTORE_TYPE    etcdv2               Indicates the datastore to use (optional, defaults to etcdv2)
-etcdEndpoints  ETCD_ENDPOINTS    http://etcd1:2379    A comma separated list of etcd endpoints (optional, defaults to http://127.0.0.1:2379)
-etcdUsername   ETCD_USERNAME     "user"               Username for RBAC (optional)
-etcdPassword   ETCD_PASSWORD     "password"           Password for the given username (optional)
-etcdKeyFile    ETCD_KEY_FILE     /etc/calico/key.pem  Path to the etcd key file (optional)     
-etcdCertFile   ETCD_CERT_FILE    /etc/calico/cert.pem Path to the etcd client cert (optional)     
-etcdCACertFile ETCD_CA_CERT_FILE /etc/calico/ca.pem   Path to the etcd CA file (optional)     
-```
-
-#### 安装felix
-
-可以直接在每个机器上安装felix的二进制文件，也可以用容器的方式部署felix。
-
-##### 二进制安装
-
-或者在每个节点上单独安装felix，创建文件/etc/yum.repos.d/calico.repo，并添加内容:
-
-```
-[calico]
-name=calico Repository
-baseurl=http://binaries.projectcalico.org/rpm/calico-2.1/
-enabled=1
-skip_if_unavailable=0
-gpgcheck=1
-gpgkey=http://binaries.projectcalico.org/rpm/calico-2.1/key
-priority=97
-```
-
-安装:
-
-```
-yum install calico-felix
-```
-
-查看已经安装文件:
-
-```
-$rpm -ql  calico-felix
-/etc/calico/felix.cfg.example
-/etc/logrotate.d/calico-felix
-/usr/bin/calico-felix
-/usr/lib/systemd/system/calico-felix.service
-
-$rpm -ql  calico-common
-/usr/bin/calico-diags
-/usr/bin/calico-gen-bird-conf.sh
-/usr/bin/calico-gen-bird-mesh-conf.sh
-/usr/bin/calico-gen-bird6-conf.sh
-/usr/bin/calico-gen-bird6-mesh-conf.sh
-/usr/share/calico/bird/calico-bird-peer.conf.template
-/usr/share/calico/bird/calico-bird.conf.template
-/usr/share/calico/bird/calico-bird6-peer.conf.template
-/usr/share/calico/bird/calico-bird6.conf.template
-```
-
-##### 容器的方式
-
-默认使用的镜像quay.io/calico/node，但quay.io在国内被墙，用docker.io中的镜像代替：
-
-```
- docker pull docker.io/calico/node
-```
-
-启动felix:
-
-```
-calicoctl node run --node-image=docker.io/calico/node:latest
-```
-
-下面是启动过程中日志:
-
-```
-Running command to load modules: modprobe -a xt_set ip6_tables
-Enabling IPv4 forwarding
-Enabling IPv6 forwarding
-Increasing conntrack limit
-Removing old calico-node container (if running).
-Running the following command to start calico-node:
-
-docker run --net=host --privileged --name=calico-node -d --restart=always -e CALICO_NETWORKING_BACKEND=bird -e CALICO_LIBNETWORK_ENABLED=true -e CALICO_LIBNETWORK_CREATE_PROFILES=true -e CALICO_LIBNETWORK_LABEL_ENDPOINTS=false -e ETCD_SCHEME=http -e ETCD_ENDPOINTS= -e NODENAME=compile -e NO_DEFAULT_POOLS= -e IP_AUTODETECTION_METHOD=first-found -e IP6_AUTODETECTION_METHOD=first-found -e CALICO_LIBNETWORK_IFPREFIX=cali -e ETCD_AUTHORITY=127.0.0.1:2379 -v /var/log/calico:/var/log/calico -v /var/run/calico:/var/run/calico -v /lib/modules:/lib/modules -v /run/docker/plugins:/run/docker/plugins -v /var/run/docker.sock:/var/run/docker.sock docker.io/calico/node:latest
-
-Image may take a short time to download if it is not available locally.
-Container started, checking progress logs.
-
-Skipping datastore connection test
-Using autodetected IPv4 address on interface eth1: 192.168.40.2/24
-No AS number configured on node resource, using global value
-Created default IPv4 pool (192.168.0.0/16) with NAT outgoing enabled. IPIP mode: off
-Created default IPv6 pool (fd80:24e2:f998:72d6::/64) with NAT outgoing enabled. IPIP mode: off
-Using node name: compile
-Starting libnetwork service
-calico node started successfully
-```
-
-从日志中可以看到，容器使用的是host net、通过-e传入环境变量。
-
-## calico的使用
-
-在calico中，IP被称为Endpoint，宿主机上的容器IP称为workloadEndpoint，物理机IP称为hostEndpoint。ipPool等一同被作为资源管理。
-
-查看默认的地址段:
-
-```
-./calicoctl get ippool -o wide
-CIDR                       NAT    IPIP
-192.168.0.0/16             true   false
-fd80:24e2:f998:72d6::/64   true   false
-```
-
-### node管理
-
-查看当前node是否满足运行calico的条件:
-
-```
-calicoctl node <command> [<args>...]
-
-    run          Run the calico node container image.
-    status       View the current status of a calico node.
-    diags        Gather a diagnostics bundle for a calico node.
-    checksystem  Verify the compute host is able to run a calico node instance.
-```
-
-### 运行时设置
-
-[calicoctl config](http://docs.projectcalico.org/v2.1/reference/calicoctl/commands/config "calicoctl config")更改calico的配置项.
-
-### 创建/查看/更新/删除资源
-
-分别使用creat/get/replace/delete来创建/查看/更新/删除资源。
-
-创建资源:
-
-```
-calicoctl create --filename=<FILENAME> [--skip-exists] [--config=<CONFIG>]
-```
-
-资源使用yaml文件描述，可以创建以下资源:
-
-```
-node                //物理机
-bgpPeer             //与本机建立了bgp连接的node
-hostEndpoint 
-workloadEndpoint
-ipPool 
-policy 
-profile
-```
-
-查看资源:
-
-```
-calicoctl get ([--scope=<SCOPE>] [--node=<NODE>] [--orchestrator=<ORCH>]
-          [--workload=<WORKLOAD>] (<KIND> [<NAME>]) |
-          --filename=<FILENAME>)
-          [--output=<OUTPUT>] [--config=<CONFIG>]
-```
-
-可以通过下面命令查看所有资源:
-
-```
-calicoctl  get  [资源类型］
-
-例如:
-    calicoctl get node
-```
-
-### IP地址管理
-
-```
-calicoctl ipam <command> [<args>...]
-
-  release      Release a calico assigned IP address.         
-  show         Show details of a calico assigned IP address.
-```
-
-## 测试环境
-
-三台机器:
-
-```
-etcd: 192.168.40.10:2379
-slave1: 192.168.40.11
-node2: 192.168.40.12
-```
-
-slave1和node2上的配置文件:
-
-```
-cat  /etc/calico/calicoctl.cfg
-apiVersion: v1
-kind: calicoApiConfig
-metadata:
-spec:
-  datastoreType: "etcdv2"
-  etcdEndpoints: "http://192.168.40.10:2379"
-```
-
-安装启动etcd:
-
-```
-yum install -y etcd
-systemctl start etcd
-```
-
-在slave1和slave2上安装calicoctl并启动:
-
-```
-yum install -y docker
-systemctl start docker
-docker pull docker.io/calico/node
-
-wget https://github.com/projectcalico/calicoctl/releases/download/v1.1.0/calicoctl
-chmod +x calicoctl
-
-./calicoctl node run --node-image=docker.io/calico/node:latest
-```
-
-### 查看状态
-
-```
-$calicoctl get node
-NAME
-slave1
-slave2
-
-$calicoctl config get nodeTonodeMesh
-on
-
-$calicoctl config get logLevel
-info
-
-$calicoctl config get asNumber
-64512
-
-$calicoctl config get ipip
-off
-
-$ calicoctl get bgpPeer
-SCOPE   PEERIP   NODE   ASN
-
-$ calicoctl get ipPool
-CIDR
-172.16.1.0/24
-fd80:24e2:f998:72d6::/64
-
-$ calicoctl get workloadEndpoint
-NODE   ORCHESTRATOR   WORKLOAD   NAME
-```
-
-### 模拟一个租户网络
-
-在名为”default”的namespace中，创建两个”frontend”和”database”两个service。
-
-“frontend”有两个endpoint位于slave1上。
-
-“database”有一个endpoint位于salve2上。
-
-为namespace “default”设置的默认策略是全互通的。
-
-为”database”做了额外设置(“profile”)，只允许同一个namespace的中endpoint访问它的3306端口。
-
-#### endpoints
-
-一个endpoints属于哪个namespace、哪个service，都是用labels标记的。lables是完全自定义的。
-
-endpoints.yaml
-
-```
-- apiVersion: v1
-  kind: workloadEndpoint
-  metadata:
-    name: slave1-frontend1
-    workload: frontend
-    orchestrator: k8s
-    node: slave1
-    labels:
-      service: frontend
-      namespace: default
-  spec:
-    interfaceName: cali0ef24b1
-    mac: ca:fe:1d:52:bb:e1
-    ipNetworks:
-    - 172.16.1.1
-- apiVersion: v1
-  kind: workloadEndpoint
-  metadata:
-    name: slave1-frontend2
-    workload: frontend
-    orchestrator: k8s
-    node: slave1
-    labels:
-      service: frontend
-      namespace: default
-  spec:
-    interfaceName: cali0ef24b2
-    mac: ca:fe:1d:52:bb:e2
-    ipNetworks:
-    - 172.16.1.2
-- apiVersion: v1
-  kind: workloadEndpoint
-  metadata:
-    name: slave2-database
-    workload: database
-    orchestrator: k8s
-    node: slave2
-    labels:
-      service: database
-      namespace: default
-  spec:
-    interfaceName: cali0ef24b3
-    mac: ca:fe:1d:52:bb:e3
-    ipNetworks:
-    - 172.16.1.3
-    profiles:
-    - profile-database
-```
-
-创建:
-
-```
-$calicoctl create -f endpoints.yaml
-Successfully created 3 'workloadEndpoint' resource(s)
-```
-
-查看:
-
-```
-$ calicoctl get workloadEndpoints -o wide
-NODE     ORCHESTRATOR   WORKLOAD   NAME               NETWORKS        NATS   INTERFACE     PROFILES
-slave1   k8s            frontend   slave1-frontend1   172.16.1.1/32          cali0ef24b1
-slave1   k8s            frontend   slave1-frontend2   172.16.1.2/32          cali0ef24b2
-slave2   k8s            database   slave2-database    172.16.1.3/32          cali0ef24b3
-```
-
-### policy
-
-为namespace”default”设置的policy，namespace内部互通。
-
-```
-apiVersion: v1
-kind: policy
-metadata:
-  name: namespace-default
-spec:
-  selector: namespace == 'default'
-  ingress:
-  - action: allow
-    source:
-      selector: namespace == 'default'
-  egress:
-  - action: allow
-```
-
-### profile
-
-为service”database”设置的profile，只允许访问3306端口。
-
-```
-apiVersion: v1
-kind: profile
-metadata:
-  name: profile-database
-  labels:
-    profile: profile-database
-spec:
-  ingress:
-  - action: deny        <-- 这个规则是有问题的，第一条规则直接drop，就不会进入第二天规则了
-  - action: allow           这里故意保留了这个有问题的设置，在下面分析时候，就会遇到这个问题的根源。
-    source:
-      selector: namespace == 'default' && service == 'frontend'
-    ports:
-      - int: 3306
-  egress:
-  - action: allow
-```
-
 
 
 ### 网络模型
