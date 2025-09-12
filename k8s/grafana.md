@@ -780,3 +780,107 @@ grafana支持播放列表，添加之后可以在大屏或者其他设备上全�
 
 
 ## Panels and visualizations
+
+
+
+
+
+## grafana常见问题
+
+
+
+### url递归问题
+当关闭grafana匿名登录，并添加子路径时，必须要添加上令牌轮换和会话超时，否则url会进行死循环，疯狂的进行递归
+
+```yaml
+- env:
+	- name: GF_AUTH_BASIC_ENABLE
+	  value: "true"
+	- name: GF_USERS_DEFAULT_THEME
+	  value: "dark"
+	- name: GF_SECURITY_ALLOW_EMBEDDING
+	  value: "true"
+	# 开启子路径之前需要确保 令牌轮换和会话超时 配置ok
+	- name: GF_AUTH_TOKEN_ROTATION_INTERVAL_MINUTES
+	  value: "30"
+	- name: GF_AUTH_LOGIN_MAXIMUM_INACTIVE_LIFETIME_DURATION
+	  value: "7d"
+	- name: GF_AUTH_LOGIN_MAXIMUM_LIFETIME_DURATION
+	  value: "30d"
+	# 添加子路径
+	- name: GF_SERVER_ROOT_URL
+	  value: "%(protocol)s://%(domain)s:%(http_port)s/grafanaProxyApi/"
+	# 要确保和上述子路径绑定出现，确保grafana的子资源也是走的字路径
+	- name: GF_SERVER_SERVE_FROM_SUB_PATH
+	  value: "true"
+	
+	- name: "GF_LOG_MODE"
+	  value: "file"
+	- name: "GF_LOG_FILE_MAX_LINES"
+	  value: "100000"
+	- name: "GF_LOG_FILE_MAX_SIZE_SHIFT"
+	  value: "24"
+	- name: "GF_LOG_FILE_MAX_DAYS"
+	  value: "365"
+```
+
+
+```ini
+[auth]  
+# 禁用匿名登录  
+[auth.anonymous]  
+enabled = false  
+  
+# 令牌轮换和会话超时  
+token_rotation_interval_minutes = 30  
+login_maximum_inactive_lifetime_duration = 7d  
+login_maximum_lifetime_duration = 30d  
+  
+# 禁用登录表单（如果使用 SSO）  
+disable_login_form = true  
+  
+# 代理认证（如果适用）  
+[auth.proxy]  
+enabled = false  
+enable_login_token = false
+```
+
+
+### 登录grafana一直显示重定向过多问题
+其实真是问题不是重定向问题，而是因为在多主的情况下，会安装多个grafana，多个grafana之间在前端进行访问的时候是轮流访问的，但是认证信息下发的时候其实只下发给了一个grafana，如果下次访问访问到没有认证信息的grafana，会导致login失败，因为login等失败，界面会误认为是重定向过多导致的报错（因为实际使用中使用Nginx进行了重定向）
+
+#### 解决方法1
+既然是因为客户端访问svc重定向导致的，那么只需要保证前端访问时一直找同一个grafana服务就行了，因此可通过在service中添加客户端亲和性来解决这个问题
+```yaml
+apiVersion: v1
+kind: Service
+metadata:
+  labels:
+    app.kubernetes.io/component: grafana
+    app.kubernetes.io/name: grafana
+    app.kubernetes.io/part-of: kube-prometheus
+    app.kubernetes.io/version: 11.5.2
+  name: grafana
+  namespace: base-services
+spec:
+  ports:
+  - name: http
+    port: 3000
+    targetPort: http
+    nodePort: 30002
+  type: NodePort
+  selector:
+    app.kubernetes.io/component: grafana
+    app.kubernetes.io/name: grafana
+    app.kubernetes.io/part-of: kube-prometheus
+  # 添加客户端亲和性，保证同一个前端访问时一直访问的是同一个grafana后端 （默认3h）
+  sessionAffinity: ClientIP
+```
+
+但是这样解决有以下问题：
+1. 必须保证会话超时时间和前端的会话一致否则会造成下次访问超过客户端亲和性时间，还是会报重定向过多问题
+2. 如果另外一个人通过界面访问同样的ui，可能会访问到另外一个grafana，因为开启了grafana登录，如果两个人输入的用户名密码不一致，那么就会对外表现同样的ui访问grafana界面需要输入不同的用户信息才能登录 
+
+#### 解决方法2
+将grafana的deployment中的replicas设置为1，这样无论前端如何访问监控界面访问的都是同一个grafana后端，这样能解决以上所有问题
+
