@@ -1350,7 +1350,20 @@ cmdline_network_latency=skew_tick=1 tsc=reliable rcupdate.rcu_normal_after_boot=
 
 
 
-### 命令工具
+## 性能剖析工具
+
+
+
+### pcstat
+
+用来查看一个文件当前在内核中的缓存情况，以及缓存的命中率，通常用于排查那些需要读取文件频繁的程序，这些程序经常因为文件缓存命中率低而产生性能问题。
+
+> pcstat 命令使用go语言实现，github地址 https://github.com/tobert/pcstat[pcstat]
+
+```bash
+pcstat /tmp/test.txt
+```
+
 
 
 
