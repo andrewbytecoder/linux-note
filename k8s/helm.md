@@ -1,25 +1,176 @@
 
+## 常用命令
+
+
+### 创建release实例
+
+```bash
+# 使用helm安装一个实例，myconfigmap 是实例名
+helm install myconfigmap ./anvil
+# 试运行，不进行实际安装，只是将模板内容渲染出来，可以用来检查渲染的模板是否正确
+helm install myconfigmap ./anvil --debug -dry-run
+# 从本地的char压缩包安装实例
+helm install db mysql-1.6.9.tgz
+# 从一个网络地址仓库压缩包直接安装release实例
+helm install db http://url/mysql-1.6.9.tgz
+```
+
+### 删除实例
+
+```bash 
+helm uninstall myconfigmap ./anvil
+```
+
+
+### 获取实例
+
+```bash
+helm get manifest myconfigmap
+```
 
 
 
 
+## 内置对象
+
+### 常见内置对象
+- `Release` 对象
+- `Value` 对象
+- `Chart` 对象
+- `Capabilities` 对象
+- `Template` 对象
+
+
+### 各内置对象详解
+
+#### Release 对象 
+描述版本发布自身的一些信息
+
+-  `.Release.Name` release的名称
+- `.Release.Namespace` release的命名空间
+- `.Release.IsUpgrade` 如果当前操作是升级或回滚的话，该值为true
+- `.Release.IsInstall` 如果当前操作是安装的话，该值为true
+- `.Release.Revision` 获取此次修订的版本号，初次安装时为1，每次升级或回滚都会递增
+- `.Release.Service` 获取渲染当前模板的服务名称，一般都是helm
+
+#### Values 对象
+描述的value.yaml文件中的内容，默认为空。可以通过 `.Values` 来使用value.yaml中定义的变量数值
+
+
+#### Chart对象
+用于获取chart.yaml文件中的内容
+- `.Chart.Name` 获取Chart的名称
+- `Chart.Version` 获取Chart的版本
+
+
+#### Capabilities对象
+提供关于k8s集群的相关信息
+- `.Capabilities.APIVersions` - 返回k8s集群的API版本信息集合
+- `.Capabilities.APIVersions.Has $version` 用于检车指定版本或资源在k8s集群中是否可用，例如： `apps/v1/Deployment`
+- `.Capabilities.KubeVersion` 和 `.Capabilities.KubeVersion.Version` 都用于获取k8s的版本号
+- `.Capabilities.KubeVersion.Major` 获取k8s的主版本号
+- `.Capabilities.KubeVersion.Minor` 获取k8s的小版本号
+
+
+#### Template对象
+用于获取当前模板的信息，有如下两个对象
+- `.Template.Name` 用于获取当前模板的名称和路径 (例如： `mychart/templates/mytemplate.yaml`)
+- `.Template.BasePath` 用于获取当前模板的路径 (例如： `mychart/templates`)
 
 
 
+## 常用命令
+
+- version 查看客户端版本
+- repo 添加、列出、移除、更新和索引chart仓库，可用子命令： add、index、list、remove、update
+- search 根据关键字搜索chart包
+- show 查看chart包的基本信息和详细信息，可用子命令： all、chart、readme、values
+- pull 从远程仓库下载拉去chart包并解压到本地，如： `helm pull test-repo/tomcat --version 0.4.3 --untar` , untar是解压，不添加就是下载压缩包
+- install 通过cahrt包安装一个release实例
+- upgrade 更新一个release实例
+- rollback 从之前一个版本回滚release实例，也可指定要回滚的版本号
+- uninstall 卸载一个release实例
+- history 获取release历史，用法：helm history release实例名
+- package 将chart目录打包成chart存档文件中 `helm paclage /ope/helm/work/tomcat`
+- get 下载一个release，可以用子命令：all、hooks、manifest、notes，values
+- status 显示release实例名的状态，显示已命名版本的状态
+
+
+### 仓库管理
+添加远程仓库
+```bash
+helm repo add aliyun https://kubernetes.oss-cn-hangzhou.aliyuncs.com/charts
+```
+删除远程仓库
+```bash
+helm repo remove aliyun 
+```
+查看添加的仓库列表
+```bash
+helm repo list
+```
+
+
+### 安装实例
+
+从加入本地的chart官方仓库直接安装release实例
+```bash
+helm install tomcat1 stable/tomcat
+```
+
+ 将chart仓库拉下来安装
+
+```bash
+helm install tomcat2 tomcat-0.4.3.tgz 
+```
+
+ 从一个网址（如http服务器）直接安装release实例
+```bash
+helm install tomcat3 http://url.../mysql.tgz
+```
+
+
+在本地创建一个chart包通过自定义的yaml文件安装
+```bash
+helm install tomcat4 tomcat
+```
 
 
 
+### 创建chart实例
+
+```bash
+helm create mychart
+```
 
 
+### 升级实例
+指定release名和chart名进行相关set设置的升级
+```bash
+helm upgrade relase-name chart-name --set imageTag=1.19
+```
+
+指定release示例名和chart名和values.yaml文件升级
+```bash
+helm upgrade relase-name chart-name -f ../mychart/values.yaml
+```
+
+### 回滚
+指定release实例名，回滚到上一个版本
+```bash
+helm rollback release-name
+```
+
+指定release实例名，回滚到指定版本，注意版本号是release的版本号，不是镜像版本号
+```bash
+helm rollback relase-name 版本号
+```
 
 
-
-
-
-
-
-
-
+### 获取release示例历史
+```
+helm history relase-name
+```
 
 
 ## 使用说明
@@ -32,19 +183,19 @@ helm create anvil
 
 ```bash
 .
-├── charts
-├── Chart.yaml
-├── templates
-│   ├── deployment.yaml
-│   ├── _helpers.tpl
+├── charts   -- 存放子chat的目录，目录里面存放这个chart依赖的所有子chart
+├── Chart.yaml -- 保存chat的基本信息，包括名字描述及版本等，这个文件可以被templates目录下的文件所引用
+├── templates -- 模板文件目录，包含所有yaml模板文件
+│   ├── deployment.yaml 
+│   ├── _helpers.tpl  -- 放置模板助手文件，可以在整个chart中重复使用
 │   ├── hpa.yaml
 │   ├── ingress.yaml
-│   ├── NOTES.txt
+│   ├── NOTES.txt   -- 存放帮助信息，helm install之后会展示给用户
 │   ├── serviceaccount.yaml
 │   ├── service.yaml
-│   └── tests
+│   └── tests     -- 用于测试的文件，比如部署完chart之后，做个web测试
 │       └── test-connection.yaml
-└── values.yaml
+└── values.yaml  -- 渲染模板时定义的变量值和变量文件，定义templates目录下的yaml文件可能引用到的变量
 
 4 directories, 10 files
 ```
@@ -483,3 +634,26 @@ dependencies:
 ```
 
 
+
+### chart编写常见用法
+```yaml
+# include 和 template都是去 模板中找数据
+metadata:
+  labels:
+  # include 能返回数据给管道，接着后面的处理
+  # . 的意思是将上下文传递给include函数， include函数可以在调用的地方使用当前文件的上下文
+    {{- include "kube-state-metrics.labels" . | indent 4 }}
+  name: {{ template "kube-state-metrics.fullname" . }}
+```
+- **`template`**: 只能将模板的输出结果插入到 YAML 文件的**顶层（top level）**。它不能作为管道（pipeline）的一部分，也不能对其输出进行后续处理（如 `indent`）。
+- **`include`**: 返回模板的输出作为一个**字符串**，因此它可以被用在管道中，并且可以对其输出进行后续处理（如 `indent`, `quote`, `lower` 等）。**
+
+#### 1. `template` 指令
+- **作用**: `template` 是一个“指令”，它的主要目的是将一个命名模板的内容**直接注入**到当前模板的当前位置。
+- **限制**: 它**不能**被用在管道中。这意味着你不能对 `template` 的输出进行任何函数处理。
+- **适用场景**: 当你只需要简单地插入一个模板的完整输出，且不需要修改其格式时使用
+
+#### 2. `include` 函数
+- **作用**: `include` 是一个“函数”，它会**返回**指定模板的渲染结果作为一个字符串。
+- **优势**: 因为它返回的是一个字符串，所以这个字符串可以被传递给其他函数进行处理，比如 `indent`, `nindent`, `quote` 等。
+- **适用场景**: 当你需要对模板的输出进行格式化（如缩进）或转换时使用
