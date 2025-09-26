@@ -29,8 +29,6 @@ helm get manifest myconfigmap
 ```
 
 
-
-
 ## 内置对象
 
 ### 常见内置对象
@@ -71,12 +69,10 @@ helm get manifest myconfigmap
 - `.Capabilities.KubeVersion.Major` 获取k8s的主版本号
 - `.Capabilities.KubeVersion.Minor` 获取k8s的小版本号
 
-
 #### Template对象
 用于获取当前模板的信息，有如下两个对象
 - `.Template.Name` 用于获取当前模板的名称和路径 (例如： `mychart/templates/mytemplate.yaml`)
 - `.Template.BasePath` 用于获取当前模板的路径 (例如： `mychart/templates`)
-
 
 
 ## 常用命令
@@ -110,7 +106,6 @@ helm repo remove aliyun
 helm repo list
 ```
 
-
 ### 安装实例
 
 从加入本地的chart官方仓库直接安装release实例
@@ -129,13 +124,10 @@ helm install tomcat2 tomcat-0.4.3.tgz
 helm install tomcat3 http://url.../mysql.tgz
 ```
 
-
 在本地创建一个chart包通过自定义的yaml文件安装
 ```bash
 helm install tomcat4 tomcat
 ```
-
-
 
 ### 创建chart实例
 
