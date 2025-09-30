@@ -788,6 +788,23 @@ perf script > performance.txt
 sudo perf script | stackcollapse-perf.pl | flamegraph.pl > graph.svg
 ```
 
+### perf跟踪 `IRQ/Softirq` 调用
+
+
+```bash
+$ sudo perf record -a \
+    -e irq:irq_handler_entry,irq:irq_handler_exit \
+    -e irq:softirq_entry --filter="vec == 3" \
+    -e irq:softirq_exit --filter="vec == 3"  \
+    -e napi:napi_poll \
+    -C 1 \
+    -- sleep 2
+
+$ sudo perf script
+```
+
+
+
 ## perf stat CPU counters
 
 If you're writing high-performance programs, there  are a lot of CPU/hardware-level events you might be interested in counting:
@@ -811,10 +828,20 @@ man perf top
 ```
 
 
+### perf 跟踪 IRQ/Softirq 调用
 
 
+```bash
+$ perf stat -C 1 -e irq:softirq_entry,irq:softirq_exit,irq:softirq_raise -a sleep 10
 
+ Performance counter stats for 'system wide':
 
+             1,161      irq:softirq_entry
+             1,161      irq:softirq_exit
+             1,215      irq:softirq_raise
+
+      10.001100401 seconds time elapsed
+```
 
 
 

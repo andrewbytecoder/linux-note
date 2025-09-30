@@ -1183,7 +1183,7 @@ LABEL org.example.nginx.version="2.4.2 extracted"
 
 创建一个main.go文件，并使用 `go mod init` 创建一个go项目，保证本地目录下存在go.mod和go.sum文件，因为只有则才能保证你在任何地方打包的镜像都是使用相同的依赖包。
 
-.main.go
+main.go
 ```bash
 package main
 

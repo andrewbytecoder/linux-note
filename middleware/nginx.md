@@ -815,7 +815,7 @@ server {
 }
 ```
 
-### Monitoring
+## Monitoring
 
 The [Stub Status](http://nginx.org/en/docs/http/ngx_http_stub_status_module.html), which is not built by default, is a very simple to setup module but only provide basic status of Nginx.
 
