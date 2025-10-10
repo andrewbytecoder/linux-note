@@ -1073,6 +1073,27 @@ func main() {
 }
 ```
 
+## go防止资源泄露方法
+
+### Go 语言 **防御性编程技巧** 解决内存泄露
+如果你有一个资源，进行了某项操作之后，在资源释放之前必须进行另外一项操作，比如加锁打开一个文件，在文件关闭之前必须先解锁。可以通过注册一个 **最终化函数（finalizer）** 它会在对象 `obj` 被垃圾回收器回收之前调用，来实现
+
+```go
+// 打开文件时， 可以注册一个最终化函数，这样在垃圾回收时会触发函数调用
+runtime.SetFinalizer(f, func(f *File) {  
+    panic(fmt.Sprintf("lockedfile.File %s became unreachable without a call to Close", f.Name()))  
+})
+
+// 在关闭文件时，将finalizer设置为nil， 这样才能避免在释放f资源时触发panic 
+// 移除 finalizer，避免触发 panic
+runtime.SetFinalizer(f, nil)
+```
+
+
+
+
+
+
 ## net 网络
 
 ### go程序解析DNS失败但是curl解析正常
