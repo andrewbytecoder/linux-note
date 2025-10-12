@@ -1,11 +1,238 @@
 
 
-
-
-
-
-
 ## config.conf
+
+### 服务配置
+
+```nginx
+# ========================
+# 全局配置块
+# ========================
+
+# 指定运行 Nginx 的用户和组（根据系统实际情况设置）
+user www-data;
+
+# 启动 worker 进程的数量，通常设为 CPU 核心数
+worker_processes auto;
+
+# 错误日志位置及日志级别（可选：debug, info, notice, warn, error, crit）
+error_log /var/log/nginx/error.log warn;
+
+# PID 文件路径，用于记录主进程 ID
+pid /var/run/nginx.pid;
+
+# 工作模式及连接数上限
+events {
+    # 使用高效的事件模型，Linux 上推荐 epoll
+    use epoll;
+
+    # 每个 worker 最大并发连接数
+    worker_connections 1024;
+}
+
+# ========================
+# HTTP 核心配置
+# ========================
+http {
+    # 引入 MIME 类型定义文件，用于识别响应内容类型
+    include mime.types;
+
+    # 默认 Content-Type，如果未匹配到 mime.types 中的类型
+    default_type application/octet-stream;
+
+    # 日志格式定义
+    log_format main '$remote_addr - $remote_user [$time_local] "$request" '
+                    '$status $body_bytes_sent "$http_referer" '
+                    '"$http_user_agent" "$http_x_forwarded_for"';
+
+    # 访问日志路径和使用的格式  main 就是上面定义的格式
+    access_log /var/log/nginx/access.log main;
+
+	proxy_cache_path /tmp/nginxcache levels=1:2 keys_zone=my_cache:10m max_size=10g inactive=60m use_temp_path=off;
+
+    # 开启高效文件传输模式（sendfile），适合静态文件服务
+    sendfile on;
+
+    # TCP_NOPUSH（FreeBSD）或 TCP_NODELAY（Linux）优化
+    tcp_nopush on;   # 与 sendfile 配合使用，减少网络包数量
+    tcp_nodelay on;  # 禁用 Nagle 算法，提升实时性
+
+    # 保持连接的超时时间
+    keepalive_timeout 65;
+
+    # 客户端请求头缓冲区大小
+    client_header_buffer_size 1k;
+
+    # 允许较大的请求头时使用的大缓冲区
+    large_client_header_buffers 4 8k;
+
+    # 客户端请求体最大尺寸（例如上传文件限制）
+    client_max_body_size 20m;
+
+    # 开启 gzip 压缩以节省带宽
+    gzip on;
+    gzip_vary on;
+    gzip_min_length 1024;                   # 小于 1KB 的文件不压缩
+    gzip_proxied any;
+    gzip_comp_level 6;                      # 压缩级别（1-9）
+    gzip_types
+        text/plain
+        text/css
+        text/xml
+        text/javascript
+        application/json
+        application/javascript
+        application/xml+rss
+        application/atom+xml
+        image/svg+xml;
+
+    # 防止版本号泄露
+    server_tokens off;
+
+    # 包含其他配置文件（可用于模块化管理）
+    # include /etc/nginx/conf.d/*.conf;
+    # include /etc/nginx/sites-enabled/*;
+
+
+    # ========================
+    # 示例 Server 块
+    # ========================
+
+    # --- 示例 1: HTTP 重定向到 HTTPS ---
+    server {
+        listen 80;
+        server_name example.com www.example.com;
+
+        # 将所有 HTTP 请求永久重定向到 HTTPS
+        return 301 https://$server_name$request_uri;
+    }
+
+
+    # --- 示例 2: HTTPS 服务 + 反向代理 ---
+    server {
+        listen 443 ssl http2;               # 启用 SSL 和 HTTP/2
+        server_name example.com www.example.com;
+
+        # SSL 证书配置
+        ssl_certificate /etc/ssl/certs/example.com/fullchain.pem;
+        ssl_certificate_key /etc/ssl/certs/example.com/privkey.pem;
+        ssl_session_cache shared:SSL:10m;
+        ssl_session_timeout 10m;
+        ssl_protocols TLSv1.2 TLSv1.3;      # 推荐只启用安全协议
+        ssl_ciphers ECDHE-RSA-AES256-GCM-SHA512:DHE-RSA-AES256-GCM-SHA512:ECDHE-RSA-AES256-GCM-SHA384;
+        ssl_prefer_server_ciphers off;
+
+        # 安全头（推荐用于现代浏览器）
+        add_header Strict-Transport-Security "max-age=63072000; includeSubDomains; preload" always;
+        add_header X-Frame-Options DENY;
+        add_header X-Content-Type-Options nosniff;
+        add_header X-XSS-Protection "1; mode=block";
+
+        # 静态资源处理
+        location /static/ {
+            alias /var/www/app/static/;
+            expires 1y;                     # 长期缓存
+            add_header Cache-Control "public, immutable";
+        }
+
+        location /media/ {
+            alias /var/www/app/media/;
+            set $limit_rate 1k;   // 设置访问限制为1k 
+            expires 30d;
+        }
+
+        # 反向代理到后端应用（如 Node.js、Python、Java 应用）
+        location / {
+            proxy_pass http://127.0.0.1:3000;   # 后端服务地址
+            # 见 proxy_cache_path 定义
+            proxy_cache my_cache;
+            proxy_cache_key $host$uri$is_args$args
+            proxy_cache_valid 200 304 302 ld;
+            
+            proxy_http_version 1.1;
+            # 确保后端收到的请求头和客户端发送的一致
+            proxy_set_header Host $host;
+            # $remote_addr 是客户端的真实 IP（在非负载均衡情况下， - 当请求经过 Nginx 反代时，后端看到的是 Nginx 的 IP，而不是真实用户 IP。通过此头，后端可以获取真实来源 IP，用于日志记录、限流、防刷等
+            proxy_set_header X-Real-IP $remote_addr;
+            # $proxy_add_x_forwarded_for 是一个特殊变量，它：
+            # 会自动将当前客户端 IP 添加到 `X-Forwarded-For` 列表中。
+            # 如果原请求已有 X-Forwarded-For，会保留并追加新 IP。
+            # X-Forwarded-For: 192.168.1.100, 10.0.0.1
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+            proxy_set_header X-Forwarded-Proto $scheme;
+            proxy_set_header Upgrade $http_upgrade;
+            proxy_set_header Connection "upgrade"; # 支持 WebSocket
+            proxy_connect_timeout 30s;
+            proxy_send_timeout 30s;
+            proxy_read_timeout 30s;
+        }
+
+        # 健康检查接口（可选）
+        location /health {
+            access_log off;
+            return 200 "OK\n";
+            add_header Content-Type text/plain;
+        }
+    }
+
+
+    # --- 示例 3: 负载均衡多个后端节点 ---
+    upstream backend_nodes {
+        least_conn;                          # 使用最少连接算法
+        # round-robin;                       # 默认轮询（可省略）
+        # ip_hash;                           # 根据客户端 IP 哈希保持会话
+        # hash $request_uri consistent;     # 一致性哈希
+
+        server 192.168.1.10:8000 weight=3 max_fails=2 fail_timeout=30s;
+        server 192.168.1.11:8000 weight=2 max_fails=2 fail_timeout=30s;
+        server 192.168.1.12:8000 backup;     # 备用节点
+    }
+
+    server {
+        listen 80;
+        server_name api.example.com;
+
+        location /api/ {
+            proxy_pass http://backend_nodes/;
+            proxy_set_header Host $host;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+            proxy_set_header X-Forwarded-Proto $scheme;
+        }
+    }
+
+
+    # --- 示例 4: 虚拟主机 - 另一个站点 ---
+    server {
+        listen 80;
+        server_name blog.example.com;
+
+        root /var/www/blog;
+        index index.html index.htm;
+
+        location / {
+            try_files $uri $uri/ =404;
+        }
+
+        # 禁止访问隐藏文件（如 .git, .env）
+        location ~ /\. {
+            deny all;
+        }
+    }
+
+}
+```
+
+
+### 配置项和变量查看
+#### 配置项
+进入到官方文档：[nginx](https://nginx.org/en/docs/) ， `Modules reference` 项下的所有模块都是可配置项目，点开里面有具体的配置示例。
+
+
+#### 变量
+在进入到具体配置模块时，比如 [http module](https://nginx.org/en/docs/http/ngx_http_core_module.html) 如果该配置项里面包含变量，在配置项目最后一行就会存在一个 [Embedded Variables](https://nginx.org/en/docs/http/ngx_http_core_module.html#variables)，里面存放的就是该配置项目里面能配置的所有变量使用说明。
+
+
 
 ### 调试配置项
 
