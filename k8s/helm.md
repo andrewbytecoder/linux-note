@@ -29,6 +29,7 @@ helm get manifest myconfigmap
 ```
 
 
+
 ## 内置对象
 
 ### 常见内置对象
@@ -649,3 +650,12 @@ metadata:
 - **作用**: `include` 是一个“函数”，它会**返回**指定模板的渲染结果作为一个字符串。
 - **优势**: 因为它返回的是一个字符串，所以这个字符串可以被传递给其他函数进行处理，比如 `indent`, `nindent`, `quote` 等。
 - **适用场景**: 当你需要对模板的输出进行格式化（如缩进）或转换时使用
+
+
+## helm-sdk 使用示例
+
+[rancher](https://github.com/rancher/rancher/blob/main/pkg/catalogv2/helmop/operation.go)
+
+[argo-cd](https://github.com/argoproj/argo-cd/blob/master/util/helm/helm.go)
+
+

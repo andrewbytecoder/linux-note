@@ -316,6 +316,56 @@ Linux bridge不会区分接入进来的到底是物理设备还是虚拟设备�
 ![[Pasted image 20250904091302.png]]
 
 #### 容器
+
+```plantuml
+@startuml
+skinparam rectangle {
+    roundCorner 15
+    borderColor black
+    backgroundColor #FFFFFF
+}
+
+package "Pod A" {
+    [应用进程] as appA
+    [协议栈 (netns A)] as stackA
+    [eth0 (veth-B)] as vethB
+}
+
+package "Pod B" {
+    [应用进程] as appB
+    [协议栈 (netns B)] as stackB
+    [eth0 (veth-A)] as vethA
+}
+
+node "宿主机内核" {
+    [网桥 / 路由器] as bridge
+}
+
+' 数据流：Pod A
+appA --> stackA : ↓ 系统调用
+stackA --> vethB : ↓ 发送
+
+' veth pair 连接
+vethB <--> vethA : veth-pair
+
+' 数据流：Pod B
+vethA --> stackB : ↑ 接收
+stackB --> appB : ↑ 系统调用
+
+' 连接到网桥
+vethB --> bridge
+vethA --> bridge
+
+note right of bridge
+  内核空间转发
+  不经过用户态
+end note
+
+@enduml
+```
+
+
+
 容器运行在自己单独的network namespace里， 因此都有自己单独的协议栈。Linux bridge在容器场景的组网和上面的虚拟机场景差不多， 但也存在一些区别。 例如， 容器使用的是veth pair设备， 而虚拟机使用的是tun/tap设备。 在虚拟机场景下， 我们给主机物理网卡eth0分配了IP地址； 而在容器场景下， 我们一般不会对宿主机eth0进行配置。 在虚拟机场景下， 虚拟器一般会和主机在同一个网段； 而在容器场景下， 容器和物理网络不在同一个网段内。
 
 ![[Pasted image 20250904091940.png]]

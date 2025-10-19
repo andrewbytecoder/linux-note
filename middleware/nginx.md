@@ -1152,6 +1152,199 @@ Some other awesome resources for configuring Nginx:
 - [Nginx Pitfalls](http://wiki.nginx.org/Pitfalls)
 
 
+## nginx模块
+各个模块之间的执行顺序
+
+```plantuml
+@startuml
+skinparam style strictuml
+skinparam defaultTextAlignment center
+
+title Nginx 模块执行流程
+
+start
+
+' postread 阶段
+:realip;
+note right: postread 阶段
+
+' rewrite 阶段（包括 find_config 过程）
+:rewrite;
+:find_config;
+:rewrite;
+
+' preaccess 阶段
+:limit_req;
+note right: preaccess 阶段
+:limit_conn;
+
+
+' access 阶段
+:access;
+note right: access 阶段
+:auth_basic;
+:auth_request;
+
+
+' precontent 阶段
+:try_files;
+note right: precontent 阶段
+:mirrors;
+
+:concat;
+note right: content 阶段
+:random_index;
+:index;
+:auto_index;
+:static;
+
+
+:log;
+note right: log 阶段
+
+stop
+@enduml
+
+```
 
 
 
+
+### realip  
+realip 处理过程
+
+### rewrite
+return指令执行过程中rewrite会生效一次，两次rewrite阶段生效之后，如果被return之后剩下的其他阶段将不会被生效
+
+#### return 指令
+rewrite模块：return指令
+```nginx
+return code [text];
+return code [url];
+return url;
+```
+
+- nginx自定义
+	- 444 关闭连接
+- HTTP 1.0标准
+	- 301 http1.0永久重定向
+	- 302 临时重定向，禁止被缓存
+- HTTP 1.1 标准
+	- 303 临时重定向，允许改变方法，禁止被缓存
+	- 307 临时重定向，不允许改变方法，禁止被缓存
+	- 308 永久重定向，不允许改变方法
+
+#### rewrite 指令
+- 将regex执行的url替换成replacemenet这个新的url
+- 替换之后url根据flag指定的方式进行处理
+	- last 用replacement这个uri进行新的location匹配
+	- break 停止当前脚本的执行，等价于独立的break指令
+	- redirect 返回302重定向
+	- permanment 返回301重定向
+```nginx
+location /first {
+	rewrite /first(.*) /second$1 last;
+}
+```
+
+#### if指令
+```nginx
+ if ($slow) {
+    limit_rate 10k;
+}
+```
+
+
+### find_config
+location 匹配规则
+- merge_slashed 如果打开多个 `/` 将会被合并，默认情况下是打开的
+- 前缀字符串
+	- 常规
+	- `=` 精确匹配
+	- `^` 匹配上后则不再进行正则表达式匹配
+- 正则表达式
+	- `~` 大小写敏感的正则表达式
+	- `~*` 忽略大小写的正则表达式
+
+```plantuml
+@startuml
+skinparam defaultFontSize 14
+skinparam defaultFontName Arial
+skinparam rectangle {
+    BackgroundColor #1F3A6E
+    BorderColor #1F3A6E
+    FontColor White
+}
+
+title Nginx Location 匹配流程
+
+start
+
+:遍历匹配全部前缀字符串 location; 
+if (匹配上 = 精确匹配) then (yes)
+  :使用匹配上的 = 精确匹配 location;
+  stop
+else (no)
+  if (匹配上 ^~ 前缀) then (yes)
+    :使用匹配上的 ^~ 前缀 location;
+    stop
+  else (no)
+    :记住最长匹配的前缀字符串 location;
+    :按 nginx.conf 顺序匹配正则表达式 location;
+    if (匹配正则表达式) then (yes)
+      :使用匹配上的正则表达式 location;
+      stop
+    else (no)
+      :所有正则都不匹配;
+      :使用最长匹配的前缀字符串 location;
+      stop
+    endif
+  endif
+endif
+
+@enduml
+```
+
+
+
+### limit_conn
+默认编译进nginx
+
+### limit_req
+限制用户请求速率
+
+### access
+模块 `http_access_module`
+
+```nginx
+location / {
+	deny 192.168.0.1;
+	allow 192.168.1.0/24;
+}
+```
+
+
+### auth_basic
+生成工具
+- 依赖httpd-tools
+	- `htpasswd -c file -n user pass`
+
+### quth_request
+ 向上游服务器转发请求，若上游服务器返回的响应码是2xx，则继续执行，若上游的响应是401或者403，则将响应返回给客户端。
+
+可以让用户有一个统一的用户鉴权系统
+
+### content 阶段
+提供root和alias指令
+- 功能
+	- 将url映射为文件路径，以返回静态文件内容
+- 差别
+	- root将完整url映射进文件路径中（添加新的）
+	- alias只会将location后的URL映射到文件路径（将原先路径替换为alias之后的路径）
+
+### split_client
+新功能，只给部分人开放，看看效果再具体决定是否推出新功能。
+
+
+### geo
+根据客户端地址创建新变量
