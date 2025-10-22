@@ -61,6 +61,61 @@ foo5()
 
 https://blog.csdn.net/u010429831/article/details/108641919[闭包]
 
+## 数据结构
+
+### slice 
+```go
+type slice struct {
+    array unsafe.Pointer  // 指向底层数组的指针
+    len   int             // 当前长度
+    cap   int             // 容量
+}
+```
+
+### string 
+```go
+type stringStruct struct {
+    str unsafe.Pointer // 指向底层数组的指针
+    len int            // 长度
+}
+```
+
+### chan
+```go
+type hchan struct {
+    qcount   int           // 队列中元素数量
+    dataqsiz int           // 缓冲区大小
+    buf      unsafe.Pointer // 指向环形缓冲区
+    elemsize uint16
+    closed   uint32
+    elemtype *rtype        // 元素类型
+    sendx    uint          // 发送索引
+    recvx    uint          // 接收索引
+    recvq    waitq         // 接收 goroutine 等待队列
+    sendq    waitq         // 发送 goroutine 等待队列
+    ...
+}
+```
+
+
+### map
+```go
+type hmap struct {
+    count     int
+    flags     uint8
+    B         uint8        // 2^B 是 buckets 数量
+    buckets   unsafe.Pointer // 指向 buckets 数组
+    oldbuckets unsafe.Pointer
+    ...
+}
+```
+
+
+
+
+
+
+
 ## 关键字
 
 ### 关键字make和new的区别

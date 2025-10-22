@@ -1,5 +1,9 @@
 [
   "asciidoc-reader",
   "obsidian-excalidraw-plugin",
-  "mp-preview"
+  "mp-preview",
+  "obsidian-plantuml",
+  "mehrmaid",
+  "mermaid-tools",
+  "editing-toolbar"
 ]

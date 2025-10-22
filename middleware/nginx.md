@@ -1348,3 +1348,16 @@ location / {
 
 ### geo
 根据客户端地址创建新变量
+
+
+
+## 功能实现
+
+### 常用功能实现
+
+#### 修改返回的Set-Cookie头部
+- `proxy_cokie_domain domain replacement`
+- `proxy_cookie_path pah replacement`
+
+- 替换path的部分内容
+
