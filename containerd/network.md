@@ -1,4 +1,9 @@
+![[Pasted image 20251104223920.png]]
+
 ## TCP/IP
+
+
+
 
 
 

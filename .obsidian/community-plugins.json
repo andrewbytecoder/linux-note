@@ -1,10 +1,12 @@
 [
-  "asciidoc-reader",
+  "excalibrain",
+  "dataview",
   "obsidian-excalidraw-plugin",
-  "mp-preview",
-  "obsidian-kanban"
-  "obsidian-plantuml",
+  "asciidoc-reader",
+  "obsidian-kanban",
   "mehrmaid",
   "mermaid-tools",
+  "mp-preview",
+  "obsidian-plantuml",
   "editing-toolbar"
 ]

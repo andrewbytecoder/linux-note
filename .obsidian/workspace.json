@@ -4,24 +4,35 @@
     "type": "split",
     "children": [
       {
-        "id": "3b8208db902512cf",
+        "id": "e9da94fcec021307",
         "type": "tabs",
         "children": [
           {
-            "id": "c01be63f39f330de",
+            "id": "b20a0fc6523c0770",
             "type": "leaf",
             "state": {
-              "type": "markdown",
+              "type": "excalidraw",
               "state": {
-                "file": "middleware/nginx.md",
-                "mode": "source",
-                "source": false
+                "file": "Excalidraw/linux内核网络.excalidraw.md"
               },
-              "icon": "lucide-file",
-              "title": "nginx"
+              "icon": "excalidraw-icon",
+              "title": "linux内核网络.excalidraw"
+            }
+          },
+          {
+            "id": "3f0d2850670d8f22",
+            "type": "leaf",
+            "state": {
+              "type": "excalidraw",
+              "state": {
+                "file": "Excalidraw/CNI.excalidraw.md"
+              },
+              "icon": "excalidraw-icon",
+              "title": "CNI.excalidraw"
             }
           }
-        ]
+        ],
+        "currentTab": 1
       }
     ],
     "direction": "vertical"
@@ -142,17 +153,27 @@
             "state": {
               "type": "outline",
               "state": {
-                "file": "middleware/nginx.md",
+                "file": "Excalidraw/CNI.excalidraw.md",
                 "followCursor": false,
                 "showSearch": false,
                 "searchQuery": ""
               },
               "icon": "lucide-list",
-              "title": "nginx 的大纲"
+              "title": "CNI.excalidraw 的大纲"
             }
           },
           {
             "id": "ecb9e7b0b411b258",
+            "type": "leaf",
+            "state": {
+              "type": "mp-preview",
+              "state": {},
+              "icon": "lucide-ghost",
+              "title": "mp-preview"
+            }
+          },
+          {
+            "id": "2bd2a6f07e60cc33",
             "type": "leaf",
             "state": {
               "type": "mp-preview",
@@ -177,57 +198,59 @@
       "daily-notes:打开/创建今天的日记": false,
       "templates:插入模板": false,
       "command-palette:打开命令面板": false,
+      "markdown-importer:打开 Markdown 格式转换器": false,
       "obsidian-excalidraw-plugin:新建绘图文件": false,
-      "markdown-importer:打开 Markdown 格式转换器": false
+      "obsidian-kanban:创建新看板": false,
+      "mermaid-tools:Open Mermaid Toolbar": false
     }
   },
-  "active": "5c8b7f1f1f2346fa",
+  "active": "3f0d2850670d8f22",
   "lastOpenFiles": [
-    "middleware/etcd.md",
-    "middleware/kafka.md",
-    "middleware/redis.md",
-    "middleware/nginx.md",
-    "架构/架构设计.md",
-    "containerd/docker.md",
-    "containerd/containerd.md",
     "containerd/Dockerfile.md",
-    "network/Linux内核网络.md",
-    "linux/network.md",
-    "k8s/others.md",
-    "k8s/helm.md",
+    "containerd/docker.md",
+    "containerd/network.md",
+    "containerd/attachments/Pasted image 20251104223920.png",
+    "Excalidraw/CNI.excalidraw.md",
+    "Excalidraw/linux内核网络.excalidraw.md",
+    "calico/calico架构.md",
     "calico/calico.md",
-    "linux/attachments/Pasted image 20250911225411.png",
-    "linux/linux-performance.md",
-    "linux/linux.md",
-    "eBPF/bcc.md",
-    "go/高并发.md",
-    "go/设计模式.md",
-    "go/go.md",
+    "k8s/prometheus/prometheus.md",
+    "k8s/prometheus/node-exporter.md",
+    "k8s/prometheus/kube_state_metirc.md",
+    "k8s/prometheus/kube_prometheus.md",
+    "k8s/prometheus/demo/yaml/prometheus2/prometheus.yml",
+    "k8s/prometheus/demo/yaml/prometheus1/prometheus.yml",
+    "k8s/prometheus/demo/yaml/prometheus/prometheus.yml",
+    "k8s/prometheus/demo/yaml/blackbox/blackbox.yml",
+    "k8s/prometheus/demo/yaml/prometheus2",
+    "k8s/prometheus/demo/yaml/prometheus1",
+    "k8s/prometheus/demo/yaml/prometheus",
+    "k8s/prometheus/demo/yaml/blackbox",
+    "k8s/prometheus/demo/yaml",
+    "k8s/prometheus/demo/stop.sh",
+    "k8s/prometheus/alertmanager.md",
+    "calico/calicoctl.md",
+    "containerd/attachments/Pasted image 20250205113558.png",
+    "containerd/attachments/image-2025-02-18-11-16-04-661.png",
+    "containerd/attachments/image-2025-01-20-21-23-37-300.png",
+    "containerd/attachments/image-2025-02-13-16-21-04-695.png",
+    "containerd/attachments/image-2025-02-13-16-33-15-861.png",
+    "containerd/attachments/c750a7795ff4787c6639dd42bf0a473f.png",
+    "containerd/containerd.md",
+    "containerd/OverlayFS.md",
     "go/go_module.md",
-    "go/go_package.md",
-    "go/gRPC.md",
-    "go/network.md",
-    "go/memory.md",
-    "k8s/attachments/Pasted image 20250805111221.png",
-    "k8s/attachments/Pasted image 20250805111001.png",
+    "go/go.md",
+    "middleware/nginx.md",
+    "k8s/prometheus.md",
+    "k8s/kube_state_metirc.md",
+    "k8s/kube_prometheus.md",
     "k8s/ingress.md",
-    "k8s/grafana.md",
-    "image/Linux_kernel_map.svg",
-    "image/docker-image.gif",
-    "image/2023-03-13-16-06-07-b7ae3eac42c0988854e79505d44a0d2.jpg",
-    "image/2023-03-13-16-05-13-image.png",
-    "k8s/attachments/Image00653.jpg",
-    "k8s/attachments/Image00649.jpg",
-    "k8s/attachments/Image00587.jpg",
-    "Excalidraw/attachments",
-    "Excalidraw",
-    "network/协议/attachments",
-    "network/attachments",
-    "network/协议",
-    "network",
-    "网络/协议/attachments",
-    "网络/协议",
-    "网络/attachments",
-    "网络"
+    "k8s/kubernetes_rbac.md",
+    "k8s/kubernetes_security.md",
+    "k8s/kubernetes_storage.md",
+    "k8s/kubernetes_network.md",
+    "linux/attachments/Pasted image 20250911225411.png",
+    "k8s/attachments/Pasted image 20250805111221.png",
+    "k8s/attachments/Pasted image 20250805111001.png"
   ]
 }
