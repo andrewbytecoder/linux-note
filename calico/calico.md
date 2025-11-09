@@ -141,6 +141,14 @@ EndpointB收到了报文 <--  nodeB收到了报文 <-- TOR交换机B收到了报
 ```
 
 ## calico 中的概念
+
+1. IPIP
+2. VxLan (Mac in UDP)
+3. BGP FullMesh(native Routing(BGP))
+4. BGP RR(Router Reflator) (BGP FullMesh enhancement)
+5. eBPF Backend(TC/eBPF redirect) with IPIP
+6. Calico VPP(Cisco opensource) (矢量路由)
+
 [calicoctl resource definitions](http://docs.projectcalico.org/v2.1/reference/calicoctl/resources/ "calicoctl resource definitions")介绍了每类资源的格式。
 
 ### bgpPeer
@@ -858,6 +866,32 @@ External ingress solution direct to pods
 
 
 #### Calico eBPF数据平面简介
+
+## calico同节点通信方式
+calico里面同节点通信方式，除了eBPF剩下的都一样
+
+查看calico网络模式
+```bash
+$ kubectl get ippool -o yaml
+apiVersion: v1
+items:
+  ...
+  kind: IPPool
+  spec:
+    allowedUses:
+    - Workload
+    - Tunnel
+    cidr: 100.64.0.0/10
+    ipipMode: Always
+    natOutgoing: true
+    nodeSelector: all()
+    vxlanMode: Never
+  ...
+```
+
+
+
+
 
 
 
