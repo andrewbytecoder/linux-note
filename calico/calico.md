@@ -1,12 +1,15 @@
 ## calico
-calico是一个比较有趣的虚拟网络解决方案，完全利用路由规则实现动态组网，通过BGP协议通告路由。
-calico的好处是endpoints组成的网络是单纯的三层网络，报文的流向完全通过路由规则控制，没有overlay等额外开销。
-calico的endpoint可以漂移，并且实现了acl。
-calico的缺点是路由的数目与容器数目相同，非常容易超过路由器、三层交换、甚至node的处理能力，从而限制了整个网络的扩张。
-calico的每个node上会设置大量（海量)的iptables规则、路由，运维、排障难度大。
-calico的原理决定了它不可能支持VPC，容器只能从calico设置的网段中获取ip。
-calico目前的实现没有流量控制的功能，会出现少数容器抢占node多数带宽的情况。
-calico的网络规模受到BGP网络规模的限制。
+Calico 是一个 CNI 插件，为 Kubernetes 集群提供容器网络。它使用 Linux 原生工具来促进流量路由和执行网络策略。它还托管一个 BGP 守护进程，用于将路由分发到其他节点。Calico 的工具作为 DaemonSet 在 Kubernetes 集群上运行。这使管理员能够安装 Calico， kubectl apply -f ${CALICO_MANIFESTS}.yaml而无需设置额外的服务或基础设施。
+每个部分都涵盖架构建议，有时还包括 Calico 部署中每个问题的配置。在高层次上，主要建议是：
+1. 使用 Kubernetes 数据存储。
+2. 安装 Typha 以确保数据存储可扩展性。
+3. 对单个子网集群不使用封装。
+4. 对于多子网集群，在 CrossSubnet 模式下使用 IP-in-IP。
+5. 根据网络 MTU 和选择的路由模式配置 Calico MTU。
+6. 为能够增长到 50 个以上节点的集群添加全局路由反射器。
+7. 将 GlobalNetworkPolicy 用于集群范围的入口和出口规则。通过添加 namespace-scoped 来修改策略NetworkPolicy。
+
+![[Pasted image 20251111145103.png]]
 
 ### calico 组件
 
