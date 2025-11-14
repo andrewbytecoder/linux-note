@@ -1,5 +1,5 @@
 ## calico
-Calico 是一个 CNI 插件，为 Kubernetes 集群提供容器网络。它使用 Linux 原生工具来促进流量路由和执行网络策略。它还托管一个 BGP 守护进程，用于将路由分发到其他节点。Calico 的工具作为 DaemonSet 在 Kubernetes 集群上运行。这使管理员能够安装 Calico， kubectl apply -f ${CALICO_MANIFESTS}.yaml而无需设置额外的服务或基础设施。
+Calico 是一个 CNI 插件，为 Kubernetes 集群提供容器网络。它使用 Linux 原生工具来促进流量路由和执行网络策略。它还托管一个 BGP 守护进程，用于将路由分发到其他节点。Calico 的工具作为 DaemonSet 在 Kubernetes 集群上运行。这使管理员能够安装 Calico， `kubectl apply -f ${CALICO_MANIFESTS}.yaml` 而无需设置额外的服务或基础设施。
 每个部分都涵盖架构建议，有时还包括 Calico 部署中每个问题的配置。在高层次上，主要建议是：
 1. 使用 Kubernetes 数据存储。
 2. 安装 Typha 以确保数据存储可扩展性。
@@ -11,6 +11,17 @@ Calico 是一个 CNI 插件，为 Kubernetes 集群提供容器网络。它使�
 
 ![[Pasted image 20251111145103.png]]
 
+> 注意VxLAN模式不需要BGP协议参与！！！但是IPIP模式是需要的。
+
+### 优缺点
+- calico的好处是endpoints组成的网络是单纯的三层网络，报文的流向完全通过路由规则控制，没有overlay等额外开销。
+- calico的endpoint可以漂移，并且实现了acl。
+- calico的缺点是路由的数目与容器数目相同，非常容易超过路由器、三层交换、甚至node的处理能力，从而限制了整个网络的扩张。
+- calico的每个node上会设置大量（海量)的iptables规则、路由，运维、排障难度大。
+- calico的原理决定了它不可能支持VPC，容器只能从calico设置的网段中获取ip。
+- calico目前的实现没有流量控制的功能，会出现少数容器抢占node多数带宽的情况。
+- calico的网络规模受到BGP网络规模的限制。
+
 ### calico 组件
 
 Calico组件主要架构由Felix、Confd、BIRD组成
@@ -21,6 +32,28 @@ Calico组件主要架构由Felix、Confd、BIRD组成
 - etcd, the data store
 felix 负责管理设置node
 bird是一个开源软路由，支持多种路由协议
+
+
+### BGP基础概念
+- 定义
+边界网关协议BGP（Border Gateway Protocol）是一种实现自治系统AS（Autonomous System）之间的路由可达，并选择最佳路由的距离矢量路由协议。早期发布的三个版本分别是BGP-1、BGP-2和BGP-3，1994年开始使用BGP-4，2006年之后单播IPv4网络使用的版本是BGP-4，其他网络（如IPv6等）使用的版本是MP-BGP。
+
+MP-BGP是对BGP-4进行了扩展，来达到在不同网络中应用的目的，BGP-4原有的消息机制和路由机制并没有改变。MP-BGP在IPv6单播网络上的应用称为BGP4+，在IPv4组播网络上的应用称为MBGP（Multicast BGP）。
+
+- 目的
+为方便管理规模不断扩大的网络，网络被分成了不同的自治系统。1982年，外部网关协议EGP（Exterior Gateway Protocol）被用于实现在AS之间动态交换路由信息。但是EGP设计得比较简单，只发布网络可达的路由信息，而不对路由信息进行优选，同时也没有考虑环路避免等问题，很快就无法满足网络管理的要求。
+BGP是为取代最初的EGP而设计的另一种外部网关协议。不同于最初的EGP，BGP能够进行路由优选、避免路由环路、更高效率的传递路由和维护大量的路由信息。
+虽然BGP用在AS之间传递路由信息，但并非所有AS之间传递路由信息都要运行BGP。如数据中心上行到Internet的出口上，为了避免Internet海量路由对数据中心内部网络影响，设备采用静态路由代替BGP与外部网络通信。
+
+- 受益
+BGP从多方面保证了网络的安全性、灵活性、稳定性、可靠性和高效性：
+BGP采用认证和GTSM的方式，保证了网络的安全性。
+BGP提供了丰富的路由策略，能够灵活的进行路由选路，并且能指导邻居按策略发布路由。
+BGP提供了路由聚合和路由衰减功能用于防止路由振荡，有效提高了网络的稳定性。
+BGP使用TCP作为其传输层协议（端口号为179），并支持BGP与BFD联动、BGP Tracking和BGP GR和NSR，提高了网络的可靠性。
+在邻居数目多、路由量大且大多邻居有相同出口策略场景下，BGP用按组打包技术极大提高了BGP打包发包性能。
+
+
 
 
 ### BGP Speaker 全互联模式(node-to-node mesh)
@@ -38,11 +71,31 @@ calicoctl config set nodeTonodeMesh on
 
 ### BGP Speaker RR模式
 
+
 RR模式，就是在网络中指定一个或多个BGP Speaker作为Router Reflection，RR与所有的BGP Speaker建立BGP连接。
 每个BGP Speaker只需要与RR交换路由信息，就可以得到全网路由信息。
 RR则必须与所有的BGP Speaker建立BGP连接，以保证能够得到全网路由信息。
 在calico中可以通过Global Peer实现RR模式。
 Global Peer是一个BGP Speaker，需要手动在calico中创建，所有的node都会与Global peer建立BGP连接。
+
+路由反射器RR（Route Reflector）：允许把从IBGP对等体学到的路由反射到其他IBGP对等体的BGP设备，类似OSPF网络中的DR。
+客户机（Client）：与RR形成反射邻居关系的IBGP设备。在AS内部客户机只需要与RR直连。
+非客户机（Non-Client）：既不是RR也不是客户机的IBGP设备。在AS内部非客户机与RR之间，以及所有的非客户机之间仍然必须建立全连接关系。
+始发者（Originator）：在AS内部始发路由的设备。Originator_ID属性用于防止集群内产生路由环路。
+集群（Cluster）：路由反射器及其客户机的集合。Cluster_List属性用于防止集群间产生路由环路。
+
+![[Pasted image 20251112184253.png]]
+
+对以上三张图的解说：
+1. 如果路由学习自非Client IBGP的对等体，则反射给所有Client。
+   理解：R2从R3学习到路由，由于水平分割的原理，所以它不会把路由通告给R5。
+
+2. 如果路由学习自Client，则反射给所有非Cilent的IBGP对等体，和除了自己以外的Client。
+    正常路由学习
+
+3. 如果路由学习自EBGP对等体，则发送给所有的Client和非Client对等体
+   正常路由学。BGP 的全连接，实现路由全部学习到。
+
 
 >A global BGP peer is a BGP agent that peers with every calico node in the network. A typical use case for a global peer might be a mid-scale deployment where all ofthe calico nodes are on the same L2 network and are each peering with the same Route Reflector (or set of Route Reflectors).
 
@@ -60,6 +113,38 @@ node Peer就是手动创建的BGP Speaker，只有指定的node会与其建立�
 node只与所在机架TOR交换机建立BGP连接
 TOR交换机之间作为各自的ebgp全互联
 
+### OSPF介绍
+开放式最短路径优先OSPF（Open Shortest Path First）是IETF组织开发的一个基于链路状态的内部网关协议。目前针对IPv4协议使用的是OSPF Version 2（RFC2328）；针对IPv6协议使用OSPF Version 3（RFC2740）。如无特殊说明，本文中所指的OSPF均为OSPF Version 2。
+
+- 目的
+在OSPF出现前，网络上广泛使用RIP（Routing Information Protocol）作为内部网关协议。
+由于RIP是基于距离矢量算法的路由协议，存在着收敛慢、路由环路、可扩展性差等问题，所以逐渐被OSPF取代。
+OSPF作为基于链路状态的协议，能够解决RIP所面临的诸多问题。此外，OSPF还有以下优点：
+OSPF采用组播形式收发报文，这样可以减少对其它不运行OSPF路由器的影响。
+OSPF支持无类型域间选路（CIDR）。
+OSPF支持对等价路由进行负载分担。
+OSPF支持报文加密。
+由于OSPF具有以上优势，使得OSPF作为优秀的内部网关协议被快速接收并广泛使用
+
+- 特点
+OSPF把自治系统AS（Autonomous System）划分成逻辑意义上的一个或多个区域；
+OSPF通过LSA（Link State Advertisement）的形式发布路由；
+OSPF依靠在OSPF区域内各设备间交互OSPF报文来达到路由信息的统一；
+OSPF报文封装在IP报文内，可以采用单播或组播的形式发送。
+
+- 邻居状态机
+在OSPF网络中，为了交换路由信息，邻居设备之间首先要建立邻接关系，邻居（Neighbors）关系和邻接（Adjacencies）关系是两个不同的概念。
+邻居关系：OSPF设备启动后，会通过OSPF接口向外发送Hello报文，收到Hello报文的OSPF设备会检查报文中所定义的参数，如果双方一致就会形成邻居关系，两端设备互为邻居。
+邻接关系：形成邻居关系后，如果两端设备成功交换DD报文和LSA，才建立邻接关系。
+OSPF共有8种状态机，分别是：Down、Attempt、Init、2-way、Exstart、Exchange、Loading、Full。
+Down：邻居会话的初始阶段，表明没有在邻居失效时间间隔内收到来自邻居路由器的Hello数据包。
+Attempt：该状态仅发生在NBMA网络中，表明对端在邻居失效时间间隔（dead interval）超时前仍然没有回复Hello报文。此时路由器依然每发送轮询Hello报文的时间间隔（poll interval）向对端发送Hello报文。
+Init：收到Hello报文后状态为Init。
+2-way：收到的Hello报文中包含有自己的Router ID，则状态为2-way；如果不需要形成邻接关系则邻居状态机就停留在此状态，否则进入Exstart状态。
+Exstart：开始协商主从关系，并确定DD的序列号，此时状态为Exstart。
+Exchange：主从关系协商完毕后开始交换DD报文，此时状态为Exchange。
+Loading：DD报文交换完成即Exchange done，此时状态为Loading。
+Full：LSR重传列表为空，此时状态为Full。
 
 ### calico 网络部署
 calico网络对底层的网络的要求很少，只要求node之间能够通过IP联通。
@@ -740,9 +825,156 @@ nat.cali-POSTROUTING:
 ```
 
 
-### 网络模型
+## 网络模型
 
-#### `IPIP`
+参考资料： [https://developers.redhat.com/blog/2018/10/22/introduction-to-linux-interfaces-for-virtual-networking#netdevsim_interface](https://developers.redhat.com/blog/2018/10/22/introduction-to-linux-interfaces-for-virtual-networking#netdevsim_interface)
+
+### ipvlan
+#### ipvlan L2
+![[Pasted image 20251113092231.png]]
+
+```bash
+# 1.Add ns：
+ip netns add net1
+ip netns add net2
+# 2. Set the ipvlan l2 mode:
+ip link add ipvlan1 link ens33 type ipvlan mode l2
+ip link add ipvlan2 link ens33 type ipvlan mode l2
+# 3.Add the interface to ns:
+ip link set ipvlan1 netns net1
+ip link set ipvlan2 netns net2
+# 4. config ip address:
+ip netns exec net1 ifconfig ipvlan1 172.12.1.5/24 up
+ip netns exec net2 ifconfig ipvlan2 172.12.1.6/24 up
+
+[root@k8smaster-ims ~]# ip netns exec net1 ping 172.12.1.6
+PING 172.12.1.6 (172.12.1.6) 56(84) bytes of data.
+64 bytes from 172.12.1.6: icmp_seq=1 ttl=64 time=0.031 ms
+64 bytes from 172.12.1.6: icmp_seq=2 ttl=64 time=0.047 ms
+64 bytes from 172.12.1.6: icmp_seq=3 ttl=64 time=0.050 ms
+64 bytes from 172.12.1.6: icmp_seq=4 ttl=64 time=0.045 ms
+^C
+--- 172.12.1.6 ping statistics ---
+4 packets transmitted, 4 received, 0% packet loss, time 3071ms
+rtt min/avg/max/mdev = 0.031/0.043/0.050/0.007 ms
+
+[root@k8smaster-ims ~]# ip netns exec net1 ifconfig
+ipvlan1: flags=4163<UP,BROADCAST,RUNNING,MULTICAST>  mtu 1500
+        inet 172.12.1.5  netmask 255.255.255.0  broadcast 172.12.1.255
+        inet6 fe80::bc24:1100:145:b27d  prefixlen 64  scopeid 0x20<link>
+        inet6 fd00:40::bc24:1100:145:b27d  prefixlen 64  scopeid 0x0<global>
+        ether bc:24:11:45:b2:7d  txqueuelen 1000  (Ethernet)       # mac bc:24:11:45:b2:7d
+        RX packets 2084  bytes 177748 (173.5 KiB)
+        RX errors 0  dropped 0  overruns 0  frame 0
+        TX packets 23  bytes 1834 (1.7 KiB)
+        TX errors 0  dropped 0 overruns 0  carrier 0  collisions 0
+
+[root@k8smaster-ims ~]# ifconfig ens18
+ens18: flags=4163<UP,BROADCAST,RUNNING,MULTICAST>  mtu 1500
+        inet 10.161.40.240  netmask 255.255.255.0  broadcast 10.161.40.255
+        inet6 fd00:40::1:2e  prefixlen 128  scopeid 0x0<global>
+        inet6 fe80::be24:11ff:fe45:b27d  prefixlen 64  scopeid 0x20<link>
+        inet6 fd00:40::be24:11ff:fe45:b27d  prefixlen 64  scopeid 0x0<global>
+        ether bc:24:11:45:b2:7d  txqueuelen 1000  (Ethernet)     # mac bc:24:11:45:b2:7d
+        RX packets 2084  bytes 177748 (173.5 KiB)
+        RX packets 1144219  bytes 317018912 (302.3 MiB)
+        RX errors 0  dropped 0  overruns 0  frame 0
+        TX packets 131911  bytes 421622489 (402.0 MiB)
+        TX errors 0  dropped 0 overruns 0  carrier 0  collisions 0
+
+[root@k8smaster-ims ~]# ip netns exec net2 ifconfig
+ipvlan2: flags=4163<UP,BROADCAST,RUNNING,MULTICAST>  mtu 1500
+        inet 172.12.1.6  netmask 255.255.255.0  broadcast 172.12.1.255
+        inet6 fd00:40::bc24:1100:245:b27d  prefixlen 64  scopeid 0x0<global>
+        inet6 fe80::bc24:1100:245:b27d  prefixlen 64  scopeid 0x20<link>
+        ether bc:24:11:45:b2:7d  txqueuelen 1000  (Ethernet)    # mac bc:24:11:45:b2:7d
+        RX packets 2084  bytes 177748 (173.5 KiB)
+        RX packets 2114  bytes 180357 (176.1 KiB)
+        RX errors 0  dropped 0  overruns 0  frame 0
+        TX packets 23  bytes 1834 (1.7 KiB)
+        TX errors 0  dropped 0 overruns 0  carrier 0  collisions 0
+
+
+# 生成网络命名空间之后在 /var/run/netns/ 会生成对应的网络命名空间设备，可以使用nsenter进入到对应网络命名空间查看interface
+ls -l /var/run/netns/net1
+-r--r--r-- 1 root root 0 Nov 13 08:53 /var/run/netns/net1
+nsenter --net=/var/run/netns/net1 bash
+```
+
+| 特性         | Macvlan                 | IPvlan             |
+| ---------- | ----------------------- | ------------------ |
+| **MAC 地址** | 每个子接口有**唯一 MAC**        | 所有子接口**共享父接口 MAC** |
+| **工作层级**   | L2（数据链路层）               | L3（网络层）            |
+| **交换机视角**  | 多个独立设备                  | 一个设备               |
+| **适用场景**   | 需要不同 MAC（如 DHCP、某些安全策略） | 高密度容器网络、避免 MAC 表溢出 |
+| **混杂模式**   | 父接口需开启混杂模式（promiscuous） | **不需要**混杂模式        |
+#### ipvaln L3
+在 L3 模式 中，虚拟设备只处理 L3 以上的流量。虚拟设备不响应 ARP 请求，用户必须手动为相关点上的 IPVLAN IP 地址配置邻居条目。相关容器的出口流量会放在 default 命名空间的 netfilter POSTROUTING 和 OUTPUT 链上,而入口流量会线程处理,方式与 L2 模式 相同。使用L3 模式会提供很好的控制，但可能会降低网络流量性能。
+
+![[Pasted image 20251113134204.png]]
+
+```bash
+# IPVLAN L3:
+# 1.Add ns：
+ip netns add net1
+ip netns add net2
+# 2. Set the ipvlan l3 mode:
+ip link add ipvlan1 link ens33 type ipvlan mode l3
+ip link add ipvlan2 link ens33 type ipvlan mode l3
+# 3.Add the interface to ns:
+ip link set ipvlan1 netns net1
+ip link set ipvlan2 netns net2
+# 4.config the ip address
+ip netns exec net1 ifconfig ipvlan1 10.1.1.2/24 up
+ip netns exec net2 ifconfig ipvlan2 10.1.2.2/24 up
+# 5.Add default route
+ip netns exec net1 ip route add default dev ipvlan1
+ip netns exec net2 ip route add default dev ipvlan2
+```
+
+
+## macvlan
+加载内核驱动支持macvlan
+```bash
+$ modprobe macvlan
+$ lsmod | grep macvlan
+  macvlan    19046    0
+```
+macvlan 允许你在主机的一个网络接口上配置多个虚拟的网络接口，这些网络 interface 有自己独立的 mac 地址，也可以配置上 ip 地址进行通信。macvlan 下的虚拟机或者容器网络和主机在同一个网段中，共享同一个广播域。macvlan 和 bridge 比较相似，但因为它省去了 bridge 的存在，所以配置和调试起来比较简单，而且效率也相对高。除此之外，macvlan 自身也完美支持 VLAN
+
+![[Pasted image 20251114132652.png]]
+
+```bash
+# MACVLAN Bridge Mode:
+# 0.prepare env:
+modprobe macvlan
+ifconfig ens33 promisc
+# 1. Add ns
+ip netns add net1
+ip netns add net2
+# 2. add macvlan
+ip link add link ens33 name macv1 type macvlan mode bridge
+ip link add link ens33 name macv2 type macvlan mode bridge
+# 3.add interface to ns
+ip link set macv1 netns net1
+ip link set macv2 netns net2
+# config ip address
+ip netns exec net1 ifconfig macv1 172.12.2.5/24 up
+ip netns exec net2 ifconfig macv2 172.12.2.7/24 up
+
+# ping:
+ip netns exec ns1 ping 172.12.2.7
+16:21:55.463344 1c:69:7a:45:1e:5a > 01:00:5e:7f:ff:fa, ethertype IPv4 (0x0800), length 179: 192.168.2.11.57357 > 239.255.255.250.ssdp: UDP, length 137
+16:21:55.931734 ee:eb:f3:05:0e:21 > a2:4d:6d:0b:27:79, ethertype IPv4 (0x0800), length 98: 172.12.2.5 > 172.12.2.7: ICMP echo request, id 18386, seq 1, length 64
+16:21:55.931773 a2:4d:6d:0b:27:79 > ee:eb:f3:05:0e:21, ethertype IPv4 (0x0800), length 98: 172.12.2.7 > 172.12.2.5: ICMP echo reply, id 18386, seq 1, length 64
+16:21:56.932077 ee:eb:f3:05:0e:21 > a2:4d:6d:0b:27:79, ethertype IPv4 (0x0800), length 98: 172.12.2.5 > 172.12.2.7: ICMP echo request, id 18386, seq 2, length 64
+16:21:56.932119 a2:4d:6d:0b:27:79 > ee:eb:f3:05:0e:21, ethertype IPv4 (0x0800), length 98: 172.12.2.7 > 172.12.2.5: ICMP echo reply, id 18386, seq 2, length 64
+```
+
+
+docker 实现macvlan示例 ： [https://github.com/moby/libnetwork/blob/master/docs/macvlan.md](https://github.com/moby/libnetwork/blob/master/docs/macvlan.md)
+
+### `IPIP`
 
 流量：tunl0设备封装数据，形成隧道，承载流量。
 
@@ -752,7 +984,7 @@ nat.cali-POSTROUTING:
 
 ![[image-2025-03-04-16-35-09-325.png]]
 
-#### `BGP` 网络
+### `BGP` 网络
 
 流量：使用主机路由表信息导向流量
 
@@ -765,7 +997,7 @@ nat.cali-POSTROUTING:
 
 
 
-### 网络策略
+## 网络策略
 #### Cluster IP服务
 
 默认服务类型为 ClusterIP 。这允许通过虚拟 IP 地址（称为服务 Cluster IP）在集群内访问服务。服务的 Cluster IP 可通过 Kubernetes DNS 发现。例如，my-svc.my-namespace.svc.cluster-domain.example 。DNS 名称和 Cluster IP 地址在服务的整个生命周期内保持不变，即使支持该服务的 pod 可能会被创建或销毁，并且支持该服务的 pod 数量可能会随时间而变化。
@@ -869,6 +1101,93 @@ External ingress solution direct to pods
 
 
 #### Calico eBPF数据平面简介
+
+## calico 常见问题
+
+[https://docs.tigera.io/calico/latest/reference/faq](https://docs.tigera.io/calico/latest/reference/faq)
+此时对象为：cni1 ping cni2 对应的pod：10.244.231.200 ping 10.244.231.201
+```bash
+[root@k8s-1 ~]# kubectl get pods -o wide
+NAME        READY   STATUS    RESTARTS   AGE    IP               NODE    NOMINATED NODE   READINESS GATES
+cni-j7klb   1/1     Running   1          123d   10.244.231.200   k8s-1   <none>           <none>          # cni1 测试pod
+cnitest     1/1     Running   0          26s    10.244.231.201   k8s-1   <none>           <none>          # cni2 测试pod
+```
+1. 进入cni-j7klb pod：
+```bash
+[root@k8s-1 ~]# kubectl exec -it cni-j7klb bash 
+kubectl exec [POD] [COMMAND] is DEPRECATED and will be removed in a future version. Use kubectl exec [POD] -- [COMMAND] instead.
+bash-5.1# ifconfig 
+eth0      Link encap:Ethernet  HWaddr F2:70:A8:61:D6:FC                         # MAC地址：F2:70:A8:61:D6:FC
+          inet addr:10.244.231.200  Bcast:10.244.231.200  Mask:255.255.255.255  # 从这里看，为32位掩码的一个主机地址，这点对于理解此Case非常重要
+          UP BROADCAST RUNNING MULTICAST  MTU:1480  Metric:1
+          RX packets:5 errors:0 dropped:0 overruns:0 frame:0
+          TX packets:0 errors:0 dropped:0 overruns:0 carrier:0
+          collisions:0 txqueuelen:0 
+          RX bytes:446 (446.0 B)  TX bytes:0 (0.0 B)
+
+lo        Link encap:Local Loopback  
+          inet addr:127.0.0.1  Mask:255.0.0.0
+          UP LOOPBACK RUNNING  MTU:65536  Metric:1
+          RX packets:0 errors:0 dropped:0 overruns:0 frame:0
+          TX packets:0 errors:0 dropped:0 overruns:0 carrier:0
+          collisions:0 txqueuelen:1000 
+          RX bytes:0 (0.0 B)  TX bytes:0 (0.0 B)
+
+bash-5.1# 
+rbash-5.1# route -n 
+Kernel IP routing table
+Destination     Gateway         Genmask         Flags Metric Ref    Use Iface
+0.0.0.0         169.254.1.1     0.0.0.0         UG    0      0        0 eth0  # 此时我们知道所有的数据报文从该Pod中出去，那么需要发送到169.254.1.1对应的下一跳
+169.254.1.1     0.0.0.0         255.255.255.255 UH    0      0        0 eth0
+```
+因为从路由表中我们可以看到：我们需要构造一个完整的数据报文，需要一些必要的元素：
+```bash
+S_IP ：10.244.231.200       D_IP： $(cni2)
+S_MAC：F2:70:A8:61:D6:FC    D_AMC：$(169.254.1.1)
+```
+在这里我们看到169.254.1.1，但是我们却在整个集群中找不到此地址，那我们如何才能解析到其对应的MAC地址呢？
+那我们又如何获取到获取相应的MAC地址呢？
+### 1. Why does my container have a route to 169.254.1.1?
+In a Calico network, each host acts as a gateway router for the workloads that it hosts. In container deployments, Calico uses 169.254.1.1 as the address for the Calico router. By using a link-local address, Calico saves precious IP addresses and avoids burdening the user with configuring a suitable address.
+While the routing table may look a little odd to someone who is used to configuring LAN networking, using explicit routes rather than subnet-local gateways is fairly common in WAN networking.
+
+解释：在calico启动的时候，会设置169.254.1.1作为一个默认的gateway给容器。所以我们在容器中show路右边可以查看到：
+```bash
+[root@k8s-1 ~]# kubectl exec -it cnitest bash 
+kubectl exec [POD] [COMMAND] is DEPRECATED and will be removed in a future version. Use kubectl exec [POD] -- [COMMAND] instead.
+# calico 中都是这个ip地址
+bash-5.1# route -n 
+Kernel IP routing table
+Destination     Gateway         Genmask         Flags Metric Ref    Use Iface
+0.0.0.0         169.254.1.1     0.0.0.0         UG    0      0        0 eth0
+169.254.1.1     0.0.0.0         255.255.255.255 UH    0      0        0 eth0
+```
+
+### 2. Why can’t I see the 169.254.1.1 address mentioned above on my host?
+Calico tries hard to avoid interfering with any other configuration on the host. Rather than adding the gateway address to the host side of each workload interface, Calico sets the proxy_arp flag on the interface. This makes the host behave like a gateway, responding to ARPs for 169.254.1.1 without having to actually allocate the IP address to the interface.
+
+解释：Calico避免设置一些ip地址在HOST主机上，而是为每一个workload设置一个网关地址，但是这个地址并不配置在具体的主机上，而是回复相应的ARP消息。此时涉及到Linux中的一个Proxy_ARP相关的概念，通过Proxy_ARP的配置，此时我们主机就可以扮演成一个网关，来回复169.254.1.1对应的MAC地址。
+可通过查询：
+
+```bash
+# 一旦设置 proxy_arp 
+[root@k8s-1 ~]# cat /proc/sys/net/ipv4/conf/calid477199c0e4/proxy_arp   # 注意此配置是接口关联型
+1
+```
+##########################################################################################################################################################
+### 3. I’ve heard Calico uses proxy ARP, doesn’t proxy ARP cause a lot of problems?
+It can, but not in the way that Calico uses it.
+
+In container deployments, Calico only uses proxy ARP for resolving the 169.254.1.1 address. The routing table inside the container ensures that all traffic goes via the 169.254.1.1 gateway so that is the only IP that will be ARPed by the container.
+解释：calico 仅仅使用proxy_arp来解决mac地址解析问题。可保证所有的流量均需要走三层的路由来做解析。
+
+### 4. Why do all cali* interfaces have the MAC address ee:ee:ee:ee:ee:ee?
+In some setups the kernel is unable to generate a persistent MAC address and so Calico assigns a MAC address itself. Since Calico uses point-to-point routed interfaces, traffic does not reach the data link layer so the MAC Address is never used and can therefore be the same for all the cali* interfaces.
+
+解释：由于Linux内核无法提供一个稳定MAC地址，而Calico网络中使用ponint-to-point 去路由数据包，数据包并不涉及链路层，所以自然也是用不到相应的MAC地址，该MAC地址仅仅为了完成标准的TCP/IP协议栈封装数据报文。
+
+ 所以这里涉及到一个Linux Proxy_ARP：我们需要一探究竟.
+
 
 ## calico同节点通信方式
 calico里面同节点通信方式，除了eBPF剩下的都一样

@@ -60,6 +60,78 @@ $ openssl ciphers -V 'ECDHE+CHACHA20:ECDHE+CHACHA20-draft:ECDSA+AES128:ECDHE+AES
 0xC0,0x2B  -  ECDHE-ECDSA-AES128-GCM-SHA256  TLSv1.2  Kx=ECDH  Au=ECDSA  Enc=AESGCM(128)             Mac=AEAD
 ```
 
+## TLS 版本控制
+启用https协议，通过tls.Config.CipherSuites字段能控制使用那些加密套件
+
+```go
+tlsCfg := &tls.Config{  
+    Certificates: tlsCiphers,  
+    MinVersion:   tls.VersionTLS12,  
+    CipherSuites: tlsCiphers,  
+}
+```
+常见加密套件
+```go
+tls.TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256,  
+tls.TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,  
+tls.TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384,  
+tls.TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384,  
+tls.TLS_ECDHE_ECDSA_WITH_AES_256_CBC_SHA,  
+```
+
+配置之后是否是按照配置的加密套件启动的可以使用 `sslscan` 查看
+```bash
+sslscan  10.161.40.240:30002
+Version: 2.1.2
+OpenSSL 3.0.13 30 Jan 2024
+
+Connected to 10.161.40.240
+
+Testing SSL server 10.161.40.240 on port 30002 using SNI name 10.161.40.240
+
+  SSL/TLS Protocols:
+SSLv2     disabled
+SSLv3     disabled
+TLSv1.0   disabled
+TLSv1.1   disabled
+TLSv1.2   disabled
+TLSv1.3   enabled
+
+  TLS Fallback SCSV:
+Server supports TLS Fallback SCSV
+
+  TLS renegotiation:
+Session renegotiation not supported
+
+  TLS Compression:
+OpenSSL version does not support compression
+Rebuild with zlib1g-dev package for zlib support
+
+  Heartbleed:
+TLSv1.3 not vulnerable to heartbleed
+
+  Supported Server Cipher(s):
+Preferred TLSv1.3  128 bits  TLS_AES_128_GCM_SHA256        Curve 25519 DHE 253
+Accepted  TLSv1.3  256 bits  TLS_AES_256_GCM_SHA384        Curve 25519 DHE 253
+Accepted  TLSv1.3  256 bits  TLS_CHACHA20_POLY1305_SHA256  Curve 25519 DHE 253
+
+  Server Key Exchange Group(s):
+TLSv1.3  128 bits  secp256r1 (NIST P-256)
+TLSv1.3  192 bits  secp384r1 (NIST P-384)
+TLSv1.3  260 bits  secp521r1 (NIST P-521)
+TLSv1.3  128 bits  x25519
+
+  SSL Certificate:
+Signature Algorithm: sha256WithRSAEncryption
+RSA Key Strength:    2048
+
+Subject:  cdw
+Issuer:   cdw
+
+Not valid before: Jun 16 07:23:06 2020 GMT
+Not valid after:  Jun 14 07:23:06 2030 GMT
+```
+
 ## 优化TLS/SSL性能该从何下手？
 如果你用 Wireshark 等工具对 HTTPS 请求抓包分析，会发现在 TCP 传输层之上的消息全是乱码，这是因为 TCP 之上的 TLS 层，把 HTTP 请求用对称加密算法重新进行了编码。**当然，用 Chrome 浏览器配合 Wireshark 可以解密消息，帮助你分析 TLS 协议的细节**。
 
