@@ -4,6 +4,28 @@
 ![[Pasted image 20250929185955.png]]
 
 
+```bash
+1.Kuberntes Architecture：
+ 
+                                       Deployment     DaemonSet    Job/CronJob
+                                            +             +            +     Service(headless)
+                                            |             |            |            |
+                              Network ------+--------- Pod-K8S---------+------ StatefulSet-----storageclasss(mavenir-sc)
+                                 |                       ||                         |                      | => $(pvc_name) = $(volumeClaimTemplates.metadata.name) + $Pod_name
+                           +-----+-----+                 ||               volumeClaimTemplates----Claim----+
+                           |           |                 ||
+                           +           +                 ||+-------------SA & RBAC         
+                 Default CNI       Multiple CNI          ||
+                      +                +                 ||       1.Ingress Controller DaemonSet
+                      |                |                 ||                     |
+                   Calico    Multus+SRIOV-DPDK+MACVLAN   ||+-------------Ingress+---- 2.Ingress Rule                      
+                                                         |                      |
+                                                      Volumes       3.Ingress Sevice Backend   
+                                                         |
+                                             +-----------+----------+
+                                        ConfigMap   PVC/PV/SC     Secret
+```
+
 从过去以物理机和虚拟机为主体的开发运维环境，向以容器为核心的基础设施的转变过程，并不是一次温和的改革，而是涵盖了对网络、存储、调度、操作系统、分布式原理等各个方面的容器化理解和改造。这些关于 Linux 内核、分布式系统、网络、存储等方方面面的积累，并不会在Docker 或者 Kubernetes 的文档中交代清楚。可偏偏就是它们，才是真正掌握容器技术体系的精髓所在。
 
 Kubernetes是一个 **生产级别的容器编排平台和集群管理系统**，不仅能够创建、调度容器，还能够监控、管理服务器。
@@ -27,7 +49,7 @@ kubectl get pod
 ```
 
 
-.kubectl说明
+kubectl说明
 ****
 使用minikube自带的kubectl有一点限制，需要在前面加上minikube，例如： `minikube kubectl -- version` 为了避免这个问题可以使用alias功能，将 `alias kubectl="minikube kubectl --"` 添加到`.bashrc` 里面。
 

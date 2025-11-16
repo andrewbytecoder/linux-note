@@ -23,15 +23,18 @@ Calico 是一个 CNI 插件，为 Kubernetes 集群提供容器网络。它使�
 - calico的网络规模受到BGP网络规模的限制。
 
 ### calico 组件
+![[Pasted image 20251115170352.png]]
 
 Calico组件主要架构由Felix、Confd、BIRD组成
 
-- Felix 运行在每一台 Host 的 agent 进程，Felix负责刷新主机路由和ACL规则等，以便为该主机上的 Endpoint 正常运行提供所需的网络连接和管理。进出容器、虚拟机和物理主机的所有流量都会遍历Calico，利用Linux内核原生的路由和iptables生成的规则。是负责Calico Node运行并作为每个节点Endpoint端点的守护程序，它负责管理当前主机中的Pod信息，与集群etcd服务交换集群Pod信息，并组合路由信息和ACL策略。
+- Felix's primary responsibility is to program the host's iptables and routes to provide the connectivity to pods on that host. Felix 运行在每一台 Host 的 agent 进程，Felix负责刷新主机路由和ACL规则等，以便为该主机上的 Endpoint 正常运行提供所需的网络连接和管理。进出容器、虚拟机和物理主机的所有流量都会遍历Calico，利用Linux内核原生的路由和iptables生成的规则。是负责Calico Node运行并作为每个节点Endpoint端点的守护程序，它负责管理当前主机中的Pod信息，与集群etcd服务交换集群Pod信息，并组合路由信息和ACL策略。
 - Confd是负责存储集群etcd生成的Calico配置信息，提供给BIRD层运行时使用。
-- BIRD（BIRD Internet Routing Daemon）是核心组件，Calico中的BIRD特指BIRD Client和BIRD Route Reflector，负责主动读取Felix在本机上设置的路由信息，并通过BGP广播协议在数据中心中进行分发路由
+- Bird is a BGP agent for Linux that is used to exchange routing information between the hosts. The routes that are programmed by Felix are picked up by bird and distributed among the cluster hosts. BIRD（BIRD Internet Routing Daemon）是核心组件，Calico中的BIRD特指BIRD Client和BIRD Route Reflector，负责主动读取Felix在本机上设置的路由信息，并通过BGP广播协议在数据中心中进行分发路由
 - etcd, the data store
 felix 负责管理设置node
 bird是一个开源软路由，支持多种路由协议
+
+
 
 
 ### BGP基础概念
@@ -933,7 +936,7 @@ ip netns exec net2 ip route add default dev ipvlan2
 ```
 
 
-## macvlan
+### macvlan
 加载内核驱动支持macvlan
 ```bash
 $ modprobe macvlan
@@ -993,6 +996,30 @@ docker 实现macvlan示例 ： [https://github.com/moby/libnetwork/blob/master/d
 效率：原生hostGW，效率高。
 
 ![[image-2025-03-04-16-36-17-662.png]]
+
+
+### SRIOV
+SRIOV CNI：提供SRIOV的能力。SR-IOV 全称 Single Root I/O Virtualization，是 Intel 在 2007年提出的一种基于硬件的虚拟化解决方案。
+![[Pasted image 20251114231646.png]]
+
+Network Interface Cards (NICs) with SR-IOV capabilities are managed through physical functions (PFs) and virtual functions (VFs). A PF is used by the host and usually represents a single NIC port. VF configurations are applied through the PF. With SR-IOV CNI each VF can be treated as a separate network interface, assigned to a container, and configured with it's own MAC, VLAN IP and more.
+
+SR-IOV CNI plugin works with SR-IOV device plugin for VF allocation in Kubernetes. A metaplugin such as Multus gets the allocated VF's deviceID(PCI address) and is responsible for invoking the SR-IOV CNI plugin with that deviceID.
+
+SR-IOV 使用 physical functions (PF) 和 virtual functions (VF) 为 SR-IOV 设备管理全局功能。
+
+PF 包含SR-IOV 功能的完整PCIe设备，PF 作为普通的PCIe 设备被发现、管理和配置 。PF 通过分配VF 来配置和管理 SR-IOV 功能。禁用SR-IOV后，主机将在一个物理网卡上创建一个 PF。
+VF 是轻量级 PCIe 功能（I/O 处理）的 PCIe 设备，每个 VF 都是通过 PF 来生成管理的，VF 的具体数量限制受限于 PCIe 设备自身配置及驱动程序的支持，启用SR-IOV后，主机将在一个物理NIC上创建单个PF和多个VF。 VF的数量取决于配置和驱动程序支持。
+每个 SR-IOV 设备都可有一个 PF(Physical Functions)，并且每个 PF 最多可有64,000个与其关联的 VF(Virtual Function)。PF 可以通过寄存器创建 VF，这些寄存器设计有专用于此目的的属性。一旦在 PF 中启用了 SR-IOV，就可以通过 PF 的总线、设备和功能编号（路由 ID）访问各个 VF 的 PCI 配置空间。
+
+每个 VF 都具有一个 PCI 内存空间，用于映射其寄存器集。VF设备驱动程序对寄存器集进行操作以启用其功能，并且显示为实际存在的PCI设备。创建 VF 后，可以直接将其指定给虚拟机或各个应用程序。此功能使得虚拟功能可以共享物理设备，并在没有CPU和虚拟机管理程序软件开销的情况下执行 I/O。
+
+
+
+
+
+## 通信方式
+
 
 
 
