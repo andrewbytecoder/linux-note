@@ -1021,6 +1021,31 @@ VF 是轻量级 PCIe 功能（I/O 处理）的 PCIe 设备，每个 VF 都是通
 ## 通信方式
 
 
+### calico同节点通信方式
+calico里面同节点通信方式，除了eBPF剩下的都一样
+
+查看calico网络模式
+```bash
+$ kubectl get ippool -o yaml
+apiVersion: v1
+items:
+  ...
+  kind: IPPool
+  spec:
+    allowedUses:
+    - Workload
+    - Tunnel
+    cidr: 100.64.0.0/10
+    ipipMode: Always
+    natOutgoing: true
+    nodeSelector: all()
+    vxlanMode: Never
+  ...
+```
+
+
+
+
 
 
 
@@ -1214,29 +1239,6 @@ In some setups the kernel is unable to generate a persistent MAC address and so 
 解释：由于Linux内核无法提供一个稳定MAC地址，而Calico网络中使用ponint-to-point 去路由数据包，数据包并不涉及链路层，所以自然也是用不到相应的MAC地址，该MAC地址仅仅为了完成标准的TCP/IP协议栈封装数据报文。
 
  所以这里涉及到一个Linux Proxy_ARP：我们需要一探究竟.
-
-
-## calico同节点通信方式
-calico里面同节点通信方式，除了eBPF剩下的都一样
-
-查看calico网络模式
-```bash
-$ kubectl get ippool -o yaml
-apiVersion: v1
-items:
-  ...
-  kind: IPPool
-  spec:
-    allowedUses:
-    - Workload
-    - Tunnel
-    cidr: 100.64.0.0/10
-    ipipMode: Always
-    natOutgoing: true
-    nodeSelector: all()
-    vxlanMode: Never
-  ...
-```
 
 
 
