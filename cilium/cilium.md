@@ -117,3 +117,9 @@ Egress: On the egress side, the packet still traverses the veth pair, is picked 
 
 解释一下这句话所要表达的内容：什么叫做：只能抓到出去的包，而不能抓不到进来的包：tcpdump hook 要比 TC的hook更加靠前一些。
 ![[Pasted image 20251116003039.png]]
+
+
+### 参考
+
+#### 通过抓包分析cilium pod to pod
+[https://arthurchiao.art/blog/cilium-life-of-a-packet-pod-to-service-zh/](https://arthurchiao.art/blog/cilium-life-of-a-packet-pod-to-service-zh/)

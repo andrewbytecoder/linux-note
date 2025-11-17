@@ -778,6 +778,14 @@ Options:
 - `-m, --message string`: 为导入的镜像设置提交信息（commit message）。这可以帮助你记住镜像是如何创建的以及它代表的内容。
 - `--platform string`: 如果 Docker 服务器支持多平台，你可以指定要创建的镜像的目标平台（例如 linux/amd64, linux/arm64, windows/amd64 等）。
 
+### 容器镜像端口映射
+当使用dokcer启动容器时，如果容器需要对外提供服务会，并配置了端口映射，docker会启动一个docker-proxy服务进行端口映射
+```bash
+ps -aux|grep docker-proxy 
+root        2145  0.0  0.0 1745440 4364 ?        Sl   Nov11   0:00 /usr/bin/docker-proxy -proto tcp -host-ip 0.0.0.0 -host-port 5432 -container-ip 172.18.0.2 -container-port 5432 -use-listen-fd
+```
+
+
 ### 使用示例
 
 1. **从本地 tar 文件导入**:
