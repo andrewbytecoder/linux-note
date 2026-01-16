@@ -816,7 +816,7 @@ https://github.com/prometheus/prometheus/discussions/11825[discussions:11825]
 如果抓取的数据中已经存在这两个标签，则具体行为取决于 `honor_labels` 配置选项。请参阅 [抓取配置文档](https://prometheus.io/docs/prometheus/latest/configuration/configuration/#scrape_config) 了解更多信息。
 
 对于每个实例抓取，Prometheus 都会按以下时间序列存储一个[样本](https://prometheus.io/docs/introduction/glossary/#sample) ：
-- `up{job="<job-name>", instance="<instance-id>"}` ：如果实例健康即可访问，则为 `1` 如果抓取失败，则为 `0` 。 -- 可用于排查抓取的目标或者job是否正常
+- `up{job="<job-name>", instance="<instance-id>"}` ：如果实例健康即可访问，则为 `1` 如果抓取失败，则为 `0` 。 -- 可用于排查抓取的目标或者job是否正常，因此可以使用up指标查看某个示例是否在线
 - `scrape_duration_seconds{job="<job-name>", instance="<instance-id>"}` ：抓取的持续时间。 -- 可用于判断抓取目标是否健康，网络是否通畅，如果耗时异常升高可能是网络差或者被抓取对象响应慢导致的
 - `scrape_samples_post_metric_relabeling{job="<job-name>", instance="<instance-id>"}` ：应用指标重新标记后剩余的样本数。
 - `scrape_samples_scraped{job="<job-name>", instance="<instance-id>"}` ：目标暴露的样本数。
