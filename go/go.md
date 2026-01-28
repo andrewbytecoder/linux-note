@@ -930,204 +930,6 @@ seq(yieldFunc)
 ```
 
 
-```
-
-```
-
-
-
-## go 读取文件的多种方式
-
-### 直接将文件内容读入内存
-
-直接将数据直接读取入内存，是效率最高的一种方式，但此种方式，仅适用于小文件，对于大文件，则不适合，因为比较浪费内存。
-
-- 使用os.ReadFile
-
-```go
-func main() {
-    content, err := os.ReadFile("a.txt")
-    if err != nil {
-        panic(err)
-    }
-    fmt.Println(string(content))
-}
-```
-
-- 使用ioutil.ReadFile
-
-```go
-func main() {
-    content, err := ioutil.ReadFile("a.txt")
-    if err != nil {
-        panic(err)
-    }
-    fmt.Println(string(content))
-}
-```
-
-其实在 Go 1.16 开始，ioutil.ReadFile 就等价于 os.ReadFile，二者是完全一致的
-
-### 创建文件句柄再读取
-
-如果仅是读取，可以使用高级函数 os.Open
-
-```go
-func main() {
-    file, err := os.Open("a.txt")  // 等价于os.OpenFile("a.txt", os.O_RDONLY, 0)
-    if err != nil {
-        panic(err)
-    }
-    defer file.Close()
-    content, err := ioutil.ReadAll(file)
-    fmt.Println(string(content))
-}
-```
-
-### 每次只读取一行
-
-一次性读取所有的数据，太耗费内存，因此可以指定每次只读取一行数据。方法有三种：
-
-- bufio.ReadLine()
-- bufio.ReadBytes(‘:raw-latex:`\n`’)
-- bufio.ReadString(‘:raw-latex:`\n`’)
-
-.在 bufio 的源码注释中，曾说道 bufio.ReadLine() 是低级库，不太适合普通用户使用，更推荐用户使用 bufio.ReadBytes 和 bufio.ReadString 去读取单行数据。
-```go
-func main() {
-    // 创建句柄
-    fi, err := os.Open("christmas_apple.py")
-    if err != nil {
-        panic(err)
-    }
-
-    // 创建 Reader
-    r := bufio.NewReader(fi)
-
-    for {
-        lineBytes, err := r.ReadBytes('\n')
-        line := strings.TrimSpace(string(lineBytes))
-        if err != nil && err != io.EOF {
-            panic(err)
-        }
-        if err == io.EOF {
-            break
-        }
-        fmt.Println(line)
-    }
-}
-
-func main() {
-    // 创建句柄
-    fi, err := os.Open("a.txt")
-    if err != nil {
-        panic(err)
-    }
-
-    // 创建 Reader
-    r := bufio.NewReader(fi)
-
-    for {
-        line, err := r.ReadString('\n')
-        line = strings.TrimSpace(line)
-        if err != nil && err != io.EOF {
-            panic(err)
-        }
-        if err == io.EOF {
-            break
-        }
-        fmt.Println(line)
-    }
-}
-```
-
-### 每次只读取固定字节数
-
-每次仅读取一行数据，可以解决内存占用过大的问题，但要注意的是，并不是所有的文件都有换行符 \n。
-
-**使用 os 库**
-
-通用的做法是：
-
-- 先创建一个文件句柄，可以使用 os.Open 或者 os.OpenFile
-- 然后 bufio.NewReader 创建一个 Reader
-- 然后在 for 循环里调用 Reader 的 Read 函数，每次仅读取固定字节数量的数据。
-
-```go
-func main() {
-    // 创建句柄
-    fi, err := os.Open("a.txt")
-    if err != nil {
-        panic(err)
-    }
-
-    // 创建 Reader
-    r := bufio.NewReader(fi)
-
-    // 每次读取 1024 个字节
-    buf := make([]byte, 1024)
-    for {
-        n, err := r.Read(buf)
-        if err != nil && err != io.EOF {
-            panic(err)
-        }
-
-        if n == 0 {
-            break
-        }
-        fmt.Println(string(buf[:n]))
-    }
-}
-```
-
-- 使用 syscall 库
-
-os 库本质上也是调用 syscall 库，但由于 syscall 过于底层，如非特殊需要，一般不会使用 syscall
-
-```go
-func main() {
-    fd, err := syscall.Open("christmas_apple.py", syscall.O_RDONLY, 0)
-    if err != nil {
-        fmt.Println("Failed on open: ", err)
-    }
-    defer syscall.Close(fd)
-
-    var wg sync.WaitGroup
-    wg.Add(2)
-    dataChan := make(chan []byte)
-    go func() {
-        defer wg.Done()
-        for {
-            # 因为切片是引用copy也就是浅copy，交给通道之后就需要申请新的切片
-            data := make([]byte, 100)
-            n, _ := syscall.Read(fd, data)
-            if n == 0 {
-                break
-            }
-            dataChan <- data
-        }
-        close(dataChan)
-    }()
-
-    go func() {
-        defer wg.Done()
-        for {
-            select {
-            case data, ok := <-dataChan:
-                if !ok {
-                    return
-                }
-
-                fmt.Printf(string(data))
-            default:
-
-            }
-        }
-    }()
-    wg.Wait()
-}
-```
-
 ## go防止资源泄露方法
 
 ### Go 语言 **防御性编程技巧** 解决内存泄露
@@ -1335,14 +1137,29 @@ func add(a, b int) int {
 
 
 
+## GMP
+
+
+| 名称  | 说明                                  |
+| --- | ----------------------------------- |
+| G   | 协程                                  |
+| M   | 工作线程                                |
+| P   | 逻辑处理器，用来管理和执行协程，一个P其实就是M所需要的一个上下文环境 |
+![[Pasted image 20260128140949.png]]
+
+
+根据 G、M、P 对象的关系，我们不难看出一个规律：同一个 M 在同一时刻，只能执行一个P，而 P 又只能运行一个协程。换句话说，分配内存始终是从 P 上运行一个协程开始的。
+
+分配过程一共四步，我们分别来看看。
+
+第一步，根据分配对象的大小，选用不同的结构做分配。包括 3 种情况：1. 小于 16B 的用mcache 中的 tiny 分配器分配；2. 大于 32KB 的对象直接使用堆区分配；3.16B 和 32KB 之间的对象用 mspan 分配。
+
+![[Pasted image 20260128141152.png]]
 
 
 
 
-
-
-
-
+![[Pasted image 20260128141433.png]]
 
 
 ## 辅助工具
