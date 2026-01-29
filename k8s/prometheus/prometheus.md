@@ -285,6 +285,23 @@ groups:
 ```
 
 
+### 监控方法论
+#### RED方法
+- Request - Rate请求速率：每秒请求数
+- Request - Errors 错误：每秒错误请求数
+- Request - Duration延迟：每个请求的延迟分布情况
+#### USE方法
+- 使用率(Utilization)，比如磁盘使用率
+- 饱和度(Saturation)，比如iostat的aqu-sz
+- 错误(Error)，比如ifconfig看到的errors、dropped包个数
+#### 监控分类
+- 业务监控 - 订单量、交易量、在线人数等
+- 应用监控 - 延迟、流量、错误、饱和度
+- 组件监控 - MySQL、Redis、RabbitMQ、Kubernetes等
+- 资源监控 - 服务器、网络设备、基础网络等
+
+
+
 ## PromQL
 
 PromQL是Prometheus内置的数据查询语言，其提供对时间序列数据丰富的查询，聚合以及逻辑运算能力的支持。并且被广泛应用在Prometheus的日常应用当中，包括对数据查询、可视化、告警处理当中。可以这么说，PromQL是Prometheus所有应用场景的基础，理解和掌握PromQL是Prometheus入门的第一课。
