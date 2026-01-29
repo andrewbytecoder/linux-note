@@ -3614,17 +3614,8 @@ var MPPlugin = class extends import_obsidian9.Plugin {
       VIEW_TYPE_MP,
       (leaf) => new MPView(leaf, this.templateManager, this.settingsManager)
     );
-    this.app.workspace.onLayoutReady(() => {
-      const leaves = this.app.workspace.getLeavesOfType(VIEW_TYPE_MP);
-      if (leaves.length === 0) {
-        const rightLeaf = this.app.workspace.getRightLeaf(false);
-        if (rightLeaf) {
-          rightLeaf.setViewState({
-            type: VIEW_TYPE_MP,
-            active: false
-          });
-        }
-      }
+    this.addRibbonIcon("eye", "\u6253\u5F00\u516C\u4F17\u53F7\u9884\u89C8", () => {
+      this.activateView();
     });
     this.addCommand({
       id: "open-mp-preview",
