@@ -49,7 +49,7 @@ route:
   repeat_interval: 3h
 
   # A default receiver
-  # 默认接受者，都匹配不上的时候匹配到这里
+  # 默认接收者，都匹配不上的时候匹配到这里
   receiver: team-X-mails
 
   # All the above attributes are inherited by all child routes and can
