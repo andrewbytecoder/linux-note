@@ -1,15 +1,59 @@
 
+ingress是k8s的一个内置对象，通常我们把ingress看做是service之上的service，但是ingress对象只用来声明路由策略，并不具体处理流量转发，要使得ingress生效，我们还需要额外的安装ingress-controller，例如ingress-Nginx。
+在生产环境中，Ingress-Nginx 一般就是以 Loadbalancer 类型来对外暴露的，Ingress-Nginx实际上充当的是网关的角色，这样做的好处是，我们只需要一个负载均衡器实例，通过路由策略，就可以对外暴露所有的业务服务。
+
 ## Ingress Controller的通用框架
 Ingress Controller实质上可以理解为监视器， Ingress Controller通过不断地跟Kubernetes API打交道， 实时地感知后端Service、 Pod等的变化， 比如新增和减少Pod， Service增加与减少等； 当得到这些变化信息后， Ingress Controller再结合下文的Ingress生成配置， 然后更新反向代理负载均衡器， 并刷新其配置， 起到服务发现的作用。
 
 Ingress Controller将Ingress入口地址和后端Pod地址的映射关系（规则） 实时刷新到Load Balancer的配置文件中， 再让负载均衡器重载（reload） 该规则， 便可实现服务的负载均衡和自动发现。
 
 ### Nginx Ingress Controller详解
+Ingress是一个k8s对象，ingress-Controller是管理ingress资源，按照资源定义然后启用Nginx服务进行反向代理。
 对绝大多数刚刚接触Kubernetes的人来说， 都比较熟悉Nginx Ingress Controller， 一个对外暴露Service的7层反向代理。 Nginx Ingress Controller通过Kubernetes的annotations配置， 为Ingress提供丰富的个性化配置。
+
+```yaml
+
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: ingress-resource-backend
+spec:
+  defaultBackend:
+    resource:
+      apiGroup: k8s.example.com
+      kind: StorageBucket
+      name: static-assets
+ #  Ingress 对象的命名必须是合法的 [DNS 子域名名称](https://kubernetes.io/zh-cn/docs/concepts/overview/working-with-objects/names#dns-subdomain-names)。
+ # 如果 `ingressClassName` 被省略，那么你应该定义一个[默认的 Ingress 类](https://kubernetes.io/zh-cn/docs/concepts/services-networking/ingress/#default-ingress-class)
+  ingressClassName: nginx-example
+  rules:
+    - http:
+        paths:
+          - path: /icons
+            pathType: ImplementationSpecific
+            backend:
+            # 资源后端
+              resource:
+                apiGroup: k8s.example.com
+                kind: StorageBucket
+                name: icon-assets
+
+```
+
+#### 路径类型(https://kubernetes.io/zh-cn/docs/concepts/services-networking/ingress/#path-types)
+
+Ingress 中的每个路径都需要有对应的路径类型（Path Type）。未明确设置 `pathType` 的路径无法通过合法性检查。当前支持的路径类型有三种：
+
+- `ImplementationSpecific`：对于这种路径类型，匹配方法取决于 IngressClass。 具体实现可以将其作为单独的 `pathType` 处理或者作与 `Prefix` 或 `Exact` 类型相同的处理。
+    
+- `Exact`：精确匹配 URL 路径，且区分大小写。
+    
+- `Prefix`：基于以 `/` 分隔的 URL 路径前缀匹配。匹配区分大小写， 并且对路径中各个元素逐个执行匹配操作。 路径元素指的是由 `/` 分隔符分隔的路径中的标签列表。 如果每个 _p_ 都是请求路径 _p_ 的元素前缀，则请求与路径 _p_ 匹配。
 
 因为微服务架构及Kubernetes等编排工具最近几年才开始逐渐流行， 所以一开始的反向代理服务器（例如Nginx和HA Proxy） 并未提供对微服务的支持， 才会出现Nginx Ingress Controller这种中间层做Kubernetes和负载均衡器（例如Nginx） 之间的适配器（adapter） 。Nginx Ingress Controller的存在就是为了与Kubernetes交互， 同时刷新Nginx配置， 还能重载Nginx。 而号称云原生边界路由的Traefik设计得更彻底， 首先它是个反向代理， 其次原生提供了对Kubernetes的支持， 也就是说， Traefik本身就能跟Kubernetes打交道， 感知Kubernetes集群服务
 
 的更新。 Traefik是原生支持Kubernetes Ingress的， 因此用户在使用Traefik时无须再开发一套Nginx Ingress Controller， 受到了广大运维人员的好评。 相
+
 
 ## nginx ingress
 ### nginx ingress redirect

@@ -53,6 +53,7 @@ global:
   scrape_interval:     15s
   evaluation_interval: 15s
 
+# 定义规则文件访问路径
 rule_files:
   # - "first.rules"
   # - "second.rules"
@@ -74,8 +75,10 @@ Prometheus 支持两种类型的规则，它们可以配置并定期评估：记
 promtool check rules /path/to/example.rules.yml
 ```
 
-#### recording rules 记录规则
-记录规则允许您预先计算常用或计算量大的表达式，并将其结果保存为一组新的时间序列。查询预先计算的结果通常比每次需要时执行原始表达式要快得多。这对于每次刷新时都需要重复查询相同表达式的仪表板尤其有用。
+#### recording rules
+通过PromQL可以实时对Prometheus中采集到的样本数据进行查询，聚合以及其它各种运算操作。而在某些PromQL较为复杂且计算量较大时，直接使用PromQL可能会导致Prometheus响应超时的情况。这时需要一种能够类似于后台批处理的机制能够在后台完成这些复杂运算的计算，对于使用者而言只需要查询这些运算结果即可。Prometheus通过Recoding Rule规则支持这种后台计算的方式，可以实现对复杂查询的性能优化，提高查询效率。
+
+[[https://prometheus.io/docs/practices/rules/#examples]]
 
 规则组中存在记录和警报规则。组内的规则包括 按固定间隔按顺序运行，评估时间相同。 记录规则的名称必须是 [有效的指标名称](https://prometheus.io/docs/concepts/data_model/#metric-names-and-labels) 。 警报规则的名称必须是 [有效标签值](https://prometheus.io/docs/concepts/data_model/#metric-names-and-labels) 。
 
@@ -117,6 +120,16 @@ rules:
   [ - <rule> ... ]
 ```
 
+根据规则中的定义，Prometheus会在后台完成expr中定义的PromQL表达式计算，并且将计算结果保存到新的时间序列record中。同时还可以通过labels为这些样本添加额外的标签。
+
+eg:
+```yaml
+- record: instance_path:requests:rate5m
+  expr: rate(requests_total{job="myjob"}[5m])
+
+- record: path:requests:rate5m
+  expr: sum without (instance)(instance_path:requests:rate5m{job="myjob"})
+```
 
 #### 配置 Prometheus recording rules 记录规则示例
 
@@ -307,6 +320,20 @@ groups:
 PromQL是Prometheus内置的数据查询语言，其提供对时间序列数据丰富的查询，聚合以及逻辑运算能力的支持。并且被广泛应用在Prometheus的日常应用当中，包括对数据查询、可视化、告警处理当中。可以这么说，PromQL是Prometheus所有应用场景的基础，理解和掌握PromQL是Prometheus入门的第一课。
 
 ### PromQL 支持的简单操作
+#### 数学运算符
+- `+` (加法)
+- `-` (减法)
+- `*` (乘法)
+- `/` (除法)
+- `%` (求余)
+- `^` (幂运算)
+
+#### 比较运算符
+- `!=` (不相等)
+- `>` (大于)
+- `<` (小于)
+- `>=` (大于等于)
+- `<=` (小于等于)
 
 *支持使用=和!=*
 
@@ -773,9 +800,83 @@ Four Golden Signals是Google针对大量分布式监控的经验总结，4个黄
 - 饱和度：衡量当前服务的饱和度。
 
 
+### 使用HTTP执行 PromQL
+瞬时数据查询
+- query=`<string>`：PromQL表达式
+- time=`<rfc3339 | unix_timestamp>`：用于指定用于计算PromQL的时间戳。可选参数，默认情况下使用当前系统时间。
+- timeout=`<duration>`：超时设置。可选参数，默认情况下使用-query,timeout的全局设置。
+例如使用以下表达式查询表达式up在时间点2015-07-01T20:10:51.781Z的计算结果：
+```bash
+$ curl 'http://localhost:9090/api/v1/query?query=up&time=2015-07-01T20:10:51.781Z'
+{
+   "status" : "success",
+   "data" : {
+      "resultType" : "vector",
+      "result" : [
+         {
+            "metric" : {
+               "__name__" : "up",
+               "job" : "prometheus",
+               "instance" : "localhost:9090"
+            },
+            "value": [ 1435781451.781, "1" ]
+         },
+         {
+            "metric" : {
+               "__name__" : "up",
+               "job" : "node",
+               "instance" : "localhost:9100"
+            },
+            "value" : [ 1435781451.781, "0" ]
+         }
+      ]
+   }
+}
+```
 
-
-
+### 区间数据查询
+使用QUERY_RANGE API我们则可以直接查询PromQL表达式在一段时间返回内的计算结果。
+- query=`<string>`: PromQL表达式。
+- start=`<rfc3339 | unix_timestamp>`: 起始时间。
+- end=`<rfc3339 | unix_timestamp>`: 结束时间。
+- step=`<duration>`: 查询步长。
+- timeout=`<duration>`: 超时设置。可选参数，默认情况下使用-query,timeout的全局设置。
+例如使用以下表达式查询表达式up在30秒范围内以15秒为间隔计算PromQL表达式的结果。
+```bash
+$ curl 'http://localhost:9090/api/v1/query_range?query=up&start=2015-07-01T20:10:30.781Z&end=2015-07-01T20:11:00.781Z&step=15s'
+{
+   "status" : "success",
+   "data" : {
+      "resultType" : "matrix",
+      "result" : [
+         {
+            "metric" : {
+               "__name__" : "up",
+               "job" : "prometheus",
+               "instance" : "localhost:9090"
+            },
+            "values" : [
+               [ 1435781430.781, "1" ],
+               [ 1435781445.781, "1" ],
+               [ 1435781460.781, "1" ]
+            ]
+         },
+         {
+            "metric" : {
+               "__name__" : "up",
+               "job" : "node",
+               "instance" : "localhost:9091"
+            },
+            "values" : [
+               [ 1435781430.781, "0" ],
+               [ 1435781445.781, "0" ],
+               [ 1435781460.781, "1" ]
+            ]
+         }
+      ]
+   }
+}
+```
 
 ## prometheus特性列表
 
@@ -1592,7 +1693,8 @@ alerting:
   alert_relabel_configs:
     [ - <relabel_config> ... ]
   alertmanagers:
-    [ - <alertmanager_config> ... ]
+    - static_configs:
+        - targets: ['localhost:9093']
 
 # Settings related to the remote write feature.
 remote_write:
@@ -1653,9 +1755,3 @@ https://prometheus.io/docs/prometheus/latest/configuration/configuration/[promet
 - `scrape_samples_scraped{job="<job-name>", instance="<instance-id>"}` ：目标暴露的样本数。 -- 用于裁剪指标，可以提前统计采集的所有指标数量
 
 
-
-
-
-## 服务组件
-
-## AlterManager服务组件
