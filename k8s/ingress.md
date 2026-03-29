@@ -2,12 +2,12 @@
 ingress是k8s的一个内置对象，通常我们把ingress看做是service之上的service，但是ingress对象只用来声明路由策略，并不具体处理流量转发，要使得ingress生效，我们还需要额外的安装ingress-controller，例如ingress-Nginx。
 在生产环境中，Ingress-Nginx 一般就是以 Loadbalancer 类型来对外暴露的，Ingress-Nginx实际上充当的是网关的角色，这样做的好处是，我们只需要一个负载均衡器实例，通过路由策略，就可以对外暴露所有的业务服务。
 
-## Ingress Controller的通用框架
+### Ingress Controller的通用框架
 Ingress Controller实质上可以理解为监视器， Ingress Controller通过不断地跟Kubernetes API打交道， 实时地感知后端Service、 Pod等的变化， 比如新增和减少Pod， Service增加与减少等； 当得到这些变化信息后， Ingress Controller再结合下文的Ingress生成配置， 然后更新反向代理负载均衡器， 并刷新其配置， 起到服务发现的作用。
 
 Ingress Controller将Ingress入口地址和后端Pod地址的映射关系（规则） 实时刷新到Load Balancer的配置文件中， 再让负载均衡器重载（reload） 该规则， 便可实现服务的负载均衡和自动发现。
 
-### Nginx Ingress Controller详解
+### Ingress Controller详解
 Ingress是一个k8s对象，ingress-Controller是管理ingress资源，按照资源定义然后启用Nginx服务进行反向代理。
 对绝大多数刚刚接触Kubernetes的人来说， 都比较熟悉Nginx Ingress Controller， 一个对外暴露Service的7层反向代理。 Nginx Ingress Controller通过Kubernetes的annotations配置， 为Ingress提供丰富的个性化配置。
 
@@ -54,9 +54,51 @@ Ingress 中的每个路径都需要有对应的路径类型（Path Type）。未
 
 的更新。 Traefik是原生支持Kubernetes Ingress的， 因此用户在使用Traefik时无须再开发一套Nginx Ingress Controller， 受到了广大运维人员的好评。 相
 
+### basic usage
+如果k8s版本 >= 1.19.x建议将不同的ingress资源单独创建入口资源
+```yaml
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: ingress-myservicea
+spec:
+  rules:
+  - host: myservicea.foo.org
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: myservicea
+            port:
+              number: 80
+  # **ngress 资源与具体的 Ingress 控制器（Ingress Controller）之间的“连线开关”**
+  # 简单来说，它的作用是告诉 Kubernetes 集群：“请让名为 `nginx` 的那个 Ingress 控制器来处理这个流量规则，而不是其他的控制器（比如 Traefik、ALB 或 HAProxy）
+  # - **`ingressClassName: nginx`**：这行代码意味着你的集群中必须存在一个 `IngressClass` 资源，其名称为 `nginx`。
+  ingressClassName: nginx
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: ingress-myserviceb
+spec:
+  rules:
+  - host: myserviceb.foo.org
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: myserviceb
+            port:
+              number: 80
+  ingressClassName: nginx
+```
 
-## nginx ingress
-### nginx ingress redirect
+
+### redirect
 ```yaml
 [root@K8S-master01 5.4]# kubectl create -f redirect.yaml
 ingress.extensions/redirect created
@@ -78,10 +120,21 @@ spec:
           serviceName: nginx-v2
           servicePort: 80
 ```
-使用curl访问 `nginx.redirect.com` 会被重定向到 `https://www.baidu.com` 
 
 
-### nginx ingress rewrite
+
+### rewrite
+在某些情况下，后端服务暴露的URL与ingress规则中指定的路径不同，如果不重写任何请求都会返回404，将 `nginx.ingress.kubernetes.io/rewrite-target` 注释设置为服务预期的路径。
+如果应用根在不同路径中暴露并需要重定向，则将注释 `nginx.ingress.kubernetes.io/app-root` 设置为重定向 `/` 的请求。
+
+| Name                                           | Description                                                                                                         | Values |
+| ---------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- | ------ |
+| nginx.ingress.kubernetes.io/rewrite-target     | Target URI where the traffic must be redirected                                                                     | string |
+| nginx.ingress.kubernetes.io/ssl-redirect       | Indicates if the location section is only accessible via SSL (defaults to True when Ingress contains a Certificate) | bool   |
+| nginx.ingress.kubernetes.io/force-ssl-redirect | Forces the redirection to HTTPS even if the Ingress is not TLS Enabled                                              | bool   |
+| nginx.ingress.kubernetes.io/app-root           | Defines the Application Root that the Controller must redirect if it's in `/` context                               | string |
+| nginx.ingress.kubernetes.io/use-regex          | Indicates if the paths defined on an Ingress use regular expressions                                                | bool   |
+
 Rewrite主要用于地址重写，比如访问 `nginx.test.com/rewrite` 跳转到 `nginx.test.com` ，访问 `nginx.test.com/rewrite/foo` 会跳转到 `nginx.test.com/foo` 等。
 
 ```yaml
@@ -110,20 +163,23 @@ spec:
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
-  name: rewrite-ingress
-  namespace: default
   annotations:
-    nginx.ingress.kubernetes.io/rewrite-target: /$1
+    nginx.ingress.kubernetes.io/use-regex: "true"
+    nginx.ingress.kubernetes.io/rewrite-target: /$2
+  name: rewrite
+  namespace: default
 spec:
+  ingressClassName: nginx
   rules:
-  - http:
+  - host: rewrite.bar.com
+    http:
       paths:
-      - path: /rewrite(/|$)(.*)
-        pathType: Prefix
+      - path: /something(/|$)(.*)
+        pathType: ImplementationSpecific
         backend:
           service:
-            name: your-service-name
-            port:
+            name: http-svc
+            port: 
               number: 80
 ```
 
@@ -141,6 +197,222 @@ spec:
 
 - **`backend`**:
   - 定义了请求最终会被代理到的服务 (`your-service-name`) 和端口 (`80`)。
+
+### Session Affinity(会话亲和性)
+注释 `nginx.ingress.kubernetes.io/affinity` 使入口的所有上游都能启用并设置亲和类型。这样，请求总是会被引导到同一个上游服务器。NGINX 唯一可用的亲和类型是 `cookie`。
+`nginx.ingress.kubernetes.io/affinity-mode` 注释定义了会话的粘性。将此设置为`balanced` （默认）会在部署规模扩大时重新分配部分会话，从而重新平衡服务器负载。将此设置为`persistent`不会重新平衡会话到新服务器，因此能提供最大的粘性。
+注释 `nginx.ingress.kubernetes.io/affinity-canary-behavior` 定义了在启用会话亲和性时金丝雀的行为。将此设置为`sticky` （默认）可以确保由金丝雀服务的用户继续被金丝雀服务。将此设置为`legacy`状态后，会恢复原始的金丝雀行为，即会话亲和力被忽略。
+如果为一个主机定义了多个入口，且至少有一个入口使用 `nginx.ingress.kubernetes.io/affinity: cookie` 了 ，那么只有该入口上的 `nginx.ingress.kubernetes.io/affinity` 路径才会使用会话 cookie 亲和性。主机在其他入口上定义的所有路径都将通过后端服务器的随机选择实现负载均衡
+
+| Name                                                                 | Description                                                                                                                                                                                                                                             | Value                                                                                                                           |
+| -------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| nginx.ingress.kubernetes.io/affinity                                 | Type of the affinity, set this to `cookie` to enable session affinity                                                                                                                                                                                   | string (NGINX only supports `cookie`)                                                                                           |
+| nginx.ingress.kubernetes.io/affinity-mode                            | The affinity mode defines how sticky a session is. Use `balanced` to redistribute some sessions when scaling pods or `persistent` for maximum stickiness.                                                                                               | `balanced` (default) or `persistent`                                                                                            |
+| nginx.ingress.kubernetes.io/affinity-canary-behavior                 | Defines session affinity behavior of canaries. By default the behavior is `sticky`, and canaries respect session affinity configuration. Set this to `legacy` to restore original canary behavior, when session affinity parameters were not respected. | `sticky` (default) or `legacy`                                                                                                  |
+| nginx.ingress.kubernetes.io/session-cookie-name                      | Name of the cookie that will be created                                                                                                                                                                                                                 | string (defaults to `INGRESSCOOKIE`)                                                                                            |
+| nginx.ingress.kubernetes.io/session-cookie-secure                    | Set the cookie as secure regardless the protocol of the incoming request                                                                                                                                                                                | `"true"` or `"false"`                                                                                                           |
+| nginx.ingress.kubernetes.io/session-cookie-path                      | Path that will be set on the cookie (required if your [Ingress paths](https://kubernetes.github.io/ingress-nginx/user-guide/ingress-path-matching/) use regular expressions)                                                                            | string (defaults to the currently [matched path](https://kubernetes.github.io/ingress-nginx/user-guide/ingress-path-matching/)) |
+| nginx.ingress.kubernetes.io/session-cookie-domain                    | Domain that will be set on the cookie                                                                                                                                                                                                                   | string                                                                                                                          |
+| nginx.ingress.kubernetes.io/session-cookie-samesite                  | `SameSite` attribute to apply to the cookie                                                                                                                                                                                                             | Browser accepted values are `None`, `Lax`, and `Strict`                                                                         |
+| nginx.ingress.kubernetes.io/session-cookie-conditional-samesite-none | Will omit `SameSite=None` attribute for older browsers which reject the more-recently defined `SameSite=None` value                                                                                                                                     | `"true"` or `"false"`                                                                                                           |
+| nginx.ingress.kubernetes.io/session-cookie-max-age                   | Time until the cookie expires, corresponds to the `Max-Age` cookie directive                                                                                                                                                                            | number of seconds                                                                                                               |
+| nginx.ingress.kubernetes.io/session-cookie-expires                   | Legacy version of the previous annotation for compatibility with older browsers, generates an `Expires` cookie directive by adding the seconds to the current date                                                                                      | number of seconds                                                                                                               |
+| nginx.ingress.kubernetes.io/session-cookie-change-on-failure         | When set to `false` nginx ingress will send request to upstream pointed by sticky cookie even if previous attempt failed. When set to `true` and previous attempt failed, sticky cookie will be changed to point to another upstream.                   | `true` or `false` (defaults to                                                                                                  |
+
+### Authentication
+可以通过在入口规则中添加额外的注释来添加认证，认证的来源是一个包含用户名密码的secret文件。
+```yaml
+# basic 基础认证， digest 数字认证
+nginx.ingress.kubernetes.io/auth-type: [basic|digest]
+# secretName 包含用户名和密码的secret名称，通常经过 namespace/secretName 指定，如果不指定就在本地命名空间中查找
+nginx.ingress.kubernetes.io/auth-secret: secretName
+nginx.ingress.kubernetes.io/auth-realm: "realm string"
+```
+
+The `auth-secret` can have two forms:
+- `auth-file` - default, an htpasswd file in the key `auth` within the secret
+- `auth-map` - the keys of the secret are the usernames, and the values are the hashed passwords
+
+[[https://kubernetes.github.io/ingress-nginx/examples/auth/basic/]]
+
+- 创建 htpasswd 文件
+```bash
+$ htpasswd -c auth foo
+New password: <bar>
+New password:
+Re-type new password:
+Adding password for user foo
+```
+
+- 将htpasswd文件转化为secret
+```bash
+$ kubectl create secret generic basic-auth --from-file=auth
+secret "basic-auth" created
+```
+
+- 校验是否创建成功
+```yaml
+$ kubectl get secret basic-auth -o yaml
+apiVersion: v1
+data:
+  auth: Zm9vOiRhcHIxJE9GRzNYeWJwJGNrTDBGSERBa29YWUlsSDkuY3lzVDAK
+kind: Secret
+metadata:
+  name: basic-auth
+  namespace: default
+type: Opaque
+```
+
+- 创建ingress使用basic-auth
+```yaml
+$ echo "
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: ingress-with-auth
+  annotations:
+    # type of authentication
+    nginx.ingress.kubernetes.io/auth-type: basic
+    # name of the secret that contains the user/password definitions
+    nginx.ingress.kubernetes.io/auth-secret: basic-auth
+    # message to display with an appropriate context why the authentication is required
+    nginx.ingress.kubernetes.io/auth-realm: 'Authentication Required - foo'
+spec:
+  ingressClassName: nginx
+  rules:
+  - host: foo.bar.com
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service: 
+            name: http-svc
+            port: 
+              number: 80
+" | kubectl create -f -
+```
+
+- 使用curl传入对应的认证进行请求
+```bash
+$ curl -v http://10.2.29.4/ -H 'Host: foo.bar.com' -u 'foo:bar'
+*   Trying 10.2.29.4...
+* Connected to 10.2.29.4 (10.2.29.4) port 80 (#0)
+* Server auth using Basic with user 'foo'
+> GET / HTTP/1.1
+> Host: foo.bar.com
+> Authorization: Basic Zm9vOmJhcg==
+> User-Agent: curl/7.43.0
+> Accept: */*
+>
+< HTTP/1.1 200 OK
+< Server: nginx/1.10.0
+< Date: Wed, 11 May 2016 06:05:26 GMT
+< Content-Type: text/plain
+< Transfer-Encoding: chunked
+< Connection: keep-alive
+< Vary: Accept-Encoding
+<
+CLIENT VALUES:
+client_address=10.2.29.4
+command=GET
+real path=/
+query=nil
+request_version=1.1
+request_uri=http://foo.bar.com:8080/
+
+SERVER VALUES:
+server_version=nginx: 1.9.11 - lua: 10001
+
+HEADERS RECEIVED:
+accept=*/*
+connection=close
+host=foo.bar.com
+user-agent=curl/7.43.0
+x-request-id=e426c7829ef9f3b18d40730857c3eddb
+x-forwarded-for=10.2.29.1
+x-forwarded-host=foo.bar.com
+x-forwarded-port=80
+x-forwarded-proto=http
+x-real-ip=10.2.29.1
+x-scheme=http
+BODY:
+* Connection #0 to host 10.2.29.4 left intact
+-no body in request-
+```
+
+
+### 自定义 Nginx upstream hashing
+nginx支持基于一致性哈希来实现客户端到服务器之间的负载均衡
+存在一种特殊的上游哈希模式，称为子集。在此模式下，上游服务器被分组为子集，粘性通过将密钥映射到子集而非单个上游服务器来实现。特定服务器是从所选粘性子集中均匀随机选择的。它在粘性和负载分布之间取得了平衡。
+
+`nginx.ingress.kubernetes.io/upstream-hash-by` ： nginx 变量、文本值或其任意组合，用于一致性哈希。例如： `nginx.ingress.kubernetes.io/upstream-hash-by: "$request_uri"` 或 `nginx.ingress.kubernetes.io/upstream-hash-by: "$request_uri$host"` `nginx.ingress.kubernetes.io/upstream-hash-by: "${request_uri}-text-value"` ，或通过当前请求 URI 一致地哈希上游请求。
+
+### configuration snippet
+利用这个注释，你可以为Nginx location上添加自定义配置
+
+```bash
+nginx.ingress.kubernetes.io/configuration-snippet: |
+  more_set_headers "Request-Id: $req_id";
+```
+
+### server snippet
+利用注释 nginx.ingress.kubernetes.io/server-snippet 可以在服务器配置块中添加自定义配置。
+```yaml
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  annotations:
+    nginx.ingress.kubernetes.io/server-snippet: |
+      set $agentflag 0;
+
+      if ($http_user_agent ~* "(Mobile)" ){
+        set $agentflag 1;
+      }
+
+      if ( $agentflag = 1 ) {
+        return 301 https://m.example.com;
+      }
+```
+
+> 该注释每个host只能使用一次
+
+
+### proxy redirect
+
+注释 `nginx.ingress.kubernetes.io/proxy-redirect-from` 和 `nginx.ingress.kubernetes.io/proxy-redirect-to` 分别设定 NGINX proxy_redirect 指令的第一个和第二个参数。可以在[代理服务器响应](https://nginx.org/en/docs/http/ngx_http_proxy_module.html#proxy_redirect)的 `Location` 和 `Refresh` 头字段中设置应更改的文本
+By default the value of each annotation is "off".
+如果使用两个注释必须同时启用
+
+### Mirror
+能够将请求镜像到测试后端，并且忽略镜像后端的响应结果，经常用来查看后端对请求的响应
+```bash
+nginx.ingress.kubernetes.io/mirror-target: https://test.env.com$request_uri
+# 默认情况下请求体也会下发到镜像后端，如果需要关闭
+nginx.ingress.kubernetes.io/mirror-request-body: "off"
+```
+
+默认情况下，镜像请求的Host头和原先主机的请求保持一致，如果需要使用镜像主机的Host覆盖，可以通过一下注释实现
+```bash
+nginx.ingress.kubernetes.io/mirror-target: https://1.2.3.4$request_uri
+nginx.ingress.kubernetes.io/mirror-host: "test.env.com"
+```
+
+默认情况下，发送镜像的请求和原始请求会进行关联，如果镜像后端反应很慢，那么原始请求也会进行降频。
+
+### stream snippet
+利用注释 `nginx.ingress.kubernetes.io/stream-snippet` 可以添加自定义流配置。
+```yaml
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  annotations:
+    nginx.ingress.kubernetes.io/stream-snippet: |
+      server {
+        listen 8000;
+        proxy_pass 127.0.0.1:80;
+      }
+```
 
 
 ### nginx ingress错误代码重定向
