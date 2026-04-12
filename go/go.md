@@ -61,6 +61,9 @@ foo5()
 
 https://blog.csdn.net/u010429831/article/details/108641919[闭包]
 
+### 接口实现
+go语言的接口结合了动态类型和静态类型语言的优点，你可以根据支持的方法来确定传入函数参数的类型，鸭子类型原则：如果动物像鸭子一样叫，也能像鸭子一样行走，那它自然就是鸭子(duck typing: if it quacks like a duck and walks like a duck, it should be a duck)。
+
 ## 数据结构
 
 ### slice 
