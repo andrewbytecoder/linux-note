@@ -1,6 +1,14 @@
 
 
 
+## proto文件说明
+
+
+
+
+
+
+
 ## Protobuf是如何进一步提高编码效率的？
 
 ### 怎样用最少的空间编码字段名？
@@ -88,8 +96,26 @@ gRPC 可以简单地分为三层，包括底层的数据传输层，中间的框
 
 
 
+## go gRPC
 
+### 代码生成命令说明
+```bash
+protoc -I proto/ --go_out=proto --go-grpc_out=proto proto/helloworld.proto
+```
 
+- `-I` 指定用于查找 `.proto` 文件的目录
+- `--go_out` 指定生成的go代码目录， `paths=source_relative`，源代码生成保持原有的文件结构不变
+- `--go-grpc_out` 指定生成的grpc代码，这些代码用于调用各种服务功能。
+- `--go-grpc_opt` 用于配置与gRPC相关的操作选项，比如： `paths=source_relative` 用于确保生成源代码之后文件夹结构保持不变。
+
+假设.proto文件的名称为proto/order.proto。在这种情况下，后续的命令将会生成两个文件：order.pb.go，用于处理与消息相关的操作；另一个是order_grpc.pb.go，其中包含了与gRPC相关的功能。
+```bash
+protoc --go_out=./golang     # 指定go代码生成目录
+       --go_opt=paths=source_relative \  # 生成的时候目录和 proto所在的相对目录保持一致，当proto和生成代码不在同一个目录的时候非常有用
+	   --go-grpc_out=./golang   # 指定gRPC代码生成目录
+	   --go-grpc_opt=paths=source_relative \   # 生成gRPC代码的时候目录和 proto所在的相对目录保持一致
+ ./${SERVICE_NAME}/*.proto         # proto文件
+```
 
 
 
