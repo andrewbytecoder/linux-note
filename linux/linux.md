@@ -79,7 +79,43 @@ Machine (251GB total)
       PU L#47 (P#47)
 ```
 
+## IO
 
+
+### ionice
+设置进程调度磁盘(I/O)优先级核心命令是ionice，它不改变CPU的使用频率，而是专门控制进程对磁盘发起读写请求时的 "先后顺序"和“频次”
+
+```bash
+$ ionice -h                                                                                                                                                                                         
+Usage:
+ ionice [options] -p <pid>...
+ ionice [options] -P <pgid>...
+ ionice [options] -u <uid>...
+ ionice [options] <command>
+
+Show or change the I/O-scheduling class and priority of a process.
+
+Options:
+ -c, --class <class>    name or number of scheduling class,
+                          0: none, 1: realtime, 2: best-effort, 3: idle
+ -n, --classdata <num>  priority (0..7) in the specified scheduling class,
+                          only for the realtime and best-effort classes
+ -p, --pid <pid>...     act on these already running processes
+ -P, --pgid <pgrp>...   act on already running processes in these groups
+ -t, --ignore           ignore failures
+ -u, --uid <uid>...     act on already running processes owned by these users
+
+ -h, --help             display this help
+ -V, --version          display version
+
+For more details see ionice(1).
+
+```
+
+```bash
+# 将etcd的io优先级设置为Best-effort
+$ sudo ionice -c2 -n0 -p `pgrep etcd`
+```
 
 
 ## 工具
