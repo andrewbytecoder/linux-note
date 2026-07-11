@@ -340,6 +340,10 @@ $ cat /proc/net/softnet_stat
 
 
 
+## 进程
+
+![[Pasted image 20260709224422.png]]
+
 
 
 
