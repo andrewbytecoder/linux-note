@@ -880,6 +880,38 @@ func main() {
 - 当有多个发送者，多个接收者时，这是最复杂的，不仅要管理通道，还要另起一个专门的媒介协程，新增一个媒介通道，但核心逻辑都是一样。
 
 
+### interface
+**接口值为 nil 与接口为 nil 的区别** 
+当使用接口的时候存在两种情况，一种是接口为nil，一种是接口的值为nil，这是一个经常见的go语言陷阱，在日常编码中，如果你将一个struct的nil指针赋值给对应的interface，那么会默认转化为接口值为nil的interface对象，这个对象本身并不是nil，只是它的值为nil。
+```go
+func GetBodyReader() *bytes.Reader {    
+   return nil 
+}
+```
+在io包里面有如下配置
+```go
+type Reader interface {  
+    Read(p []byte) (n int, err error)  
+}
+```
+
+```go
+// 调用 GetBodyReader 我们得到的是一个类型为 bytes.Reader 空指针
+reader := GetBodyReader()
+// 然后我们调用 http库的 NewRequestWithContext函数
+func NewRequestWithContext(body io.Reader) error {    
+    if body != nil {
+     // 进入到这里
+    }
+}
+// 函数内部又 body != nil 的判断，但是在实际判断的时候，我们发现 body 不为nil，因为这里进行了默认转化
+NewRequestWithContext(reader)
+// 如果你直接按照 NewRequestWithContext(nil) 调用是没有问题的，但是传入一个返回nil的函数的返回值却出现了问题
+// 所以说任何语法糖都是有副作用的， 这里面其实进行了两次默认转化，导致出现这个问题
+// 首先调用 GetBodyReader 函数的时候，会将返回的 nil默认转化为类型为 *bytes.Reader 的空指针
+// 当将函数返回值作为 NewRequestWithContext 的入参传入的时候，又默认将 *bytes.Reader 类型的nil指针，转化为了值为nil，类型为 io.Reader 的接口对象，这个对象本身不为nil只是内部的值为nil
+```
+
 ### go range
 
 for range 是如何工作的

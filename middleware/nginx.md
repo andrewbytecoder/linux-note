@@ -52,7 +52,7 @@ http {
 
     # 开启高效文件传输模式（sendfile），适合静态文件服务
     sendfile on;
-
+	
     # TCP_NOPUSH（FreeBSD）或 TCP_NODELAY（Linux）优化
     tcp_nopush on;   # 与 sendfile 配合使用，减少网络包数量
     tcp_nodelay on;  # 禁用 Nagle 算法，提升实时性
@@ -110,6 +110,11 @@ http {
 
     # --- 示例 2: HTTPS 服务 + 反向代理 ---
     server {
+	    # 禁止绝对重定向，只进行相对重定向，当有多个nginx代理，或者nginx在 gateway下的时候，并且web访问的端口
+	    # 和 nginx监听的端口不一致的时候使用，当web 8443 -> nginx 8080 : 在进行重定向  301跳转的时候，保留web端口不变
+	    # 只是对相对目录进行重定向
+	    absolute_redirect off;
+    
         listen 443 ssl http2;               # 启用 SSL 和 HTTP/2
         server_name example.com www.example.com;
 
