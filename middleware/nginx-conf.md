@@ -1,3 +1,98 @@
+## 常见配置示例
+### 透传用户真实IP地址信息
+```nginx
+location /some/path/ {
+	# nginx 的主机地址
+	proxy_set_header Host $http_host;
+	# 用户端真实的IP，即客户端IP
+	proxy_set_header X-real-IP $remoter_addr;
+	proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+	
+	proxy_pass http://localhost:8080;
+} 
+```
+常用变量说明
+- `$host`: nginx主机IP, 例如 192.168.56.105
+- `$http_host`: nginx主机ip地址和端口192.168.56.105:8001
+- `$proxy_host`: localhost:8080,proxy_pass里配置的主机名和端口
+- `$remoter_addr`: 用户真实的IP，即客户端IP
+
+### 动静分离的配置
+```nginx
+location ~ \.(css|js|png|jpg|gif|ico) {
+	root /home/www/static;
+}
+```
+常用变量说明
+-  = 等于，严格进行匹配，匹配优先级最高
+- `^` 表示普通字符匹配，使用前缀匹配，如果匹配成功，则不再匹配其他location，优先级第二高
+- `~` 区分大小写
+- `~*` 不区分大小写
+优先级
+1. 精确匹配(=)
+2. 前缀匹配(^~)
+3. 正则匹配(`~`和`~*`)
+4. 不写(/)
+
+### 对静态文件使用缓存
+```nginx
+proxy_cache_path /var/cache/nginx/static keys_zone=static:100m;
+
+server {
+	listen 8080;
+	server_name web;
+	
+	location ~ \.(css|js|png|jpg|gif|ico) {
+		# 指定使用那个缓存
+		proxy_cache static;
+		# 如果返回的结果是 200 或者302将缓存信息缓存10m
+		proxy_cache_valid 200 302 10m;
+		# 如果返回的结果是404那么在1m之后缓存过期
+		proxy_cache_valid 404      1m;
+		# 除了以上的情况，缓存5m失效
+		proxy_cache_valid any 5m;
+		
+		proxy_pass http://localhost:8080;
+	}
+	
+	
+}
+```
+
+
+### 重写
+nginx中有两个重写指令: return和rewrite
+retrun
+服务端停止处理并将状态码status code返回给客户端
+`retrun code URL`
+`return code text`
+`return code`
+`return URL`
+强制所有的请求使用https
+
+```nginx
+server {
+	listen 80;
+	listen 443 ssl;
+	server_name domain.com;
+	return 301 $scheme://www.domain.com$request_uri;
+}
+```
+`301` 永久重定向
+`302` 临时重定向
+
+rewrite
+如果指定的正则表达式与请求的URI匹配，则URI将按照字符串中的指定进行更改。指令按其在配置文件中出现的先后顺序执行。
+```nginx
+server {
+    # 正则表达式进行匹配  $1/mp3/$2.mp3 将前面正则表达式的第一个正则参数和第二个正则参数取出来
+	rewrite ^(/download/.*)/media/(\w+)\.?.*$ $1/mp3/$2.mp3 last;
+	return 403
+}
+```
+
+`last` 如果只用last规则，如果当前规则不匹配，不会再进行后面的匹配，使用重写后的路径，重新搜索location及其块内的指令。
+`break` 如果当前规则不匹配，停止处理后续的rewrite规则，执行{}块内的指令
 
 
 ## config.conf
