@@ -1,5 +1,6 @@
 
-
+## Data structures Used in Daily Life 
+![[PixPin_2026-08-31_20-29-34.png]]
 
 
 

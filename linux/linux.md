@@ -1,4 +1,8 @@
 
+## File Systems
+![[PixPin_2026-08-31_20-26-43.png]]
+
+
 ## CPU
 
 ### core
