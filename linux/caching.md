@@ -67,3 +67,82 @@ FIFO 是最简单的缓存策略：缓存像队列一样工作，**不管有没�
 | TTL    | 存活时长        | 极低   | —（配合用）  | 会话、短信验证码、配置缓存                         |
 | 两级缓存   | 架构层组合       | 高    | ✅✅      | 本地 Caffeine + 远端 Redis                |
 | Random | 随机抽         | 极低   | ⚠️ 看运气  | 无锁高并发本地池                              |
+
+
+## Which Latency Numbers Should You Know?
+![[Pasted image 20260902101003.png]]
+
+- **L1 and L2 caches: 1 ns, 10 ns  
+    L1 和 L2 缓存：1 纳秒，10 纳秒**
+    
+    E.g.: They are usually built onto the microprocessor chip. Unless you work with hardware directly, you probably don’t need to worry about them.  
+    例如：它们通常被集成在微处理器芯片上。除非你直接处理硬件相关的工作，否则你不需要担心这些问题。
+    
+- **RAM access: 100 ns  RAM 访问时间：100 纳秒**
+    
+    E.g.: It takes around 100 ns to read data from memory. Redis is an in-memory data store, so it takes about 100 ns to read data from Redis.  
+    例如：从内存中读取数据大约需要 100 纳秒。而 Redis 是一种内存数据库，因此从 Redis 中读取数据同样也需要大约 100 纳秒。
+    
+- **Send 1K bytes over 1 Gbps network: 10 us  
+    通过 1 Gbps 的网络传输 1K 字节数据：10 美元**
+    
+    E.g.: It takes around 10 us to send 1KB of data from Memcached through the network.  
+    例如：通过网络从 Memcached 中发送 1KB 的数据大约需要 10 个用户时间。
+    
+- **Read from SSD: 100 us  
+    从固态硬盘读取：100 美元**
+    
+    E.g.: RocksDB is a disk-based K/V store, so the read latency is around 100 us on SSD.  
+    例如：RocksDB 是一种基于磁盘的 K/V 型存储系统，因此在 SSD 设备上，读取操作的延迟约为 100 微秒。
+    
+- **Database insert operation: 1 ms  
+    数据库插入操作：耗时 1 毫秒**
+    
+    E.g.: Postgresql commit might take 1ms. The database needs to store the data, create the index, and flush logs. All these actions take time.  
+    例如：PostgreSQL 的提交操作可能需要 1 毫秒。数据库需要存储数据、创建索引，并刷新日志。所有这些操作都需要时间来完成。
+    
+- **Send packet CA->Netherlands->CA: 100 ms  
+    发送数据包从加拿大到荷兰的传输时间为 100 毫秒。**
+    
+    E.g.: If we have a long-distance Zoom call, the latency might be around 100 ms.  
+    例如：如果我们进行远程视频通话，延迟可能会达到约 100 毫秒。
+    
+- **Retry/refresh internal: 1-10s  
+    重试/刷新间隔：1-10 秒**
+    
+    E.g: In a monitoring system, the refresh interval is usually set to 5~10 seconds (default value on Grafana).  
+    例如，在监控系统中，刷新间隔通常设置为 5 到 10 秒（Grafana 的默认值）。
+    
+
+### Notes  备注
+
+1 ns = 10^-9 seconds 1 us = 10^-6 seconds = 1,000 ns 1 ms = 10^-3 seconds = 1,000 us = 1,000,000 ns  
+1 纳秒 = 10^-9 秒 1 微秒 = 10^-6 秒 = 1,000 纳秒 1 毫秒 = 10^-3 秒 = 1,000 微秒 = 1,000,000 纳秒
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

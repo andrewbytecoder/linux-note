@@ -1,3 +1,7 @@
+## What is a deadlock
+![[Pasted image 20260902111851.png]]
+
+
 ## 分布式开发常用英文
 
 ### 📚 一、核心概念（Core Concepts）
