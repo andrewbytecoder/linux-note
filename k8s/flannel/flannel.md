@@ -88,6 +88,9 @@ VXLAN将VM发出的原始报文进行封装后通过VXLAN隧道进行传输，�
 
 在当前的园区网中，租户站点与站点之间为了实现二、三层互联，需要部署相关设备以及多种二、三层网络技术。而基于Overlay的VXLAN技术，不感知当前的物理网络，能够在任意路由可达的网络上叠加二层虚拟网络，实现站点与站点之间的二层互联。同时，基于VXLAN三层网关，也能够实现站点与站点之间的三层互联。因此，通过VXLAN技术实现租户不同站点之间的互联更加快速、灵活。
 
+![Anatomy of an overlay network packet](https://docs.tigera.io/assets/images/anatomy-of-an-overlay-packet-83230b9fc48c864b8223cead52d36e86.svg)
+
+
 Kubernetes CNI Flannel - VxLAN Packet Format
 ![[Pasted image 20251110185005.png]]
 
