@@ -375,14 +375,14 @@ web页面登录https://10.161.43.96:8443，
 ### 执行命令上传ocp镜像
 上传到harbor
 
-```
+```bash
 oc image mirror --insecure-skip-tls-verify=true --from-dir=/root/openshift/data/offlineocp/mirror 'file://openshift/release:4.18.1-x86_64*' quay62.testocpdc2.62dc2.com:11036/ocp419/release
-新版本:
+# 新版本:
 oc image mirror --insecure-skip-tls-verify=true --from-dir=/root/openshift/ocp-install/ 'file://openshift/release:4.19.4-x86_64*' quay62.testocpdc2.62dc2.com:11036/ocp419/release
 ```
-上传到quay
 
-```
+上传到quay
+```bash
 oc image mirror --from-dir=/root/openshift/data/offlineocp/mirror 'file://openshift/release:4.18.1-x86_64*' quay62.testocpdc2.62dc2.com:8443/ocp419/release
 新版本:
 oc image mirror --from-dir=/root/openshift/ocp-install/ 'file://openshift/release:4.19.4-x86_64*' quay62.testocpdc2.62dc2.com:8443/ocp419/release

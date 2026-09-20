@@ -4,35 +4,22 @@
     "type": "split",
     "children": [
       {
-        "id": "e9da94fcec021307",
+        "id": "423bb10fb9288eb8",
         "type": "tabs",
         "children": [
           {
-            "id": "b20a0fc6523c0770",
+            "id": "e84e49a6294227e8",
             "type": "leaf",
             "state": {
-              "type": "excalidraw",
+              "type": "pdf",
               "state": {
-                "file": "Excalidraw/linux内核网络.excalidraw.md"
+                "file": "attachments/2026/09/20/172541/27915.pdf"
               },
-              "icon": "excalidraw-icon",
-              "title": "linux内核网络.excalidraw"
-            }
-          },
-          {
-            "id": "3f0d2850670d8f22",
-            "type": "leaf",
-            "state": {
-              "type": "excalidraw",
-              "state": {
-                "file": "Excalidraw/CNI.excalidraw.md"
-              },
-              "icon": "excalidraw-icon",
-              "title": "CNI.excalidraw"
+              "icon": "lucide-file-text",
+              "title": "27915"
             }
           }
-        ],
-        "currentTab": 1
+        ]
       }
     ],
     "direction": "vertical"
@@ -52,7 +39,9 @@
               "type": "file-explorer",
               "state": {
                 "sortOrder": "alphabetical",
-                "autoReveal": false
+                "autoReveal": false,
+                "showSearch": false,
+                "searchQuery": ""
               },
               "icon": "lucide-folder-closed",
               "title": "文件列表"
@@ -64,7 +53,7 @@
             "state": {
               "type": "search",
               "state": {
-                "query": "zsh",
+                "query": "mirror",
                 "matchingCase": false,
                 "explainSearch": false,
                 "collapseAll": false,
@@ -89,7 +78,7 @@
       }
     ],
     "direction": "horizontal",
-    "width": 300
+    "width": 282.5
   },
   "right": {
     "id": "e7caec816f7dccec",
@@ -105,7 +94,7 @@
             "state": {
               "type": "backlink",
               "state": {
-                "file": "go/go_package.md",
+                "file": "go/高并发.md",
                 "collapseAll": false,
                 "extraContext": false,
                 "sortOrder": "alphabetical",
@@ -115,7 +104,7 @@
                 "unlinkedCollapsed": true
               },
               "icon": "links-coming-in",
-              "title": "go_package 的反向链接列表"
+              "title": "高并发 的反向链接列表"
             }
           },
           {
@@ -124,12 +113,12 @@
             "state": {
               "type": "outgoing-link",
               "state": {
-                "file": "linux/perf.adoc",
+                "file": "go/高并发.md",
                 "linksCollapsed": false,
                 "unlinkedCollapsed": true
               },
               "icon": "links-going-out",
-              "title": "perf 的出链列表"
+              "title": "高并发 的出链列表"
             }
           },
           {
@@ -153,13 +142,13 @@
             "state": {
               "type": "outline",
               "state": {
-                "file": "Excalidraw/CNI.excalidraw.md",
+                "file": "attachments/2026/09/20/172541/27915.pdf",
                 "followCursor": false,
                 "showSearch": false,
                 "searchQuery": ""
               },
               "icon": "lucide-list",
-              "title": "CNI.excalidraw 的大纲"
+              "title": "大纲"
             }
           },
           {
@@ -168,18 +157,40 @@
             "state": {
               "type": "mp-preview",
               "state": {},
-              "icon": "lucide-ghost",
-              "title": "mp-preview"
+              "icon": "eye",
+              "title": "公众号预览"
             }
           },
           {
-            "id": "2bd2a6f07e60cc33",
+            "id": "8804a8eb2493735f",
             "type": "leaf",
             "state": {
-              "type": "mp-preview",
+              "type": "mermaid-toolbar-view",
               "state": {},
-              "icon": "eye",
-              "title": "公众号预览"
+              "icon": "trident-custom",
+              "title": "Mermaid Toolbar"
+            }
+          },
+          {
+            "id": "aa7b02b0b013cbbe",
+            "type": "leaf",
+            "state": {
+              "type": "footnotes",
+              "state": {
+                "file": "k8s/kubernetes_network.md"
+              },
+              "icon": "lucide-file-signature",
+              "title": "脚注"
+            }
+          },
+          {
+            "id": "b44ad17fdd274341",
+            "type": "leaf",
+            "state": {
+              "type": "advanced-tables-toolbar",
+              "state": {},
+              "icon": "spreadsheet",
+              "title": "Advanced Tables"
             }
           }
         ],
@@ -187,11 +198,11 @@
       }
     ],
     "direction": "horizontal",
-    "width": 200
+    "width": 232.5
   },
   "left-ribbon": {
     "hiddenItems": {
-      "bases:创建新数据库": false,
+      "bases:新建数据库": false,
       "switcher:打开快速切换": false,
       "graph:查看关系图谱": false,
       "canvas:新建白板": false,
@@ -201,56 +212,58 @@
       "markdown-importer:打开 Markdown 格式转换器": false,
       "obsidian-excalidraw-plugin:新建绘图文件": false,
       "obsidian-kanban:创建新看板": false,
-      "mermaid-tools:Open Mermaid Toolbar": false
+      "mermaid-tools:Open Mermaid Toolbar": false,
+      "mp-preview:打开公众号预览": false,
+      "media-sync:Media sync": false,
+      "table-editor-obsidian:Advanced Tables Toolbar": false
     }
   },
-  "active": "3f0d2850670d8f22",
+  "active": "5c8b7f1f1f2346fa",
   "lastOpenFiles": [
-    "containerd/Dockerfile.md",
-    "containerd/docker.md",
-    "containerd/network.md",
-    "containerd/attachments/Pasted image 20251104223920.png",
-    "Excalidraw/CNI.excalidraw.md",
-    "Excalidraw/linux内核网络.excalidraw.md",
-    "calico/calico架构.md",
-    "calico/calico.md",
-    "k8s/prometheus/prometheus.md",
-    "k8s/prometheus/node-exporter.md",
-    "k8s/prometheus/kube_state_metirc.md",
-    "k8s/prometheus/kube_prometheus.md",
-    "k8s/prometheus/demo/yaml/prometheus2/prometheus.yml",
-    "k8s/prometheus/demo/yaml/prometheus1/prometheus.yml",
-    "k8s/prometheus/demo/yaml/prometheus/prometheus.yml",
-    "k8s/prometheus/demo/yaml/blackbox/blackbox.yml",
-    "k8s/prometheus/demo/yaml/prometheus2",
-    "k8s/prometheus/demo/yaml/prometheus1",
-    "k8s/prometheus/demo/yaml/prometheus",
-    "k8s/prometheus/demo/yaml/blackbox",
-    "k8s/prometheus/demo/yaml",
-    "k8s/prometheus/demo/stop.sh",
-    "k8s/prometheus/alertmanager.md",
-    "calico/calicoctl.md",
-    "containerd/attachments/Pasted image 20250205113558.png",
-    "containerd/attachments/image-2025-02-18-11-16-04-661.png",
-    "containerd/attachments/image-2025-01-20-21-23-37-300.png",
-    "containerd/attachments/image-2025-02-13-16-21-04-695.png",
-    "containerd/attachments/image-2025-02-13-16-33-15-861.png",
-    "containerd/attachments/c750a7795ff4787c6639dd42bf0a473f.png",
-    "containerd/containerd.md",
-    "containerd/OverlayFS.md",
-    "go/go_module.md",
-    "go/go.md",
-    "middleware/nginx.md",
-    "k8s/prometheus.md",
-    "k8s/kube_state_metirc.md",
-    "k8s/kube_prometheus.md",
-    "k8s/ingress.md",
-    "k8s/kubernetes_rbac.md",
-    "k8s/kubernetes_security.md",
-    "k8s/kubernetes_storage.md",
-    "k8s/kubernetes_network.md",
-    "linux/attachments/Pasted image 20250911225411.png",
-    "k8s/attachments/Pasted image 20250805111221.png",
-    "k8s/attachments/Pasted image 20250805111001.png"
+    "attachments/2026/09/20/172540/71280.pdf",
+    "attachments/2026/09/20/172540/71280.pdf.md",
+    "attachments/2026/09/20/172540/11111.pdf",
+    "k8s/envoy/envoy.md",
+    "attachments/2026/09/20/172541/53024.pdf.md",
+    "attachments/2026/09/20/172541/53024.pdf",
+    "attachments/2026/09/20/172541/27915.pdf.md",
+    "attachments/2026/09/20/172541/27915.pdf",
+    "attachments/2026/09/20/172541",
+    "attachments/2026/09/20/172540/06269.pdf.md",
+    "attachments/2026/09/20/172540/06269.pdf",
+    "attachments/2026/09/20/172540/11111.pdf.md",
+    "attachments/2026/09/20/172540/20824.pdf.md",
+    "attachments/2026/09/20/172540/20824.pdf",
+    "attachments/2026/09/20/172540/33207.pdf.md",
+    "attachments/2026/09/20/172540/33207.pdf",
+    "attachments/2026/09/20/172540/31312.pdf.md",
+    "attachments/2026/09/20/172540/31312.pdf",
+    "attachments/2026/09/20/172540/67291.pdf.md",
+    "attachments/2026/09/20/172540/67291.pdf",
+    "attachments/2026/09/20/172539/90522.pdf.md",
+    "attachments/2026/09/20/172539/75725.pdf.md",
+    "attachments/2026/09/20/172539/41530.pdf.md",
+    "attachments/2026/09/20/172539/25771.pdf.md",
+    "attachments/2026/09/20/172539/79556.pdf.md",
+    "attachments/2026/09/20/172539/44210.pdf.md",
+    "attachments/2026/09/20/172539/55925.pdf.md",
+    "attachments/2026/09/20/172539/06918.pdf.md",
+    "attachments/2026/09/20/172538/68137.pdf.md",
+    "attachments/2026/09/20/172538/87765.pdf.md",
+    "attachments/2026/09/20/172538/38014.pdf.md",
+    "attachments/2026/09/20/172538/71037.pdf.md",
+    "attachments/2026/09/20/172538/79565.pdf.md",
+    "attachments/2026/09/20/172538/14306.pdf.md",
+    "attachments/2026/09/20/172537/06638.pdf.md",
+    "k8s/attachments/HPA-CFL2sKLt.svg",
+    "k8s/attachments/image-2024-12-17-17-29-46-647.png",
+    "k8s/calico/attachments/Pasted image 20260909173803.png",
+    "k8s/calico/attachments/Pasted image 20260909173623.png",
+    "k8s/calico/attachments/Pasted image 20250912173841.png",
+    "k8s/calico/attachments/image-2025-01-23-20-07-26-827.png",
+    "k8s/calico/attachments/image-2025-01-23-19-36-07-020.png",
+    "k8s/calico/attachments/image-2025-01-23-19-29-59-234.png",
+    "calico/attachments/Pasted image 20251115170352.png",
+    "calico/attachments/Pasted image 20251115170349.png"
   ]
 }

@@ -3523,7 +3523,7 @@ RDMA 网络的协议实现有三类，它们的含义及区别如下。
 
 目前，大多数数据中心采用 DCQCN（由微软与 Mellanox 提出）或 HPCC（由阿里巴巴提出）算法，为 RoCE 网络提供可靠性保障。由于这些算法涉及底层技术，超出本书讨论范畴，感兴趣的读者可参考其他资料以进一步了解。
 
-[https://www.usenix.org/system/files/nsdi23-bai.pdf](https://www.usenix.org/system/files/nsdi23-bai.pdf)
+[./attachments/2026/09/20/170553/05370.pdf](./attachments/2026/09/20/170553/81153.pdf)
 
 ## 网络命名空间
 从 Linux 内核 2.4.19 版本开始，逐步集成了多种命名空间技术，以实现对各类资源的隔离。其中，网络命名空间（Network Namespace）是最为关键的一种，也是容器技术的核心。

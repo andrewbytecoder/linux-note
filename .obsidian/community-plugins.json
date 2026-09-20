@@ -9,5 +9,8 @@
   "mp-preview",
   "obsidian-plantuml",
   "editing-toolbar",
-  "media-sync"
+  "media-sync",
+  "table-editor-obsidian",
+  "obsidian-icon-folder",
+  "highlightr-plugin"
 ]

@@ -64,7 +64,7 @@ ZooKeeper 有和 Paxos 非常相似的一些特征，比如领导选举、提案
 
 
 
-[raft算法实现论文](chrome-extension://efaidnbmnnnibpcajpcglclefindmkaj/https://raft.github.io/raft.pdf)
+[raft算法实现论文](chrome-extension://efaidnbmnnnibpcajpcglclefindmkaj/./attachments/2026/09/20/170757/24538.pdf)
 [thesecretlivesofdata动画演示](https://thesecretlivesofdata.com/raft/)
 [raft.github各种实现搜集](https://raft.github.io/)
 [kanaka.github数据同步演示](https://kanaka.github.io/raft.js/)
@@ -73,7 +73,7 @@ ZooKeeper 有和 Paxos 非常相似的一些特征，比如领导选举、提案
 ### Gossip 协议
 Gossip 算法也是 Cassandra 使用的数据复制协议。这个协议就像八卦和谣言传播一样，可以 “一传十、十传百”传播开来。但是这个协议看似简单，细节上却非常麻烦。
 
-[Efficient Reconciliation and Flow Control for Anti-Entropy Protocols](chrome-extension://efaidnbmnnnibpcajpcglclefindmkaj/https://www.cs.cornell.edu/home/rvr/papers/flowgossip.pdf)
+[Efficient Reconciliation and Flow Control for Anti-Entropy Protocols](chrome-extension://efaidnbmnnnibpcajpcglclefindmkaj/./attachments/2026/09/20/170757/91285.pdf)
 
 
 
@@ -99,7 +99,7 @@ Cloud Spanner 为代表）等知识点
 ## 附录
 
 [allthingsdistributed搜集和分布式系统相关的事件和论文](https://www.allthingsdistributed.com/)
-[Spanner: Google’s Globally-Distributed Database](chrome-extension://efaidnbmnnnibpcajpcglclefindmkaj/https://static.googleusercontent.com/media/research.google.com/zh-CN//archive/spanner-osdi2012.pdf)
+[Spanner: Google’s Globally-Distributed Database](chrome-extension://efaidnbmnnnibpcajpcglclefindmkaj/./attachments/2026/09/20/170757/24578.pdf)
 目前，基于 Spanner 论文的开源实现有两个，一个是 Google 公司自己的人出来做的CockroachDB，另一个是国人做的TiDB
 
 [Distributed Systems for fun and profit](https://book.mixu.net/distsys/single-page.html)
