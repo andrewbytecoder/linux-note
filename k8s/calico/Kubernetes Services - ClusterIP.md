@@ -337,69 +337,78 @@ ClusterIP 服务 `nginx-service` -> VIP `10.96.102.172:80`  Endpoints： `192.16
 |`KUBE-SEP-<hash>`|每个后端 Pod 的子链，执行 DNAT 将目标地址改为 Pod IP:Port；hairpin 场景下对源 IP 打 MASQ 标记|
 |`MASQ/SNAT`|将源 IP 改写为 Node IP，保证 Pod 回包经过 Node 转发回客户端，避免连接中断|
 
-## ipset
-
-实际生产场景中可能使用的是ipset模式
-
+## 新版本的calico网络策略使用nftables命令iptalbes-nft进行管理
 ```bash
-#  iptables -t nat -S KUBE-SERVICES 
--N KUBE-SERVICES
--A KUBE-SERVICES -s 127.0.0.0/8 -j RETURN
--A KUBE-SERVICES ! -s 10.224.0.0/11 -m comment --comment "Kubernetes service cluster ip + port for masquerade purpose" -m set --match-set KUBE-CLUSTER-IP dst,dst -j KUBE-MARK-MASQ
--A KUBE-SERVICES -m addrtype --dst-type LOCAL -j KUBE-NODE-PORT
--A KUBE-SERVICES -m set --match-set KUBE-CLUSTER-IP dst,dst -j ACCEPT
-```
-它看起来规则很少，但其实背后隐藏了所有的 Service 流量处理逻辑。
-
-### 逐行解读
-
-```
--N KUBE-SERVICES
-```
-
-- **含义**：新建一个名为 `KUBE-SERVICES` 的自定义链（Chain）。这是所有 Service 流量的总入口。
-
-```
--A KUBE-SERVICES -s 127.0.0.0/8 -j RETURN
+[root@k8smaster-ims ~]# iptables-nft -t nat -L KUBE-SERVICES -n -v
+Chain KUBE-SERVICES (2 references)
+ pkts bytes target     prot opt in     out     source               destination  
+# localhost流量直接放行     
+    7   420 RETURN     all  --  *      *       127.0.0.0/8          0.0.0.0/0          
+# 外部流量访问Service做SNAT标记 
+# 给包打标记（`0x4000/0x4000`），后续 POSTROUTING 链看到这个标记就做 SNAT
+    0     0 KUBE-MARK-MASQ  all  --  *      *      !10.224.0.0/11        0.0.0.0/0            /* Kubernetes service cluster ip + port for masquerade purpose */ match-set KUBE-CLUSTER-IP dst,dst
+# NodePort类型访问集群，跳转到 KUBE-NODE-PORT chain，里面按目的端口分发到具体 Service
+   67  5724 KUBE-NODE-PORT  all  --  *      *       0.0.0.0/0            0.0.0.0/0            ADDRTYPE match dst-type LOCAL
+# ClusterIP 流量放行（DNAT 之前的最终匹配）
+# ACCEPT 接受该包，让后续 nat 表的 DNAT 规则生效
+# 目的 IP:Port 是 Service ClusterIP
+   38  3984 ACCEPT     all  --  *      *       0.0.0.0/0            0.0.0.0/0            match-set KUBE-CLUSTER-IP dst,dst
 ```
 
-- **含义**：如果流量源 IP 是 `127.0.0.0/8`（本机回环地址），直接返回（不做任何处理）。这是为了不干扰本机的 localhost 访问。
-
-```
--A KUBE-SERVICES ! -s 10.224.0.0/11 -m comment --comment "Kubernetes service cluster ip + port for masquerade purpose" -m set --match-set KUBE-CLUSTER-IP dst,dst -j KUBE-MARK-MASQ
-```
-
-- **这是最关键的一条规则（核心优化点）**。
-- **含义**：
-    - `! -s 10.224.0.0/11`：**源 IP 不是 Pod 网段**（即外部流量或非集群内 Pod 流量）。
-    - `-m set --match-set KUBE-CLUSTER-IP dst,dst`：**目的地址是 ClusterIP**（这里没有直接写死 IP，而是去查一个叫 `KUBE-CLUSTER-IP` 的 ipset 集合）。
-    - `-j KUBE-MARK-MASQ`：如果命中上面条件，跳转到 `KUBE-MARK-MASQ` 链打标记（为了后续做 SNAT/MASQUERADE）。
-- **为什么规则这么少？**​ 因为**所有 ClusterIP 都被打包放进了 `KUBE-CLUSTER-IP` 这个 ipset 里**。不管你建了 10 个还是 1000 个 Service，这里永远只需要这一条规则来匹配“所有 ClusterIP”。
-
-```
--A KUBE-SERVICES -m addrtype --dst-type LOCAL -j KUBE-NODE-PORT
+表头含义
+```bash
+pkts  bytes  target     prot  opt  in     out    source               destination
 ```
 
-- **含义**：如果目的地址是本机的非 ClusterIP（比如 NodePort 或 HostNetwork），跳转到 `KUBE-NODE-PORT` 链处理。
-
+|**<br><br>字段<br><br>**|**<br><br>含义<br><br>**|
+|---|---|
+|`pkts`|命中该规则的**数据包个数**（计数器）|
+|`bytes`|命中该规则的**总字节数**（计数器）|
+|`target`|匹配后执行的**动作**（跳转到哪个 chain / 做什么处理）|
+|`prot`|匹配的**协议**（tcp/udp/icmp/`all` 表示不限）|
+|`opt`|IP 选项匹配（通常为空，或显示 `!` 取反）|
+|`in`|**入接口**（包从哪个网卡进来，`*` 表示不限）|
+|`out`|**出接口**（nat 表 PREROUTING 链里这个字段无意义，总是 `*`）|
+|`source`|**源 IP 范围**​|
+|`destination`|**目的 IP 范围**​|
+```bash
+包进入 nat 表 PREROUTING / OUTPUT
+                              ↓
+                        KUBE-SERVICES
+                              ↓
+        ┌─────────┬────────────┼────────────────┬──────────────┐
+        ↓         ↓            ↓                ↓              ↓
+   源=lo      外部源+        目的=           目的=          其他
+   RETURN   ClusterIP    LOCAL IP            ClusterIP      (不匹配任何)
+   (跳过)   MARK-MASQ   NODE-PORT           ACCEPT         (隐式 RETURN)
+              ↓              ↓                  ↓
+          POSTROUTING    KUBE-NODE-PORT    KUBE-SVC-xxx
+          SNAT           按端口跳            DNAT→PodIP
 ```
--A KUBE-SERVICES -m set --match-set KUBE-CLUSTER-IP dst,dst -j ACCEPT
+
+
+### 查看 Service->Pod 映射
+```bash
+[root@k8smaster-ims ~]# ipvsadm -Ln 
+# IPVS内核模块版本号， size 4096 IPVS 哈希表大小，表示 IPVS 内部虚拟服务表的基础桶数量
+IP Virtual Server version 1.2.1 (size=4096)
+#  Prot 类型 如TCP UDP
+# LocalAddress:Port 虚拟服务地址（VIP:Port）,在k8s中对应Service的ClusterIP:端口
+# rr 轮询算法
+# Flags 附加标志，如persistent表示开启了持久连接
+# RemoteAddress:Port 后端真实服务器地址（RIP:Port），在k8s中对应Pod IP:端口 
+# Forward 转发模式： Masq=NAT模式，Route=DR直连路由，Tun=IP隧道
+# Weight 后端服务器权重，值月到分配到的请求越多，0表示不接受新的请求
+# ActiveConn 活跃连接数，即当处于TCP ESTABLISHED状态的连接
+# InActConn 非活跃连接数，即除ESTABLISHED外的其他状态连接数（如：SYN_RECV, TIME_WAIT, CLOSE_WAIT, FIN_WAIT）
+Prot LocalAddress:Port Scheduler Flags
+  -> RemoteAddress:Port           Forward Weight ActiveConn InActConn
+TCP  10.96.0.1:443 rr
+  -> 10.168.8.107:6443            Masq    1      14         0         
+TCP  10.96.0.10:53 rr
+  -> 10.250.40.0:53               Masq    1      0          0     
+TCP  10.96.1.114:8080 rr persistent 10800
+  -> 10.250.40.42:8080            Masq    1      0          0         
 ```
 
-- **含义**：如果目的是 ClusterIP，直接 ACCEPT（接受）。
-- **注意**：这里的 ACCEPT 并不是终点。它意味着“匹配到了 Service，具体的 DNAT 转发逻辑在后续的链（KUBE-SVC-xxx）里”。在 iptables 的 filter 表中 ACCEPT 是放行，但在 nat 表中，如果没有后续的 DNAT，流量其实还没真正到达 Pod。这里的逻辑是：先 ACCEPT 进入 Service 处理流程，由 kube-proxy 安装的其他规则完成 DNAT。
 
-### 总结：为什么“只有这一个”？
-
-你看到的不是“只有一个规则”，而是“一个总入口”**。
-
-1. **聚合匹配**：通过 `ipset`（`KUBE-CLUSTER-IP`），把所有 Service 的 IP 打包在一起，用一条规则 `-m set ...` 全部匹配出来。
-2. **分流处理**：
-    - 如果是外部流量访问 ClusterIP → 打标记（为了 MASQ）。
-    - 如果是 NodePort 流量 → 交给 NodePort 链。
-    - 如果是 ClusterIP 流量 → ACCEPT（进入后续的负载均衡链）。
-
-
-**简单一句话：**
-
-> 这是 Kubernetes 为了提升大规模集群性能，用 `ipset` 把所有 Service IP 打包，实现了“一条规则管所有 Service”的优化手段。
