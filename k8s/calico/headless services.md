@@ -305,6 +305,129 @@ spec:
 
 ## 环境检查
 
+### 检查containerlab topo结构
+```bash
+> containerlab inspect -t headless-services.clab.yaml
+22:09:39 INFO Parsing & checking topology file=headless-services.clab.yaml
+╭─────────────────────────────────┬──────────────────────┬─────────┬───────────────────────╮
+│               Name              │      Kind/Image      │  State  │     IPv4/6 Address    │
+├─────────────────────────────────┼──────────────────────┼─────────┼───────────────────────┤
+│ headless-services-control-plane │ k8s-kind             │ running │ 172.18.0.3            │
+│                                 │ kindest/node:v1.35.0 │         │ fc00:f853:ccd:e793::3 │
+├─────────────────────────────────┼──────────────────────┼─────────┼───────────────────────┤
+│ headless-services-worker        │ k8s-kind             │ running │ 172.18.0.2            │
+│                                 │ kindest/node:v1.35.0 │         │ fc00:f853:ccd:e793::2 │
+├─────────────────────────────────┼──────────────────────┼─────────┼───────────────────────┤
+│ headless-services-worker2       │ k8s-kind             │ running │ 172.18.0.4            │
+│                                 │ kindest/node:v1.35.0 │         │ fc00:f853:ccd:e793::4 │
+╰─────────────────────────────────┴──────────────────────┴─────────┴───────────────────────╯
+```
+
+### 检查pods和services
+查看pod是否都正常运行
+```bash
+> kubectl get pod -o wide
+NAME                                READY   STATUS    RESTARTS   AGE     IP                NODE                              NOMINATED NODE   READINESS GATES
+multitool-krrjl                     1/1     Running   0          7m42s   192.168.112.194   headless-services-control-plane   <none>           <none>
+multitool-kw6jr                     1/1     Running   0          7m42s   192.168.60.201    headless-services-worker          <none>           <none>
+multitool-z2rs2                     1/1     Running   0          7m42s   192.168.140.4     headless-services-worker2         <none>           <none>
+nginx-deployment-5cccd4ffd4-s9cf5   1/1     Running   0          7m42s   192.168.140.3     headless-services-worker2         <none>           <none>
+nginx-deployment-5cccd4ffd4-v6zrx   1/1     Running   0          7m42s   192.168.60.200    headless-services-worker          <none>           <none>
+redis-0                             1/1     Running   0          7m42s   192.168.140.2     headless-services-worker2         <none>           <none>
+redis-1                             1/1     Running   0          7m34s   192.168.60.202    headless-services-worker          <none>           <none>
+redis-2                             1/1     Running   0          7m25s   192.168.112.195   headless-services-control-plane   <none>           <none>
+```
+
+- `redis-0`: Master主节点，主要负责数据复制(接受数据写入操作)，并将数据复制至 `redis-1`和`redis-2`
+- `redis-1,redis-2`: 这些服务通过无主服务DNS机制与`redis-0`连接在一起
+- `nginx-deployment-*`: 带有随机后缀名的deployment容器
+- multitool: 在每个节点上用于测试的容器
+
+```bash
+> kubectl get statefulsets.apps
+NAME    READY   AGE
+redis   3/3     26m
+```
+- 可以看到 `READY: 3/3` 说明 redis statefulSet的所有3个实例都已经运行
+- StatefulSet确保Pod按照顺序排列创建(redis-0->redis-1->redis-2)，并维持了稳定的身份标识。
+
+```bash
+> kubectl get svc
+NAME              TYPE        CLUSTER-IP     EXTERNAL-IP   PORT(S)    AGE
+kubernetes        ClusterIP   10.96.0.1      <none>        443/TCP    29m
+nginx-clusterip   ClusterIP   10.96.10.236   <none>        80/TCP     26m
+nginx-headless    ClusterIP   None           <none>        80/TCP     26m
+redis-headless    ClusterIP   None           <none>        6379/TCP   26m
+```
+
+- `nginx-clusterip`: 具有VIP的常规ClusterIP服务。
+- `nginx-headless`: 用于Deployment类型服务的无头服务(`ClusterIP: None`)
+- `redis-headless`: 适用于statefulSet类型服务的无头服务(`ClusterIP: None`)
+
+## 对比 ClusterIP 和 Headless Service 的 DNS解析方式
+进入到multitool来进行DNS解析功能测试
+
+```bash
+> kubectl get pods -l app=multitool -o wide
+NAME              READY   STATUS    RESTARTS   AGE   IP                NODE                              NOMINATED NODE   READINESS GATES
+multitool-krrjl   1/1     Running   0          39m   192.168.112.194   headless-services-control-plane   <none>           <none>
+multitool-kw6jr   1/1     Running   0          39m   192.168.60.201    headless-services-worker          <none>           <none>
+multitool-z2rs2   1/1     Running   0          39m   192.168.140.4     headless-services-worker2         <none>           <none>
+> kubectl exec -it multitool-krrjl -- sh
+/ # 
+```
+
+### 常规ClusterIP服务的DNS
+
+```bash
+> kubectl exec -it multitool-krrjl -- sh
+/ # dig +search nginx-clusterip
+
+; <<>> DiG 9.16.20 <<>> +search nginx-clusterip
+;; global options: +cmd
+;; Got answer:
+;; WARNING: .local is reserved for Multicast DNS
+;; You are currently testing what happens when an mDNS query is leaked to DNS
+;; ->>HEADER<<- opcode: QUERY, status: NOERROR, id: 63103
+;; flags: qr aa rd; QUERY: 1, ANSWER: 1, AUTHORITY: 0, ADDITIONAL: 1
+;; WARNING: recursion requested but not available
+
+;; OPT PSEUDOSECTION:
+; EDNS: version: 0, flags:; udp: 4096
+; COOKIE: 7f8ed760a0f79e51 (echoed)
+;; QUESTION SECTION:
+;nginx-clusterip.default.svc.cluster.local. IN A
+
+;; ANSWER SECTION:
+nginx-clusterip.default.svc.cluster.local. 30 IN A 10.96.10.236
+
+;; Query time: 42 msec
+;; SERVER: 10.96.0.10#53(10.96.0.10)
+;; WHEN: Tue Oct 13 14:44:14 UTC 2026
+;; MSG SIZE  rcvd: 139
+
+```
+
+- 返回VIP地址(`10.96.10.236`)
+- kube-proxy负责将负载均衡到后端容器
+- 无论副本数量多少，客户端只能看到一个IP地址
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
