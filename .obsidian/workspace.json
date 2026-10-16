@@ -142,7 +142,7 @@
             "state": {
               "type": "outline",
               "state": {
-                "file": "linux/常用英文发音.md",
+                "file": "k8s/calico/ppt/pod-network.html",
                 "followCursor": false,
                 "showSearch": false,
                 "searchQuery": ""
@@ -160,14 +160,23 @@
               "icon": "eye",
               "title": "公众号预览"
             }
+          },
+          {
+            "id": "93020730b870d35c",
+            "type": "leaf",
+            "state": {
+              "type": "mermaid-toolbar-view",
+              "state": {},
+              "icon": "trident-custom",
+              "title": "Mermaid Toolbar"
+            }
           }
         ],
-        "currentTab": 3
+        "currentTab": 2
       }
     ],
     "direction": "horizontal",
-    "width": 517.5,
-    "collapsed": true
+    "width": 517.5
   },
   "left-ribbon": {
     "hiddenItems": {
@@ -188,8 +197,9 @@
   },
   "active": "65777e8b1cc7be1b",
   "lastOpenFiles": [
-    "k8s/calico/ppt/pod-network.html",
     "k8s/calico/ppt/Calico_IPAM.html",
+    "k8s/calico/ppt/pod-network.html",
+    "k8s/calico/calicoctl.md",
     "k8s/calico/ppt/images/pod-network.png",
     "k8s/calico/ppt/images",
     "k8s/calico/ppt/新建文件夹",
@@ -231,7 +241,6 @@
     "k8s/calico/attachments/Pasted image 20260925173154.png",
     "k8s/calico/attachments/Pasted image 20260924233513.png",
     "k8s/calico/attachments/Pasted image 20260924133713.png",
-    "k8s/calico/attachments/kubernetes-icons.excalidrawlib",
-    "k8s/calico/Pod Routing Across Nodes 跨节点的Pod路由.md"
+    "k8s/calico/attachments/kubernetes-icons.excalidrawlib"
   ]
 }

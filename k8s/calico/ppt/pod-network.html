@@ -170,7 +170,7 @@ td{padding:8px 15px;border:1px solid var(--bd);color:#d4dde8;font-size:.88rem}
 <section class="slide" data-title="整体架构" data-notes="这张 pod-network.png 展示整体 Pod 网络架构：Pod 各自 netns，通过 veth 连到宿主机，宿主机之间再由 Calico 路由串起来。强调：每个 Pod 一个 netns、一个 eth0、一个 /32 IP。">
   <h2><span class="n">02</span>整体长什么样？</h2>
   <p class="sub">Pod Network Architecture —— 每个 Pod 一个独立小世界，再连到主机</p>
-  <img class="shot" src="images/pod-network.png" alt="Pod Network Architecture">
+  <img class="shot" src="https://raw.githubusercontent.com/aadhilam/k8-networking-calico-containerlab/master/images/pod-network.png" alt="Pod Network Architecture">
   <div class="grid g3" style="max-width:880px">
     <div class="card"><div class="t">独立 netns</div><div class="d">每个 Pod 一个网络命名空间，互相看不见</div></div>
     <div class="card"><div class="t">专属 eth0</div><div class="d">每个 Pod 有自己的 <code>eth0</code> 和唯一 <code>/32</code> IP</div></div>
