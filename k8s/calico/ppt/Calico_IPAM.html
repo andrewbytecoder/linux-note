@@ -1,0 +1,479 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Calico IPAM — 交互式演讲</title>
+<style>
+  :root{
+    --bg:#0d1117; --bg2:#161b22; --fg:#e6edf3; --dim:#8b949e;
+    --acc:#58a6ff; --acc2:#3fb950; --warn:#d29922; --purple:#bc8cff;
+    --code:#0b0f14; --border:#30363d;
+    --mono:'JetBrains Mono',Consolas,'Courier New',monospace;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{height:100%}
+  body{
+    background:var(--bg); color:var(--fg);
+    font-family:-apple-system,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif;
+    overflow:hidden;
+  }
+  /* 进度条 */
+  #bar{position:fixed;top:0;left:0;height:3px;background:linear-gradient(90deg,var(--acc),var(--purple));
+    z-index:100;transition:width .3s ease;box-shadow:0 0 8px var(--acc)}
+  /* 幻灯片容器 */
+  #deck{position:absolute;inset:0}
+  .slide{
+    position:absolute;inset:0;display:none;flex-direction:column;
+    justify-content:center;padding:60px 7vw;overflow-y:auto;
+    animation:fade .35s ease;
+  }
+  .slide.active{display:flex}
+  @keyframes fade{from{opacity:0;transform:translateY(12px)}to{opacity:1;transform:none}}
+  h1{font-size:clamp(2.2rem,5vw,4rem);font-weight:800;letter-spacing:-1px;
+    background:linear-gradient(90deg,#58a6ff,#bc8cff);-webkit-background-clip:text;
+    background-clip:text;color:transparent;line-height:1.15}
+  h2{font-size:clamp(1.5rem,3vw,2.3rem);color:var(--acc);margin-bottom:8px;font-weight:700}
+  h2 .num{color:var(--dim);font-family:var(--mono);font-size:.6em;margin-right:10px}
+  h3{font-size:1.15rem;color:var(--purple);margin:18px 0 8px}
+  p,li{font-size:clamp(.95rem,1.35vw,1.18rem);line-height:1.75;color:#c9d1d9}
+  ul{margin-left:1.3em;margin-top:10px} li{margin:9px 0}
+  .sub{color:var(--dim);font-size:1.05rem;margin-top:6px}
+  code{font-family:var(--mono);background:var(--bg2);padding:2px 7px;border-radius:5px;
+    color:var(--acc2);font-size:.92em;border:1px solid var(--border)}
+  /* 代码块 */
+  .term{background:var(--code);border:1px solid var(--border);border-radius:10px;
+    margin:14px 0;overflow:hidden;max-width:100%}
+  .term-bar{background:#21262d;padding:7px 14px;display:flex;align-items:center;gap:7px;
+    border-bottom:1px solid var(--border)}
+  .dot{width:11px;height:11px;border-radius:50%}
+  .d1{background:#ff5f56}.d2{background:#ffbd2e}.d3{background:#27c93f}
+  .term-title{color:var(--dim);font-family:var(--mono);font-size:.78rem;margin-left:8px}
+  pre{font-family:var(--mono);background:var(--code);color:#e6edf3;padding:16px 18px;
+    overflow-x:auto;font-size:.87rem;line-height:1.65;white-space:pre}
+  .cmt{color:#6a737d}.out{color:#8b949e}.hl{color:var(--acc2)}.cmd{color:var(--acc)}
+  .kw{color:#ff7b72}.str{color:#a5d6ff}
+  .copy{position:absolute;right:10px;top:38px;background:#21262d;border:1px solid var(--border);
+    color:var(--dim);padding:4px 10px;border-radius:5px;cursor:pointer;font-size:.72rem;font-family:var(--mono)}
+  .copy:hover{color:var(--acc);border-color:var(--acc)}
+  /* 表格 */
+  table{border-collapse:collapse;margin:14px 0;font-size:.92rem;min-width:60%}
+  th{background:#21262d;color:var(--acc);padding:10px 16px;text-align:left;
+    border:1px solid var(--border);font-family:var(--mono);font-size:.85rem}
+  td{padding:9px 16px;border:1px solid var(--border);color:#c9d1d9;font-family:var(--mono);font-size:.85rem}
+  tr:nth-child(even) td{background:rgba(255,255,255,.02)}
+  /* 卡片网格 */
+  .grid{display:grid;gap:16px;margin-top:18px}
+  .g2{grid-template-columns:repeat(auto-fit,minmax(300px,1fr))}
+  .g3{grid-template-columns:repeat(auto-fit,minmax(230px,1fr))}
+  .card{background:var(--bg2);border:1px solid var(--border);border-radius:12px;
+    padding:18px 20px;transition:.25s;cursor:default}
+  .card:hover{border-color:var(--acc);transform:translateY(-3px);box-shadow:0 8px 24px rgba(88,166,255,.12)}
+  .card .t{color:var(--acc);font-weight:700;font-size:1.05rem;margin-bottom:6px}
+  .card .d{color:var(--dim);font-size:.9rem;line-height:1.6}
+  .card .big{font-family:var(--mono);font-size:1.5rem;color:var(--acc2);margin:6px 0}
+  /* 节点块分配交互 */
+  .node{background:var(--bg2);border:2px solid var(--border);border-radius:12px;
+    padding:16px;text-align:center;cursor:pointer;transition:.3s}
+  .node:hover{border-color:var(--acc)}
+  .node.on{border-color:var(--acc2);box-shadow:0 0 0 3px rgba(63,185,80,.18);transform:scale(1.03)}
+  .node .n{font-family:var(--mono);font-size:.8rem;color:var(--dim);margin-bottom:8px}
+  .node .blk{font-family:var(--mono);font-size:1rem;color:var(--acc2);font-weight:700}
+  .node .sz{font-size:.75rem;color:var(--dim);margin-top:5px}
+  #allocHint{margin-top:16px;font-family:var(--mono);font-size:.9rem;
+    color:var(--warn);min-height:26px;text-align:center}
+  .btn{background:#21262d;border:1px solid var(--border);color:var(--fg);
+    padding:9px 18px;border-radius:8px;cursor:pointer;font-family:var(--mono);font-size:.85rem;
+    margin:12px 8px 0 0;transition:.2s}
+  .btn:hover{border-color:var(--acc2);color:var(--acc2)}
+  .btn:active{transform:scale(.96)}
+  /* HUD */
+  #hud{position:fixed;bottom:16px;right:20px;font-family:var(--mono);font-size:.76rem;
+    color:var(--dim);background:rgba(22,27,34,.85);padding:7px 13px;border-radius:8px;
+    border:1px solid var(--border);z-index:50}
+  #hud b{color:var(--acc)}
+  /* 备注面板 */
+  #notes{position:fixed;left:0;bottom:0;width:100%;max-height:40%;overflow:auto;
+    background:rgba(13,17,23,.97);border-top:2px solid var(--warn);padding:18px 30px;
+    display:none;z-index:80;font-size:.95rem;line-height:1.7}
+  #notes.on{display:block}
+  #notes .lbl{color:var(--warn);font-family:var(--mono);font-size:.75rem;
+    letter-spacing:2px;margin-bottom:8px}
+  /* 概览 */
+  #ov{position:fixed;inset:0;background:rgba(1,4,9,.96);z-index:90;display:none;
+    padding:50px 5vw;overflow-y:auto}
+  #ov.on{display:block}
+  #ov h3{color:var(--acc);margin-bottom:18px;font-family:var(--mono)}
+  .ovgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));gap:14px}
+  .ovitem{background:var(--bg2);border:1px solid var(--border);border-radius:8px;
+    padding:14px;cursor:pointer;transition:.2s}
+  .ovitem:hover{border-color:var(--acc);transform:scale(1.04)}
+  .ovitem.cur{border-color:var(--acc2);box-shadow:0 0 0 2px rgba(63,185,80,.3)}
+  .ovitem .i{font-family:var(--mono);font-size:.72rem;color:var(--dim)}
+  .ovitem .s{font-size:.88rem;color:#c9d1d9;margin-top:5px;font-weight:600}
+  /* 图片 */
+  .shot{max-width:min(900px,92%);border:1px solid var(--border);border-radius:12px;
+    margin:16px 0;background:#fff;display:block}
+  .tag{display:inline-block;background:rgba(88,166,255,.13);color:var(--acc);
+    padding:3px 11px;border-radius:20px;font-size:.76rem;font-family:var(--mono);
+    border:1px solid rgba(88,166,255,.3);margin-right:7px}
+  .warnbox{background:rgba(210,153,34,.08);border-left:3px solid var(--warn);
+    padding:13px 18px;margin:14px 0;border-radius:0 8px 8px 0;font-size:.95rem}
+  .warnbox b{color:var(--warn)}
+  .okbox{background:rgba(63,185,80,.08);border-left:3px solid var(--acc2);
+    padding:13px 18px;margin:14px 0;border-radius:0 8px 8px 0}
+  .flex{display:flex;gap:22px;flex-wrap:wrap;align-items:flex-start}
+  .arrow{color:var(--acc);font-family:var(--mono);font-size:1.5rem}
+</style>
+</head>
+<body>
+<div id="bar"></div>
+<div id="deck">
+
+<!-- 1 标题 -->
+<section class="slide" data-title="标题" data-notes="开场：Calico IPAM 是 Calico Labs 的 Lesson 01。实验在 3 节点 Kind 集群上展示 Calico 的 IP 地址管理。核心问题：每个 Pod 都需要唯一 IP。">
+  <div><span class="tag">Lesson 01</span><span class="tag">Calico Labs</span></div>
+  <h1>Calico IPAM</h1>
+  <p class="sub">IP Address Management —— Kubernetes 如何给每个 Pod 一个唯一的 IP</p>
+  <div class="term" style="max-width:520px;margin-top:26px">
+    <div class="term-bar"><span class="dot d1"></span><span class="dot d2"></span><span class="dot d3"></span>
+      <span class="term-title">calico-ipam — 3-node Kind cluster</span></div>
+    <pre><span class="cmt"># 本实验演示 Calico 的 IP 地址管理（IPAM）功能</span>
+<span class="cmt"># 环境：3 节点 Kind Kubernetes 集群</span>
+<span class="cmd">cd</span> /containerlab/01-calico-ipam</pre>
+  </div>
+  <div class="warnbox" style="max-width:640px">
+    <b>导航：</b> <code>←</code> / <code>→</code> 翻页 · <code>空格</code> 下一页 · <code>S</code> 演讲者备注 · <code>O</code> 概览 · <code>F</code> 全屏
+  </div>
+</section>
+
+<!-- 2 Overview -->
+<section class="slide" data-title="为什么需要 IPAM" data-notes="IPAM 之所以关键，有 4 个原因：1) Pod 频繁创建销毁，每个新 Pod 都需要可用 IP；2) 没有 IPAM 会重复分配导致冲突；3) 按块分配给节点，减少逐个请求的开销、提升扩展性；4) 跨节点通信需要可路由 IP 才能不经 NAT 直连。">
+  <h2><span class="num">01</span>为什么 IPAM 至关重要？</h2>
+  <p class="sub">Kubernetes 中每个 Pod 都需要唯一的 IP 地址才能与其他 Pod 和服务通信</p>
+  <div class="grid g2">
+    <div class="card"><div class="t">1 · 动态 Pod 创建</div>
+      <div class="d">Pod 是短暂的（ephemeral），被频繁创建和销毁。每个新 Pod 都需要从集群地址空间中获取一个可用 IP。</div></div>
+    <div class="card"><div class="t">2 · 避免 IP 冲突</div>
+      <div class="d">没有正确的 IPAM，多个 Pod 可能被分配相同的 IP，导致网络冲突和通信失败。</div></div>
+    <div class="card"><div class="t">3 · 高效地址分配</div>
+      <div class="d">IPAM 系统以「块」为单位向节点分配 IP 地址，减少逐个 IP 请求的开销，提升可扩展性。</div></div>
+    <div class="card"><div class="t">4 · 跨节点通信</div>
+      <div class="d">不同节点上的 Pod 需要集群内可路由的 IP，才能不经 NAT 直接通信——IPAM 通过合理的子网分配使之成为可能。</div></div>
+  </div>
+  <div class="okbox" style="max-width:820px;margin-top:20px">
+    Calico 的 IPAM 通过<b>向节点预分配 IP 块</b>来实现高效分配，在保持全集群地址管理的同时，实现快速的 Pod 启动。
+  </div>
+</section>
+
+<!-- 3 架构图 -->
+<section class="slide" data-title="IPAM 架构图" data-notes="这张图来自实验仓库：展示 IP 池（大 CIDR）如何被切分为较小的块，再绑定到具体节点。讲解时强调三层结构：IP Pool → IP Block → 单个 Pod IP。">
+  <h2><span class="num">02</span>Calico IPAM 架构</h2>
+  <p class="sub">IP Pool → IP Block → Pod IP：三层分配结构</p>
+  <img class="shot" src="https://raw.githubusercontent.com/aadhilam/k8-networking-calico-containerlab/master/images/calico-ipam-a.png" alt="Calico IPAM Architecture">
+  <div class="flex" style="margin-top:8px">
+    <div><span class="tag">IP Pool</span>大 CIDR（如 /16）</div>
+    <div class="arrow">→</div>
+    <div><span class="tag">IP Block</span>小子网（如 /26）</div>
+    <div class="arrow">→</div>
+    <div><span class="tag">Pod IP</span>块内具体地址</div>
+  </div>
+</section>
+
+<!-- 4 CNI 配置 -->
+<section class="slide" data-title="CIDR 选择" data-notes="默认 IP 池 CIDR 是 192.168.0.0/16，提供 65536 个地址。块大小 /26 = 每块 64 个 IP。选 CIDR 时必须避免与宿主机网络、Service CIDR(10.96.0.0/16)、已有 VPN 或企业网段重叠。/16 配合 /26 块约支持 1024 个节点。">
+  <h2><span class="num">03</span>默认 IP 池与 CIDR 选择</h2>
+  <p class="sub">来自 <code>custom-resources.yaml</code> 的 Calico Installation 配置</p>
+  <div class="grid g2">
+    <div class="card"><div class="t">默认 IP 池 CIDR</div>
+      <div class="big">192.168.0.0/16</div>
+      <div class="d">提供 65,536 个 IP 地址，足以支撑大规模集群</div></div>
+    <div class="card"><div class="t">块大小 Block Size</div>
+      <div class="big">/26 = 64 IPs</div>
+      <div class="d">以 /26 块为单位，按需分配给节点</div></div>
+  </div>
+  <h3>避免冲突 —— CIDR 不得与以下重叠</h3>
+  <ul>
+    <li>宿主机（host machine）网络</li>
+    <li>Kubernetes Service CIDR —— <code>10.96.0.0/16</code></li>
+    <li>任何已存在的 VPN 或企业网络网段</li>
+  </ul>
+  <div class="warnbox">
+    <b>规模换算：</b> <code>/16</code> 网段配合 <code>/26</code> 块 ≈ 可容纳 <b>1,024 个节点</b>（65536 ÷ 64），适用于大多数实验与生产环境。
+  </div>
+</section>
+
+<!-- 5 部署 -->
+<section class="slide" data-title="部署" data-notes="部署只需两行：给 deploy.sh 加执行权限然后运行。脚本会自动构建 3 节点 Kind 集群、安装 Calico 并验证组件状态。">
+  <h2><span class="num">04</span>部署实验环境</h2>
+  <p class="sub">实验目录：<code>/containerlab/01-calico-ipam</code></p>
+  <div class="term" style="max-width:600px">
+    <div class="term-bar"><span class="dot d1"></span><span class="dot d2"></span><span class="dot d3"></span>
+      <span class="term-title">bash</span></div>
+    <pre><span class="cmd">chmod +x</span> deploy.sh
+<span class="cmd">./deploy.sh</span></pre>
+  </div>
+  <div class="grid g3" style="max-width:900px">
+    <div class="card"><div class="t">ContainerLab 拓扑</div><div class="d">创建 3 节点 Kind 集群</div></div>
+    <div class="card"><div class="t">Calico 安装</div><div class="d">部署 Operator 与 Calico 组件</div></div>
+    <div class="card"><div class="t">验证</div><div class="d">等待所有 Calico 组件就绪</div></div>
+  </div>
+  <div class="warnbox" style="max-width:720px">
+    <b>Note：</b> 文档中的输出在你的实验里会不同。运行命令时请按你的环境替换 IP 地址、接口名和节点名。
+  </div>
+</section>
+
+<!-- 6 整体 IPAM 状态 -->
+<section class="slide" data-title="整体 IPAM 状态" data-notes="calicoctl ipam show 显示池的整体用量。这里 IP Pool 192.168.0.0/16，总共 65536，已用 10，剩余 65526。注意'已用'指已分配给 Pod 的地址。">
+  <h2><span class="num">05</span>整体 IPAM 状态</h2>
+  <p class="sub"><code>calicoctl ipam show</code></p>
+  <div class="term" style="max-width:760px">
+    <div class="term-bar"><span class="dot d1"></span><span class="dot d2"></span><span class="dot d3"></span>
+      <span class="term-title">calicoctl ipam show</span></div>
+    <pre><span class="out">+----------+-----------------+-----------+------------+---------------+</span>
+<span class="out">| GROUPING | CIDR            | IPS TOTAL | IPS IN USE | IPS FREE      |</span>
+<span class="out">+----------+-----------------+-----------+------------+---------------+</span>
+<span class="out">| IP Pool  | 192.168.0.0/16  |   <span class="hl">65536</span> |        <span class="hl">10</span> |        <span class="hl">65526</span> |</span>
+<span class="out">+----------+-----------------+-----------+------------+---------------+</span></pre>
+  </div>
+  <div class="grid g3" style="max-width:760px">
+    <div class="card"><div class="t">CIDR</div><div class="d">整体 Pod 网络网段 <code>192.168.0.0/16</code></div></div>
+    <div class="card"><div class="t">IPs TOTAL</div><div class="big">65,536</div><div class="d">池中可用地址总数</div></div>
+    <div class="card"><div class="t">IPs IN USE</div><div class="big">10</div><div class="d">当前已分配给 Pod 的地址</div></div>
+  </div>
+</section>
+
+<!-- 7 Block Affinities 列表 -->
+<section class="slide" data-title="块亲和性列表" data-notes="kubectl get blockaffinities 列出块亲和性。命名规则是 ipam-block-affinity-<块CIDR用横线>-<前缀长度>。每个条目代表一个 IPAM 块被分配给某个节点。Calico 按需分配 /26 块（每块 64 IP）。">
+  <h2><span class="num">06</span>块亲和性列表</h2>
+  <p class="sub"><code>kubectl get blockaffinities</code></p>
+  <div class="term" style="max-width:700px">
+    <div class="term-bar"><span class="dot d1"></span><span class="dot d2"></span><span class="dot d3"></span>
+      <span class="term-title">kubectl get blockaffinities</span></div>
+    <pre><span class="out">NAME                                     AGE</span>
+<span class="hl">ipam-block-affinity-192-168-0-64-26</span>      2m
+<span class="hl">ipam-block-affinity-192-168-1-64-26</span>      2m
+<span class="hl">ipam-block-affinity-192-168-2-0-26</span>       2m</pre>
+  </div>
+  <ul>
+    <li><b>BlockAffinity</b> 资源表示 IPAM 块到节点的分配关系</li>
+    <li>命名规则：<code>ipam-block-affinity-&lt;block-cidr-with-dashes&gt;-&lt;prefix-length&gt;</code></li>
+    <li>Calico 按需为每个节点分配 <code>/26</code> 块（每块 64 个 IP）</li>
+  </ul>
+</section>
+
+<!-- 8 详细 YAML -->
+<section class="slide" data-title="详细块亲和性" data-notes="看 YAML 详情：spec.cidr 是分配给节点的块；spec.node 是拥有该块的 K8s 节点；spec.state 为 confirmed 表示生效中，pending 表示分配进行中；spec.deleted 表示是否被标记删除。">
+  <h2><span class="num">07</span>详细块亲和性（YAML）</h2>
+  <p class="sub"><code>kubectl get blockaffinities -o yaml</code></p>
+  <div class="term" style="max-width:680px">
+    <div class="term-bar"><span class="dot d1"></span><span class="dot d2"></span><span class="dot d3"></span>
+      <span class="term-title">BlockAffinity</span></div>
+    <pre><span class="kw">apiVersion</span>: crd.projectcalico.org/v1
+<span class="kw">kind</span>: BlockAffinity
+<span class="kw">metadata</span>:
+  <span class="kw">name</span>: <span class="str">ipam-block-affinity-192-168-0-64-26</span>
+<span class="kw">spec</span>:
+  <span class="kw">cidr</span>: <span class="str">192.168.0.64/26</span>
+  <span class="kw">deleted</span>: <span class="kw">false</span>
+  <span class="kw">node</span>: <span class="str">calico-ipam-control-plane</span>
+  <span class="kw">state</span>: <span class="str">confirmed</span></pre>
+  </div>
+  <table>
+    <tr><th>字段</th><th>含义</th></tr>
+    <tr><td>spec.cidr</td><td>分配给节点的 IP 块，如 192.168.0.64/26</td></tr>
+    <tr><td>spec.node</td><td>拥有该 IP 块的 Kubernetes 节点</td></tr>
+    <tr><td>spec.state</td><td><code>confirmed</code>=已生效在用；<code>pending</code>=分配进行中</td></tr>
+    <tr><td>spec.deleted</td><td>该块是否被标记删除</td></tr>
+  </table>
+</section>
+
+<!-- 9 格式化输出 -->
+<section class="slide" data-title="格式化映射" data-notes="用 jsonpath 可以把 name / node / cidr 排成整齐的三列，清晰看出哪个块属于哪个节点。这是排查时最常用的一条命令。">
+  <h2><span class="num">08</span>格式化块亲和性映射</h2>
+  <p class="sub">用 jsonpath 输出「块 → 节点 → CIDR」清晰映射</p>
+  <div class="term" style="max-width:960px">
+    <div class="term-bar"><span class="dot d1"></span><span class="dot d2"></span><span class="dot d3"></span>
+      <span class="term-title">kubectl get blockaffinities -o=jsonpath=...</span></div>
+    <pre><span class="cmd">kubectl get blockaffinities -o=jsonpath='{range .items[*]}{.metadata.name}{"\t"}{.spec.node}{"\t"}{.spec.cidr}{"\n"}{end}'</span></pre>
+    <pre><span class="out">ipam-block-affinity-192-168-0-64-26    </span><span class="hl">calico-ipam-control-plane</span><span class="out">    192.168.0.64/26</span>
+<span class="out">ipam-block-affinity-192-168-1-64-26    </span><span class="hl">calico-ipam-worker</span><span class="out">          192.168.1.64/26</span>
+<span class="out">ipam-block-affinity-192-168-2-0-26     </span><span class="hl">calico-ipam-worker2</span><span class="out">         192.168.2.0/26</span></pre>
+  </div>
+  <div class="okbox" style="max-width:900px">
+    这份格式化输出清晰呈现了<b>哪个 IP 块被分配给哪个节点</b>，便于理解整个集群的 IP 分配情况。
+  </div>
+</section>
+
+<!-- 10 交互式块分配 -->
+<section class="slide" data-title="交互：块→节点分配" data-notes="这是可交互的一页：点击任意节点卡片查看它拿到的块；点击'模拟创建 Pod'可以从该节点所属的 /26 块里分配出一个 Pod IP——演示 Calico 如何在已分配的块内自动分配地址。数据取自实验实际的块亲和性。">
+  <h2><span class="num">09</span>交互演示：块 → 节点 → Pod IP</h2>
+  <p class="sub">下方节点卡片来自实验实际的块亲和性 —— <b>点击节点</b>查看，再点击按钮模拟 Pod 分配</p>
+  <div class="grid g3" style="max-width:820px" id="nodeGrid">
+    <div class="node" data-node="calico-ipam-control-plane" data-cidr="192.168.0.64/26">
+      <div class="n">control-plane</div><div class="blk">192.168.0.64/26</div><div class="sz">64 IPs</div></div>
+    <div class="node" data-node="calico-ipam-worker" data-cidr="192.168.1.64/26">
+      <div class="n">worker</div><div class="blk">192.168.1.64/26</div><div class="sz">64 IPs</div></div>
+    <div class="node" data-node="calico-ipam-worker2" data-cidr="192.168.2.0/26">
+      <div class="n">worker2</div><div class="blk">192.168.2.0/26</div><div class="sz">64 IPs</div></div>
+  </div>
+  <div>
+    <button class="btn" id="allocBtn">▶ 模拟创建 Pod（从选中节点的块内分配 IP）</button>
+    <button class="btn" id="resetBtn">↺ 重置</button>
+  </div>
+  <div id="allocHint">请点击上方任一节点开始…</div>
+  <div class="warnbox" style="max-width:760px">
+    <b>原理：</b> 当 Pod 被创建时，Calico IPAM 会在<b>该节点已分配的块内</b>自动分配一个 IP —— 无需每次向中心请求，这就是「预分配块」带来的速度优势。
+  </div>
+</section>
+
+<!-- 11 Pod IP 图 -->
+<section class="slide" data-title="Pod 与节点 IP" data-notes="这张图展示 Pod 的 IP 来自节点被分配的 CIDR 块。结合上一页交互：节点拿到 /26 块后，其上每个 Pod 从块内得到一个具体的 IP（以 /32 形式出现在 Pod 网卡上）。">
+  <h2><span class="num">10</span>Pod IP 来自节点的块</h2>
+  <img class="shot" src="https://raw.githubusercontent.com/aadhilam/k8-networking-calico-containerlab/master/images/calico-pod-ip-a.png" alt="Calico Pod IP">
+  <div class="okbox" style="max-width:820px">
+    每个 Pod 都被分配一个来自<b>所在节点 CIDR 块</b>的 IP（如 <code>192.168.93.200/32</code> 来自块 <code>192.168.93.0/26</code>）—— 这正是 Calico 按节点分配 IP 块以实现高效路由的体现。
+  </div>
+</section>
+
+<!-- 12 Summary -->
+<section class="slide" data-title="总结" data-notes="总结四个核心概念：IP Pools 是大 CIDR 定义整体地址空间；IP Blocks 是从池中切出的小子网并分配给节点；Block Affinity 是块与节点之间的分配关系；IPAM 在 Pod 创建时在已分配块内自动分配地址。">
+  <h2><span class="num">11</span>总结</h2>
+  <div class="grid g2">
+    <div class="card"><div class="t">IP Pools</div>
+      <div class="d">大 CIDR 网段（如 <code>192.168.0.0/16</code>），定义整体地址空间</div></div>
+    <div class="card"><div class="t">IP Blocks</div>
+      <div class="d">从 IP 池中切分出的较小子网（如 <code>/26</code> 块），分配给节点</div></div>
+    <div class="card"><div class="t">Block Affinity</div>
+      <div class="d">IP 块与节点之间的分配（绑定）关系</div></div>
+    <div class="card"><div class="t">IPAM</div>
+      <div class="d">当 Pod 被创建时，Calico 在已分配的块内自动管理 IP 分配</div></div>
+  </div>
+  <div class="okbox" style="max-width:860px;margin-top:22px">
+    <b>一句话：</b> Calico 把大地址池切成 /26 小块「批发」给各节点，节点再「零售」给 Pod —— 既快，又不会冲突。
+  </div>
+</section>
+
+<!-- 13 Troubleshooting -->
+<section class="slide" data-title="故障排查" data-notes="排查顺序：1) 检查节点是否有足够的 IP 块；2) 确认 Calico Pod 在运行 kubectl get pods -n calico-system；3) 检查节点状态 kubectl get nodes；4) 查看 Calico 日志。">
+  <h2><span class="num">12</span>故障排查</h2>
+  <p class="sub">如果遇到 IP 分配问题，按以下顺序排查</p>
+  <div class="grid g2">
+    <div class="card"><div class="t">1 · 检查块是否充足</div><div class="d">确认节点是否已分配到足够的 IP 块</div></div>
+    <div class="card"><div class="t">2 · 检查 Calico Pod</div>
+      <div class="d"><code>kubectl get pods -n calico-system</code></div></div>
+    <div class="card"><div class="t">3 · 检查节点状态</div>
+      <div class="d"><code>kubectl get nodes</code></div></div>
+    <div class="card"><div class="t">4 · 查看日志</div>
+      <div class="d"><code>kubectl logs -n calico-system -l k8s-app=calico-node</code></div></div>
+  </div>
+  <div class="term" style="max-width:820px">
+    <div class="term-bar"><span class="dot d1"></span><span class="dot d2"></span><span class="dot d3"></span>
+      <span class="term-title">troubleshooting</span></div>
+    <pre><span class="cmd">kubectl get pods</span> -n calico-system
+<span class="cmd">kubectl get nodes</span>
+<span class="cmd">kubectl logs</span> -n calico-system -l k8s-app=calico-node</pre>
+  </div>
+</section>
+
+<!-- 14 结束 -->
+<section class="slide" data-title="结束" data-notes="收尾：实验清理按 Lab cleanup 步骤执行。回顾核心：IP Pool → Block（/26）→ BlockAffinity → Pod IP。">
+  <h1>谢谢！</h1>
+  <p class="sub">Calico IPAM —— 预分配 /26 块，让 Pod 又快又不冲突地拿到 IP</p>
+  <div class="grid g3" style="max-width:900px;margin-top:24px">
+    <div class="card"><div class="t">IP Pool</div><div class="big">/16</div><div class="d">192.168.0.0/16 · 65,536 IPs</div></div>
+    <div class="card"><div class="t">Block</div><div class="big">/26</div><div class="d">每块 64 IPs · 按需分配</div></div>
+    <div class="card"><div class="t">Affinity</div><div class="big">绑定</div><div class="d">块 ↔ 节点 · confirmed</div></div>
+  </div>
+  <p style="margin-top:26px;color:var(--dim)">实验清理：按 <b>Lab cleanup</b> 步骤执行</p>
+</section>
+
+</div>
+
+<div id="hud"><b id="cur">1</b> / <span id="tot">1</span> · S 备注 · O 概览 · F 全屏</div>
+<div id="notes"><div class="lbl">SPEAKER NOTES</div><div id="notesBody"></div></div>
+<div id="ov"><h3>▚ 幻灯片概览 (ESC 退出)</h3><div class="ovgrid" id="ovgrid"></div></div>
+
+<script>
+const slides=[...document.querySelectorAll('.slide')];
+const bar=document.getElementById('bar'),curEl=document.getElementById('cur'),
+      totEl=document.getElementById('tot'),notes=document.getElementById('notes'),
+      notesBody=document.getElementById('notesBody'),ov=document.getElementById('ov'),
+      ovgrid=document.getElementById('ovgrid');
+let i=0;
+totEl.textContent=slides.length;
+
+// 概览
+slides.forEach((s,idx)=>{
+  const d=document.createElement('div');
+  d.className='ovitem';
+  d.innerHTML=`<div class="i">${String(idx+1).padStart(2,'0')}</div><div class="s">${s.dataset.title||''}</div>`;
+  d.onclick=()=>{go(idx);ov.classList.remove('on')};
+  ovgrid.appendChild(d);
+});
+
+function render(){
+  slides.forEach((s,n)=>s.classList.toggle('active',n===i));
+  curEl.textContent=i+1;
+  bar.style.width=((i+1)/slides.length*100)+'%';
+  notesBody.textContent=slides[i].dataset.notes||'（无备注）';
+  [...ovgrid.children].forEach((c,n)=>c.classList.toggle('cur',n===i));
+  document.title=`${i+1}/${slides.length} · ${slides[i].dataset.title} — Calico IPAM`;
+}
+function go(n){i=Math.max(0,Math.min(slides.length-1,n));render()}
+
+document.addEventListener('keydown',e=>{
+  if(e.key==='ArrowRight'||e.key===' '||e.key==='PageDown'){e.preventDefault();go(i+1)}
+  else if(e.key==='ArrowLeft'||e.key==='PageUp'){e.preventDefault();go(i-1)}
+  else if(e.key==='Home'){go(0)}
+  else if(e.key==='End'){go(slides.length-1)}
+  else if(e.key.toLowerCase()==='s'){notes.classList.toggle('on')}
+  else if(e.key.toLowerCase()==='o'){ov.classList.toggle('on')}
+  else if(e.key==='Escape'){ov.classList.remove('on')}
+  else if(e.key.toLowerCase()==='f'){
+    document.fullscreenElement?document.exitFullscreen():document.documentElement.requestFullscreen();
+  }
+});
+// 点击左右边缘翻页
+document.getElementById('deck').addEventListener('click',e=>{
+  if(e.target.closest('.node,.btn'))return;
+  if(e.clientX<window.innerWidth*0.15)go(i-1);
+  else if(e.clientX>window.innerWidth*0.85)go(i+1);
+});
+
+// 交互：块分配
+const nodes=[...document.querySelectorAll('.node')];
+const hint=document.getElementById('allocHint');
+let sel=null,used={};
+nodes.forEach(n=>{
+  n.onclick=()=>{
+    nodes.forEach(x=>x.classList.remove('on'));
+    n.classList.add('on');
+    sel=n;
+    const cidr=n.dataset.cidr;
+    hint.innerHTML=`已选中 <b style="color:#3fb950">${n.dataset.node}</b> · 块 <b style="color:#3fb950">${cidr}</b>（64 IPs，已用 ${used[cidr]?used[cidr].length:0}）— 现在点「模拟创建 Pod」`;
+  };
+});
+document.getElementById('allocBtn').onclick=()=>{
+  if(!sel){hint.textContent='⚠ 请先点击一个节点';return}
+  const cidr=sel.dataset.cidr;
+  const [base,pref]=cidr.split('/');
+  const start=ip2int(base);
+  if(!used[cidr])used[cidr]=[];
+  if(used[cidr].length>=62){hint.textContent='块内地址已接近用尽（/26 共 64 个）';return}
+  let ip;
+  do{ip=start+1+Math.floor(Math.random()*62)}while(used[cidr].includes(ip));
+  used[cidr].push(ip);
+  hint.innerHTML=`✓ 新 Pod 分配到 <b style="color:#3fb950">${int2ip(ip)}/32</b> ← 来自节点 <b>${sel.dataset.node}</b> 的块 <b>${cidr}</b> · 该块已用 ${used[cidr].length}/64`;
+};
+document.getElementById('resetBtn').onclick=()=>{
+  used={};nodes.forEach(x=>x.classList.remove('on'));sel=null;
+  hint.textContent='已重置，请点击上方任一节点开始…';
+};
+function ip2int(ip){return ip.split('.').reduce((a,o)=>a*256+ +o,0)}
+function int2ip(n){return [n>>>24,n>>>16&255,n>>>8&255,n&255].join('.')}
+
+render();
+</script>
+</body>
+</html>

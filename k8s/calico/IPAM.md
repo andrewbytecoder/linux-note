@@ -23,15 +23,11 @@ Calico 的 IPAM 技术通过预先将 IP 块分配给各个节点，从而实现
 ```yaml
 name: calico-ipam
 
-# 生命使用和calico 同样的网桥，避免和现有的docker网络有冲突
-mgmt:
-  network: bridge
-
 topology:
   nodes:
     calico-ipam:
       kind: k8s-kind
-      image: kindest/node:v1.28.0
+      image: kindest/node:v1.35.0
       startup-config: calico-ipam-no-cni.yaml
       extras:
         k8s_kind:
@@ -42,7 +38,7 @@ topology:
 
 2. `calico-ipam-no-cni.yaml` calico 无需使用 CNI 的集群配置文件，这里的配置是给kind使用的
 ```bash
-andrew@andrew ~/k8-networking-calico-containerlab/containerlab/01-calico-ipam (master*?) $ cat calico-ipam-no-cni.yaml 
+andrew@andrew $ cat calico-ipam-no-cni.yaml 
 ```
 
 ```yaml
@@ -54,6 +50,7 @@ networking:
   serviceSubnet: "10.96.0.0/16"
 nodes:
   - role: control-plane
+  - role: worker
   - role: worker
   - role: worker
 ```
@@ -226,14 +223,14 @@ andrew@andrew ~/k8-networking-calico-containerlab/containerlab/01-calico-ipam (m
 +----------+----------------+-----------+------------+--------------+
 | GROUPING |      CIDR      | IPS TOTAL | IPS IN USE |   IPS FREE   |
 +----------+----------------+-----------+------------+--------------+
-| IP Pool  | 192.168.0.0/16 |     65536 | 12 (0%)    | 65524 (100%) |
+| IP Pool  | 192.168.0.0/16 |     65536 | 14 (0%)    | 65524 (100%) |
 +----------+----------------+-----------+------------+--------------+
 ```
 
 - CIDR：整个子网网络的范围（192.168.0.0/16）
 - 总 IP 数：该池中可用的 IP 地址总数（65,536 个）
-- 正在使用的 IP 地址：当前已将 IP 地址分配给了相应的容器。
-- 免费 IP 地址：可供新节点分配使用的 IP 地址
+- 正在使用的 IP 地址：当前已将 IP 地址分配给了相应的Pod，非host。
+- 可用 IP 地址个数：可供新节点分配使用的 IP 地址个数
 
 5. 阻塞关联列表
 ```bash 
@@ -246,7 +243,7 @@ calico-ipam-worker2-192-168-112-128-26       2026-09-23T04:06:00Z
 - BlockAffinity 资源代表了分配给节点的 IPAM 块分配信息
 - 每个条目都显示了哪个 IP 地址范围被分配给了哪个节点
 - 命名规范是使用 `calico-ipam-<block-cidr-with-dashes>-<prefix-length>` 来表示
-- Calico 根据需求将/26 的块（每个块包含 64 个 IP 地址）分配给各个节点
+- Calico 根据需求将/26 的块（每个块包含 64 个 IP 地址）分配给各个节点node
 
 6. 详细区块关联性数据
 ```bash

@@ -1,0 +1,517 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>Pod Networking — 交互式演讲</title>
+<style>
+:root{
+  --bg:#0b0f16;--bg2:#151b24;--fg:#e8eef6;--dim:#8fa3b8;
+  --acc:#4fc3f7;--grn:#5ddb92;--yel:#ffd166;--pur:#c792ea;--red:#ff6b6b;
+  --code:#080c12;--bd:#26303d;--mono:'JetBrains Mono',Consolas,monospace;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%;overflow:hidden}
+body{background:var(--bg);color:var(--fg);
+  font-family:-apple-system,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif}
+#bar{position:fixed;top:0;left:0;height:3px;z-index:100;
+  background:linear-gradient(90deg,var(--acc),var(--pur));transition:width .3s}
+#deck{position:absolute;inset:0}
+.slide{position:absolute;inset:0;display:none;flex-direction:column;justify-content:center;
+  padding:55px 6.5vw;overflow-y:auto}
+.slide.active{display:flex;animation:fi .35s ease}
+@keyframes fi{from{opacity:0;transform:translateY(14px)}to{opacity:1;transform:none}}
+h1{font-size:clamp(2.1rem,4.6vw,3.7rem);font-weight:800;letter-spacing:-1px;line-height:1.15;
+  background:linear-gradient(90deg,#4fc3f7,#c792ea);-webkit-background-clip:text;background-clip:text;color:transparent}
+h2{font-size:clamp(1.4rem,2.9vw,2.1rem);color:var(--acc);font-weight:750;margin-bottom:6px}
+h2 .n{font-family:var(--mono);color:var(--dim);font-size:.6em;margin-right:10px}
+h3{font-size:1.1rem;color:var(--pur);margin:16px 0 7px}
+p,li{font-size:clamp(.94rem,1.3vw,1.15rem);line-height:1.78;color:#d4dde8}
+ul{margin-left:1.25em;margin-top:8px}li{margin:8px 0}
+.sub{color:var(--dim);font-size:1.03rem;margin-top:6px}
+code{font-family:var(--mono);background:var(--bg2);padding:2px 7px;border-radius:5px;
+  color:var(--grn);font-size:.9em;border:1px solid var(--bd)}
+.term{background:var(--code);border:1px solid var(--bd);border-radius:11px;margin:13px 0;position:relative}
+.tb{background:#1b232f;padding:7px 14px;display:flex;align-items:center;gap:7px;border-bottom:1px solid var(--bd)}
+.dot{width:11px;height:11px;border-radius:50%}.d1{background:#ff5f56}.d2{background:#ffbd2e}.d3{background:#27c93f}
+.tt{color:var(--dim);font-family:var(--mono);font-size:.76rem;margin-left:8px}
+pre{font-family:var(--mono);background:var(--code);color:#e8eef6;padding:15px 17px;
+  overflow-x:auto;font-size:.85rem;line-height:1.68;white-space:pre}
+.c{color:#5f6f80}.o{color:#93a5b8}.g{color:var(--grn)}.b{color:var(--acc)}.y{color:var(--yel)}.r{color:var(--red)}
+table{border-collapse:collapse;margin:12px 0;font-size:.9rem;min-width:55%}
+th{background:#1b232f;color:var(--acc);padding:9px 15px;text-align:left;border:1px solid var(--bd);
+  font-family:var(--mono);font-size:.83rem}
+td{padding:8px 15px;border:1px solid var(--bd);color:#d4dde8;font-size:.88rem}
+.grid{display:grid;gap:15px;margin-top:15px}
+.g2{grid-template-columns:repeat(auto-fit,minmax(290px,1fr))}
+.g3{grid-template-columns:repeat(auto-fit,minmax(225px,1fr))}
+.g4{grid-template-columns:repeat(auto-fit,minmax(190px,1fr))}
+.card{background:var(--bg2);border:1px solid var(--bd);border-radius:11px;padding:16px 18px;transition:.24s}
+.card:hover{border-color:var(--acc);transform:translateY(-3px);box-shadow:0 8px 22px rgba(79,195,247,.1)}
+.card .t{color:var(--acc);font-weight:700;font-size:1.02rem;margin-bottom:5px}
+.card .d{color:var(--dim);font-size:.89rem;line-height:1.62}
+.card .big{font-family:var(--mono);font-size:1.45rem;color:var(--grn);margin:5px 0}
+/* CNI 步骤交互 */
+.steps{display:flex;flex-direction:column;gap:7px;margin-top:12px;max-width:1000px}
+.step{background:var(--bg2);border:1px solid var(--bd);border-left:3px solid var(--bd);
+  border-radius:0 9px 9px 0;padding:11px 16px;display:flex;gap:13px;align-items:center;
+  transition:.28s;font-size:.93rem;cursor:pointer}
+.step .sn{font-family:var(--mono);color:var(--dim);font-size:.8rem;min-width:26px}
+.step .sr{color:#d4dde8;line-height:1.55}
+.step.on{border-left-color:var(--acc);background:rgba(79,195,247,.09);
+  box-shadow:0 0 0 1px rgba(79,195,247,.3);transform:translateX(5px)}
+.step.on .sn{color:var(--acc)}
+.step.done{border-left-color:var(--grn);opacity:.75}
+.step.done .sn{color:var(--grn)}
+.step em{color:var(--yel);font-style:normal;font-family:var(--mono);font-size:.87em}
+/* 字段点击解释 */
+.field{cursor:pointer;border-bottom:1px dashed var(--acc);transition:.2s}
+.field:hover,.field.on{background:rgba(79,195,247,.2);border-radius:3px}
+#fexp{margin-top:11px;min-height:52px;background:rgba(255,209,102,.07);border-left:3px solid var(--yel);
+  padding:12px 16px;border-radius:0 8px 8px 0;font-size:.93rem;line-height:1.65;color:#e8eef6}
+#fexp b{color:var(--yel)}
+/* 按钮 */
+.btn{background:#1b232f;border:1px solid var(--bd);color:var(--fg);padding:9px 17px;border-radius:8px;
+  cursor:pointer;font-family:var(--mono);font-size:.84rem;margin:11px 8px 0 0;transition:.2s}
+.btn:hover{border-color:var(--grn);color:var(--grn)}
+.btn.pri{border-color:var(--acc);color:var(--acc)}
+.btn:active{transform:scale(.96)}
+/* 短名展开 */
+#expandBox{background:var(--code);border:1px solid var(--bd);border-radius:9px;
+  padding:14px 18px;margin-top:12px;font-family:var(--mono);font-size:.86rem;line-height:1.8}
+.ex{color:var(--grn)}.exq{color:var(--dim)}
+/* veth 配对 */
+.vethwrap{display:flex;align-items:center;justify-content:center;gap:20px;flex-wrap:wrap;margin-top:16px}
+.vbox{background:var(--bg2);border:2px solid var(--bd);border-radius:12px;padding:18px 24px;text-align:center;
+  min-width:190px;transition:.35s}
+.vbox.pod{border-color:var(--acc)}
+.vbox.host{border-color:var(--pur)}
+.vbox.lit{box-shadow:0 0 22px rgba(93,219,146,.35);border-color:var(--grn)}
+.vbox .vt{font-size:.78rem;color:var(--dim);font-family:var(--mono);margin-bottom:7px}
+.vbox .vv{font-family:var(--mono);font-size:1rem;color:var(--grn);font-weight:700}
+.vline{font-family:var(--mono);font-size:1.7rem;color:var(--dim);transition:.3s}
+.vline.lit{color:var(--grn);text-shadow:0 0 12px var(--grn)}
+#vhint{margin-top:14px;text-align:center;font-family:var(--mono);font-size:.9rem;color:var(--yel);min-height:24px}
+#hud{position:fixed;bottom:15px;right:19px;font-family:var(--mono);font-size:.75rem;color:var(--dim);
+  background:rgba(21,27,36,.9);padding:7px 13px;border-radius:8px;border:1px solid var(--bd);z-index:50}
+#hud b{color:var(--acc)}
+#notes{position:fixed;left:0;bottom:0;width:100%;max-height:40%;overflow:auto;background:rgba(11,15,22,.98);
+  border-top:2px solid var(--yel);padding:17px 30px;display:none;z-index:80;font-size:.95rem;line-height:1.72}
+#notes.on{display:block}
+#notes .lbl{color:var(--yel);font-family:var(--mono);font-size:.74rem;letter-spacing:2px;margin-bottom:7px}
+#ov{position:fixed;inset:0;background:rgba(3,7,12,.97);z-index:90;display:none;padding:48px 5vw;overflow-y:auto}
+#ov.on{display:block}
+#ov h3{color:var(--acc);margin-bottom:16px;font-family:var(--mono)}
+.ovg{display:grid;grid-template-columns:repeat(auto-fill,minmax(185px,1fr));gap:13px}
+.ovi{background:var(--bg2);border:1px solid var(--bd);border-radius:8px;padding:13px;cursor:pointer;transition:.2s}
+.ovi:hover{border-color:var(--acc);transform:scale(1.04)}
+.ovi.cur{border-color:var(--grn);box-shadow:0 0 0 2px rgba(93,219,146,.3)}
+.ovi .i{font-family:var(--mono);font-size:.71rem;color:var(--dim)}
+.ovi .s{font-size:.87rem;color:#d4dde8;margin-top:5px;font-weight:600}
+.shot{max-width:min(880px,92%);border:1px solid var(--bd);border-radius:11px;margin:14px 0;background:#fff;display:block}
+.tag{display:inline-block;background:rgba(79,195,247,.13);color:var(--acc);padding:3px 11px;border-radius:20px;
+  font-size:.75rem;font-family:var(--mono);border:1px solid rgba(79,195,247,.3);margin-right:7px}
+.wbox{background:rgba(255,209,102,.08);border-left:3px solid var(--yel);padding:12px 17px;margin:13px 0;
+  border-radius:0 8px 8px 0;font-size:.94rem}
+.wbox b{color:var(--yel)}
+.okbox{background:rgba(93,219,146,.08);border-left:3px solid var(--grn);padding:12px 17px;margin:13px 0;
+  border-radius:0 8px 8px 0}
+.okbox b{color:var(--grn)}
+.say{background:rgba(199,146,234,.09);border-left:3px solid var(--pur);padding:11px 17px;margin:12px 0;
+  border-radius:0 8px 8px 0;font-size:.95rem;line-height:1.7}
+.say b{color:var(--pur)}
+.flex{display:flex;gap:18px;flex-wrap:wrap;align-items:center}
+</style>
+</head>
+<body>
+<div id="bar"></div>
+<div id="deck">
+
+<section class="slide" data-title="开场" data-notes="开场白：大家好，今天聊 Pod Networking——K8s 里每个 Pod 怎么拿到 IP、怎么跟别人通信。这是 Calico Labs 的 Lesson 02。实验跑在 3 节点 Kind 集群上。核心一句话：Pod 一出生就得有 IP 和连通性，Calico 负责把这件事做透明。">
+  <div><span class="tag">Lesson 02</span><span class="tag">Calico Labs</span></div>
+  <h1>Pod Networking</h1>
+  <p class="sub">一个 Pod 从出生到能上网，K8s 和 Calico 到底替它做了什么？</p>
+  <div class="term" style="max-width:540px;margin-top:24px">
+    <div class="tb"><span class="dot d1"></span><span class="dot d2"></span><span class="dot d3"></span>
+      <span class="tt">3-node Kind cluster</span></div>
+    <pre><span class="c"># 本实验演示 Calico 在 3 节点 Kind 集群中的路由能力</span>
+<span class="c"># 实验目录：</span>
+<span class="b">cd</span> /containerlab/02-pod-network</pre>
+  </div>
+  <div class="say" style="max-width:660px">
+    <b>演讲开场：</b>「大家有没有想过——我 <code>kubectl run</code> 一下，几秒钟后 Pod 就 Running 了，还能互相 ping 通。中间谁给它发的 IP？谁给它接的网线？今天我们就把这条链路拆开看。」
+  </div>
+  <div class="wbox" style="max-width:640px">
+    <b>导航：</b><code>←</code>/<code>→</code> 翻页 · <code>空格</code> 下一页 · <code>S</code> 演讲者备注 · <code>O</code> 概览 · <code>F</code> 全屏
+  </div>
+</section>
+
+<section class="slide" data-title="为什么重要" data-notes="四个理由口语化讲：1 Pod 是短命的，频繁生灭，每个新 Pod 都要能通信；2 每个 Pod 独占 netns，既要隔离又要能跟宿主机连通；3 服务发现，靠 DNS 找到 Service 和其他 Pod；4 同 Pod 多容器走 localhost，需要共享 netns。">
+  <h2><span class="n">01</span>Pod 网络为什么这么重要？</h2>
+  <p class="sub">在 Kubernetes 里，<b>每个 Pod 都需要一个唯一 IP 和正常连通</b>才能干活</p>
+  <div class="grid g2">
+    <div class="card"><div class="t">① Pod 太"短命"了</div>
+      <div class="d">Pod 是 <code>ephemeral</code>（短暂的），一天能被创建销毁无数次。每来一个新 Pod，都得立刻能跟别的 Pod、Service、外网说话。</div></div>
+    <div class="card"><div class="t">② 隔离，但别真断开</div>
+      <div class="d">每个 Pod 有自己的 <b>network namespace</b>（网络命名空间）——这是安全隔离。但光隔离不行，还得有机制把 Pod 和宿主机的网络"桥"起来。</div></div>
+    <div class="card"><div class="t">③ 服务发现全靠它</div>
+      <div class="d">网络通了，Pod 才能访问 Service、做 DNS 解析、<b>不管你跑在集群哪个角落</b>都能找到彼此。</div></div>
+    <div class="card"><div class="t">④ 同 Pod 内多容器</div>
+      <div class="d">一个 Pod 里多个容器要 <code>localhost</code> 互访——这要求它们共享 netns，接口也得管好。</div></div>
+  </div>
+  <div class="okbox" style="max-width:860px;margin-top:18px">
+    <b>Calico 的做法：</b>创建虚拟网卡、管 IP 分配、写路由表、打通全集群 Pod 互通——"一整套包圆了"。
+  </div>
+  <div class="say" style="max-width:860px">
+    <b>口语比喻：</b>「你可以把 Pod 想成刚交房的一套公寓。Calico 是物业：给你门牌号（IP）、拉网线（veth）、画好小区地图（路由表）、再给你个前台电话（DNS）。」
+  </div>
+</section>
+
+<section class="slide" data-title="整体架构" data-notes="这张 pod-network.png 展示整体 Pod 网络架构：Pod 各自 netns，通过 veth 连到宿主机，宿主机之间再由 Calico 路由串起来。强调：每个 Pod 一个 netns、一个 eth0、一个 /32 IP。">
+  <h2><span class="n">02</span>整体长什么样？</h2>
+  <p class="sub">Pod Network Architecture —— 每个 Pod 一个独立小世界，再连到主机</p>
+  <img class="shot" src="images/pod-network.png" alt="Pod Network Architecture">
+  <div class="grid g3" style="max-width:880px">
+    <div class="card"><div class="t">独立 netns</div><div class="d">每个 Pod 一个网络命名空间，互相看不见</div></div>
+    <div class="card"><div class="t">专属 eth0</div><div class="d">每个 Pod 有自己的 <code>eth0</code> 和唯一 <code>/32</code> IP</div></div>
+    <div class="card"><div class="t">主机做中转</div><div class="d">流量经 veth 到主机，再由 Calico 路由出去</div></div>
+  </div>
+</section>
+
+<section class="slide" data-title="CNI 十步流程" data-notes="这是全场重点！点'下一步'或'自动播放'逐条走。十步：apiserver 接单→kubelet 发现→运行时建 netns→调 Calico CNI→向 IPAM 要 IP→建 veth 对→写 datastore→返回成功→报告 kubelet→apiserver 更新状态。另外 Calico 还会写主机路由 + 给 Pod 配默认路由 169.254.1.1。">
+  <h2><span class="n">03</span>Pod 诞生时，到底发生了什么？</h2>
+  <p class="sub">10 步流水线 —— <b>点「下一步」逐条走，或点「自动播放」</b></p>
+  <div style="margin-top:10px">
+    <button class="btn pri" id="sn">▶ 下一步</button>
+    <button class="btn" id="sa">⏵ 自动播放</button>
+    <button class="btn" id="sr">↺ 重置</button>
+    <span id="sprog" style="font-family:var(--mono);font-size:.85rem;color:var(--yel);margin-left:12px"></span>
+  </div>
+  <div class="steps" id="steps">
+    <div class="step" data-i="1"><span class="sn">01</span><span class="sr"><em>kube-apiserver</em> 收到创建 Pod 的请求，把它调度到某个节点上</span></div>
+    <div class="step" data-i="2"><span class="sn">02</span><span class="sr"><em>kubelet</em> 发现有新 Pod 分配给本节点，去叫<em>容器运行时</em>（containerd / CRI-O）</span></div>
+    <div class="step" data-i="3"><span class="sn">03</span><span class="sr"><em>容器运行时</em>先把 Pod 的<em>网络命名空间</em>建出来（现在还是"空房间"）</span></div>
+    <div class="step" data-i="4"><span class="sn">04</span><span class="sr">容器运行时调用 <em>Calico CNI 插件</em>：「喂，给这个房间接网」</span></div>
+    <div class="step" data-i="5"><span class="sn">05</span><span class="sr"><em>Calico CNI</em> 向 <em>Calico IPAM</em> 要一个 IP。IPAM 从<em>本节点被分配到的 IP 块</em>里拿一个给它</span></div>
+    <div class="step" data-i="6"><span class="sn">06</span><span class="sr"><em>Calico CNI</em> 创建一对 <em>veth pair</em>：一头留在主机叫 <code>cali123abc</code>，另一头进 Pod 叫 <code>eth0</code></span></div>
+    <div class="step" data-i="7"><span class="sn">07</span><span class="sr"><em>Calico CNI</em> 把 WorkloadEndpoint 信息（Pod IP、接口名、节点、标签）写进 <em>Calico datastore</em></span></div>
+    <div class="step" data-i="8"><span class="sn">08</span><span class="sr"><em>Calico CNI</em> 把网络配置结果（成功）返回给<em>容器运行时</em></span></div>
+    <div class="step" data-i="9"><span class="sn">09</span><span class="sr">容器运行时向 <em>kubelet</em> 报告：「网通了」</span></div>
+    <div class="step" data-i="10"><span class="sn">10</span><span class="sr"><em>kubelet</em> 回写 <em>kube-apiserver</em>：Pod 状态 = Running，以及分到的 IP</span></div>
+  </div>
+  <div class="wbox" style="max-width:980px;margin-top:14px">
+    <b>还有两件"顺手"的事：</b>Calico 会在主机上写到 Pod IP 的直连路由（走 Calico 接口）；同时给 Pod 配一条默认路由，下一跳是<b>虚拟网关 <code>169.254.1.1</code></b>，用来跑集群内通信。
+  </div>
+  <div class="say" style="max-width:980px">
+    <b>结果：</b>Pod 拿到了唯一 IP，从此能借 Calico 的路由基础设施，跟全集群的 Pod 说话。
+  </div>
+</section>
+
+<section class="slide" data-title="CNI 流程图" data-notes="这张 pod-interface-cni.png 就是上面十步的图形版：Pod 接口怎么在 CNI 参与下被创建出来。指着图复述一遍十步，观众印象最深。">
+  <h2><span class="n">04</span>配张图，再看一遍</h2>
+  <p class="sub">Pod Interface Creation with CNI —— 十步流程的图形版</p>
+  <img class="shot" src="https://raw.githubusercontent.com/aadhilam/k8-networking-calico-containerlab/master/images/pod-interface-cni.png" alt="Pod Interface Creation with CNI">
+  <div class="flex" style="margin-top:6px">
+    <div><span class="tag">kubelet</span></div><div class="vline">→</div>
+    <div><span class="tag">Container Runtime</span></div><div class="vline">→</div>
+    <div><span class="tag">Calico CNI</span></div><div class="vline">→</div>
+    <div><span class="tag">IPAM 给 IP</span></div><div class="vline">→</div>
+    <div><span class="tag">veth 接好</span></div>
+  </div>
+</section>
+
+<section class="slide" data-title="部署" data-notes="部署很简单：进目录、给 deploy.sh 加执行权限、跑起来。脚本会建 3 节点 Kind 集群、导出 kubeconfig、装 calicoctl 和 Calico（Operator CRDs + Tigera Operator + 自定义资源）、最后等组件就绪。">
+  <h2><span class="n">05</span>环境怎么搭？</h2>
+  <p class="sub">一个 <code>deploy.sh</code> 全搞定</p>
+  <div class="term" style="max-width:560px">
+    <div class="tb"><span class="dot d1"></span><span class="dot d2"></span><span class="dot d3"></span><span class="tt">bash</span></div>
+    <pre><span class="b">cd</span> containerlab/pod-network
+<span class="b">chmod +x</span> deploy.sh
+<span class="b">./deploy.sh</span></pre>
+  </div>
+  <div class="grid g4" style="max-width:980px">
+    <div class="card"><div class="t">① 拓扑</div><div class="d">ContainerLab 建 3 节点 Kind 集群</div></div>
+    <div class="card"><div class="t">② kubeconfig</div><div class="d">导出给 kubectl 用</div></div>
+    <div class="card"><div class="t">③ 装 Calico</div><div class="d">calicoctl + Operator CRDs + Tigera Operator + 自定义资源</div></div>
+    <div class="card"><div class="t">④ 验证</div><div class="d">等所有 Calico 组件就绪</div></div>
+  </div>
+  <div class="wbox" style="max-width:760px">
+    <b>提醒观众：</b>文档里的输出在你自己的实验里会不一样。跑命令时记得把 IP、接口名、节点名换成你自己环境的。
+  </div>
+</section>
+
+<section class="slide" data-title="验证集群" data-notes="先用 containerlab inspect 看拓扑：三个节点 pod-network-control-plane / worker / worker2 都是 running，镜像 kindest/node:v1.28.0，IPv4 是 172.18.0.x。再用 kubectl get nodes -o wide 看 K8s 视角：三个都 Ready，v1.28.0。">
+  <h2><span class="n">06</span>先确认集群活着</h2>
+  <div class="term" style="max-width:960px">
+    <div class="tb"><span class="dot d1"></span><span class="dot d2"></span><span class="dot d3"></span><span class="tt">containerlab inspect -t pod-network.clab.yaml</span></div>
+    <pre><span class="o">╭───────────────────────────┬──────────────────────┬─────────┬───────────────────────╮
+│            Name           │      Kind/Image      │  State  │     IPv4/6 Address    │
+├───────────────────────────┼──────────────────────┼─────────┼───────────────────────┤
+│ pod-network-control-plane │ k8s-kind             │ <span class="g">running</span> │ 172.18.0.4            │
+│                           │ kindest/node:v1.28.0 │         │ fc00:f853:ccd:e793::4 │
+├───────────────────────────┼──────────────────────┼─────────┼───────────────────────┤
+│ pod-network-worker        │ k8s-kind             │ <span class="g">running</span> │ 172.18.0.3            │
+│                           │ kindest/node:v1.28.0 │         │ fc00:f853:ccd:e793::3 │
+├───────────────────────────┼──────────────────────┼─────────┼───────────────────────┤
+│ pod-network-worker2       │ k8s-kind             │ <span class="g">running</span> │ 172.18.0.2            │
+│                           │ kindest/node:v1.28.0 │         │ fc00:f853:ccd:e793::2 │
+╰───────────────────────────┴──────────────────────┴─────────┴───────────────────────╯</span></pre>
+  </div>
+  <div class="term" style="max-width:960px">
+    <div class="tb"><span class="dot d1"></span><span class="dot d2"></span><span class="dot d3"></span><span class="tt">kubectl get nodes -o wide</span></div>
+    <pre><span class="o">NAME                        STATUS   ROLES           AGE   VERSION   INTERNAL-IP
+pod-network-control-plane   <span class="g">Ready</span>    control-plane   11m   v1.28.0   172.18.0.4
+pod-network-worker          <span class="g">Ready</span>    &lt;none&gt;          10m   v1.28.0   172.18.0.3
+pod-network-worker2         <span class="g">Ready</span>    &lt;none&gt;          10m   v1.28.0   172.18.0.2</span></pre>
+  </div>
+  <div class="okbox" style="max-width:900px">所有节点 <code>State: running</code> / <code>STATUS: Ready</code>，说明集群健康，可以开干了。</div>
+</section>
+
+<section class="slide" data-title="Pod 里看接口" data-notes="kubectl exec 进 multitool，ip addr。两个接口：lo 回环；eth0@if6 是主网卡——MTU 1450（比标准 1500 小，给 VXLAN 开销留地方）、IP 192.168.146.66/32（/32 单主机路由）、@if6 表示这是 veth 的一头、link-netnsid 0 表示连到主机 netns。下面字段可以点！">
+  <h2><span class="n">07</span>钻进 Pod 里，看看它的"网卡"</h2>
+  <p class="sub"><code>kubectl exec -it multitool -- sh</code> 然后 <code>ip addr</code> —— <b>下面带下划线的字段可以点！</b></p>
+  <div class="term" style="max-width:900px">
+    <div class="tb"><span class="dot d1"></span><span class="dot d2"></span><span class="dot d3"></span><span class="tt">ip addr</span></div>
+    <pre><span class="o">1: lo: &lt;LOOPBACK,UP,LOWER_UP&gt; mtu 65536 ...
+    inet 127.0.0.1/8 scope host lo
+2: </span><span class="field" data-e="<b>eth0@if6</b>：Pod 的主网卡。<b>@if6</b> 说明它是 veth pair 的一端，另一头接在主机编号为 6 的接口上。"><span class="b">eth0@if6</span></span><span class="o">: &lt;BROADCAST,MULTICAST,UP,LOWER_UP&gt; </span><span class="field" data-e="<b>mtu 1450</b>：比以太网标准的 1500 小了 50。这 50 字节是给 <b>VXLAN 封装开销</b>预留的，不然包一封装就超 MTU 被分片了。"><span class="y">mtu 1450</span></span><span class="o"> ...
+    link/ether 7e:08:91:93:9c:3b ...
+    </span><span class="field" data-e="<b>192.168.146.66/32</b>：Pod 的 IP，注意掩码是 <b>/32</b>——不是 /24。/32 表示'就我一个地址'，Calico 靠这个把每个 Pod 变成一条点到点链路。"><span class="g">inet 192.168.146.66/32</span></span><span class="o"> scope global eth0
+    </span><span class="field" data-e="<b>link-netnsid 0</b>：表示这个接口通过 veth pair 连到了<b>主机的网络命名空间</b>（netns 0）。这就是 Pod 与外界沟通的'门'。"><span class="y">link-netnsid 0</span></span></pre>
+  </div>
+  <div id="fexp">👆 点击上面带虚线下划线的字段，看它到底啥意思。</div>
+  <div class="say" style="max-width:900px">
+    <b>口语：</b>「注意这个 <code>/32</code>——很反直觉对吧？平时咱们见 /24。Calico 故意用 /32，意思是'这个 Pod 就是一个孤零零的点'，路由全靠主机上单独一条一条写。这样每个 Pod 彼此间就是点对点链路，干净利落。」
+  </div>
+</section>
+
+<section class="slide" data-title="veth 配对动画" data-notes="这页做配对动画：Pod 里 eth0@if6，主机上 cali6d09fa47963@if2。点按钮让连线亮起来。@if6 ↔ @if2 是互指的索引号。主机侧 veth 没有 IPv4 地址（纯 L3 转发不需要），MTU 同样 1450，link-netns 指向 Pod 的 netns。">
+  <h2><span class="n">08</span>veth pair：一根"虚拟网线"</h2>
+  <p class="sub">一头在 Pod（<code>eth0</code>），一头在主机（<code>cali*</code>）—— <b>点按钮看它们配对</b></p>
+  <div class="vethwrap">
+    <div class="vbox pod" id="vpod"><div class="vt">Pod netns</div><div class="vv">eth0@if6</div>
+      <div style="font-size:.8rem;color:var(--dim);margin-top:6px">192.168.146.66/32</div></div>
+    <div class="vline" id="vln">◄══►</div>
+    <div class="vbox host" id="vhost"><div class="vt">Host netns</div><div class="vv">cali6d09fa47963@if2</div>
+      <div style="font-size:.8rem;color:var(--dim);margin-top:6px">无 IPv4（纯转发）</div></div>
+  </div>
+  <div style="text-align:center">
+    <button class="btn pri" id="vbt">🔗 亮起这根"网线"</button>
+    <button class="btn" id="vrs">↺ 复位</button>
+  </div>
+  <div id="vhint">点上面的按钮，让 Pod 和主机连起来…</div>
+  <div class="term" style="max-width:900px;margin-top:12px">
+    <div class="tb"><span class="dot d1"></span><span class="dot d2"></span><span class="dot d3"></span><span class="tt">ip addr | grep cali6d09fa47963 -A3 &nbsp;(在主机上)</span></div>
+    <pre><span class="o">6: </span><span class="g">cali6d09fa47963@if2</span><span class="o">: &lt;...&gt; </span><span class="y">mtu 1450</span><span class="o"> ...
+    link/ether ee:ee:ee:ee:ee:ee ... </span><span class="y">link-netns cni-03a82789-...</span><span class="o">
+    inet6 fe80::ecee:eeff:feee:eeee/64 scope link</span></pre>
+  </div>
+  <div class="grid g2" style="max-width:900px">
+    <div class="card"><div class="t">@if6 ↔ @if2</div><div class="d">Pod 里的 <code>@if6</code> 指主机 6 号口；主机的 <code>@if2</code> 指 Pod 里 2 号口——<b>互指</b></div></div>
+    <div class="card"><div class="t">主机侧没 IPv4</div><div class="d">主机这头根本<b>不需要 IP</b>——三层转发直接按路由走，不靠 IP</div></div>
+  </div>
+</section>
+
+<section class="slide" data-title="路由表 169.254.1.1" data-notes="ip route 只有两行：default via 169.254.1.1 dev eth0；169.254.1.1 dev eth0 scope link。169.254.1.1 是 link-local 地址，Calico 的'虚拟下一跳'——所有 Pod 都用同一个，简化路由。scope link 表示下一跳在同一网段直连可达。">
+  <h2><span class="n">09</span>Pod 的路由表：只有两行，但很妙</h2>
+  <p class="sub"><code>ip route</code> —— 一个"假网关"，搞定所有出向流量</p>
+  <div class="term" style="max-width:620px">
+    <div class="tb"><span class="dot d1"></span><span class="dot d2"></span><span class="dot d3"></span><span class="tt">ip route (in pod)</span></div>
+    <pre><span class="g">default via 169.254.1.1 dev eth0</span>
+<span class="g">169.254.1.1 dev eth0 scope link</span></pre>
+  </div>
+  <div class="grid g2" style="max-width:900px">
+    <div class="card"><div class="t">169.254.1.1 是啥？</div>
+      <div class="d">Calico 的<b>虚拟下一跳</b>，是个 <code>link-local</code> 地址。它<b>不是真设备</b>，但每个 Pod 都配同一个。</div></div>
+    <div class="card"><div class="t">为什么全用同一个？</div>
+      <div class="d">Calico 的巧思：<b>统一用一个下一跳 IP</b>，路由规则就极简，不用给每个 Pod 算不同网关。</div></div>
+    <div class="card"><div class="t">scope link</div>
+      <div class="d">表示这个下一跳<b>就在同一网段、直连可达</b>，不用再绕别的网关。</div></div>
+    <div class="card"><div class="t">Pod 怎么出去？</div>
+      <div class="d">所有出向流量默认都从 <code>eth0</code> 丢给 <code>169.254.1.1</code>，实际就是丢给主机那头 veth。</div></div>
+  </div>
+  <div class="say" style="max-width:900px">
+    <b>口语比喻：</b>「169.254.1.1 就像小区统一的'出口信箱'。不管你住哪栋，信都往这一个信箱扔，物业（主机）再从信箱取走分发。简单、统一、好维护。」
+  </div>
+</section>
+
+<section class="slide" data-title="DNS 与短名" data-notes="cat /etc/resolv.conf：search 四个后缀 default.svc.cluster.local / svc.cluster.local / cluster.local / ec2.internal；nameserver 10.96.0.10 是 CoreDNS（kube-dns 的 ClusterIP）；ndots:5 表示少于5个点的名字当相对名，先套 search 后缀。点按钮看 kubernetes 怎么展开。">
+  <h2><span class="n">10</span>Pod 怎么"找人"？靠 DNS</h2>
+  <p class="sub"><code>cat /etc/resolv.conf</code> —— 点按钮看短名是怎么展开的</p>
+  <div class="term" style="max-width:640px">
+    <div class="tb"><span class="dot d1"></span><span class="dot d2"></span><span class="dot d3"></span><span class="tt">cat /etc/resolv.conf</span></div>
+    <pre><span class="y">search</span> <span class="o">default.svc.cluster.local svc.cluster.local cluster.local ec2.internal</span>
+<span class="y">nameserver</span> <span class="g">10.96.0.10</span>
+<span class="y">options ndots:5</span></pre>
+  </div>
+  <div>
+    <button class="btn pri" id="dn">🔍 展开短名 <code>kubernetes</code></button>
+    <button class="btn" id="dr">↺ 复位</button>
+  </div>
+  <div id="expandBox"><span class="exq">点上面按钮，看 <code>kubernetes</code> 这个短名会被解析成什么…</span></div>
+  <div class="grid g3" style="max-width:900px">
+    <div class="card"><div class="t">nameserver</div><div class="big">10.96.0.10</div><div class="d">CoreDNS 的 Service IP（<code>kube-dns</code>），所有 Pod 的 DNS 查询都发这儿</div></div>
+    <div class="card"><div class="t">ndots:5</div><div class="d">名字里<b>少于 5 个点</b>就当"相对名"，先套 search 后缀一个个试</div></div>
+    <div class="card"><div class="t">search 后缀</div><div class="d">帮你自动补全：<code>default.svc.</code> → <code>svc.</code> → <code>cluster.</code> → <code>ec2.internal</code></div></div>
+  </div>
+</section>
+
+<section class="slide" data-title="主机路由" data-notes="先 kubectl get pods -o wide 看 Pod 在哪个节点（这里是 pod-network-worker，IP 192.168.146.66），然后 docker exec 进那个节点，ip route | grep 192.168.146.66 → 192.168.146.66 dev cali6d09fa47963 scope link。主机上每个 Pod 一条 /32 直连路由，指向它的 cali 接口。scope link 表示直连可达不用网关。">
+  <h2><span class="n">11</span>主机这边：一条 /32 路由"钉住"每个 Pod</h2>
+  <p class="sub">先找 Pod 在哪台机，再上主机看路由</p>
+  <div class="term" style="max-width:760px">
+    <div class="tb"><span class="dot d1"></span><span class="dot d2"></span><span class="dot d3"></span><span class="tt">kubectl get pods -n default -o wide</span></div>
+    <pre><span class="o">NAME        READY   STATUS    RESTARTS   AGE   IP               NODE
+multitool   1/1     Running   0          17m   </span><span class="g">192.168.146.66</span><span class="o">   </span><span class="g">pod-network-worker</span></pre>
+  </div>
+  <div class="term" style="max-width:820px">
+    <div class="tb"><span class="dot d1"></span><span class="dot d2"></span><span class="dot d3"></span><span class="tt">docker exec -it pod-network-worker → ip route | grep 192.168.146.66</span></div>
+    <pre><span class="g">192.168.146.66 dev cali6d09fa47963 scope link</span></pre>
+  </div>
+  <div class="grid g3" style="max-width:900px">
+    <div class="card"><div class="t">Pod IP</div><div class="big">192.168.146.66</div><div class="d">就是 Pod 里 eth0 那个地址</div></div>
+    <div class="card"><div class="t">dev cali6d09fa47963</div><div class="d">去往这个 Pod 的流量，走它<b>专属的 Calico veth 口</b></div></div>
+    <div class="card"><div class="t">scope link</div><div class="d">目标<b>本地直连可达</b>，压根不需要网关</div></div>
+  </div>
+  <div class="okbox" style="max-width:900px">
+    <b>关键洞察：</b>主机上给<b>每个 Pod 单独写一条 /32 路由</b>，精确指向它的 <code>cali*</code> 口。这就是 Calico 能做到"策略精确执行 + 快速更新"的原因。
+  </div>
+</section>
+
+<section class="slide" data-title="veth 架构图" data-notes="这张 calico-veth.png 总结整件事：Pod netns 里 eth0 是 /32 + 默认路由指向虚拟网关；主机 netns 通过 cali* 口把流量路由到 Pod IP。形成点对点链路，实现隔离、Pod 级路由和策略执行。">
+  <h2><span class="n">12</span>一张图收拢全部概念</h2>
+  <p class="sub">Calico Veth Pair Architecture</p>
+  <img class="shot" src="https://raw.githubusercontent.com/aadhilam/k8-networking-calico-containerlab/master/images/calico-veth.png" alt="Calico Veth Pair Architecture">
+  <div class="grid g3" style="max-width:900px">
+    <div class="card"><div class="t">点对点链路</div><div class="d">每个 Pod 用 <code>/32</code> 地址，Pod↔主机形成<b>点到点</b>连接</div></div>
+    <div class="card"><div class="t">隔离 + 策略</div><div class="d">netns 隔离，流量必经主机 → 能在主机上做 <b>NetworkPolicy</b></div></div>
+    <div class="card"><div class="t">Pod 级路由</div><div class="d">每个 Pod 一条精确路由，生命周期变化能快速更新</div></div>
+  </div>
+</section>
+
+<section class="slide" data-title="三个关键观察" data-notes="4.3 小结三点：1 Veth Pair Connectivity——eth0@if6 连主机 cali...@if2，点对点；2 Direct Host Routes——每个 Pod 在主机上有一条 /32 指向专属 cali 口；3 Namespace Isolation——link-netns 引用说明 Pod netns 是隔离的但仍连着主机。">
+  <h2><span class="n">13</span>划三个重点</h2>
+  <div class="grid g3" style="max-width:1000px;margin-top:16px">
+    <div class="card"><div class="t">① Veth 连通性</div>
+      <div class="d">Pod 的 <code>eth0@if6</code> 与主机的 <code>cali6d09fa47963@if2</code> 配成一对，形成<b>点到点链路</b>。一头断了另一头立刻知道。</div></div>
+    <div class="card"><div class="t">② 主机直连路由</div>
+      <div class="d">每个 Pod 在主机上都有<b>专属 /32 路由</b>，精确指向自己的 Calico 接口，绝不"广播找人"。</div></div>
+    <div class="card"><div class="t">③ 命名空间隔离</div>
+      <div class="d"><code>link-netns</code> 这个引用告诉我们：Pod 的 netns 是<b>隔离的</b>，但又始终<b>连着主机</b>——隔离与连通兼得。</div></div>
+  </div>
+  <div class="say" style="max-width:980px">
+    <b>口语总结：</b>「记住三件事就够了：<b>一对 veth 牵手、一条 /32 路由定位、一个 netns 隔离</b>。Calico 的 Pod 网络，本质上就是这三板斧。」
+  </div>
+</section>
+
+<section class="slide" data-title="总结" data-notes="Summary 四点：1 Pod Network Namespaces——每 Pod 独立 netns，专属 eth0 拿 /32 唯一 IP（来自 Calico IPAM）；2 Veth Pairs——一头 eth0 在 Pod，一头 cali* 在主机，点对点；3 Virtual Next-Hop 169.254.1.1——所有出向流量走这个 link-local 虚拟网关，统一简化路由；4 Host Routing Table——节点维护每 Pod 一条 /32 主机路由指向对应 cali 口；5 DNS via CoreDNS——Pod 用 CoreDNS 10.96.0.10 解析，search 域支持短名。">
+  <h2><span class="n">14</span>今天我们学了啥？</h2>
+  <div class="grid g2" style="max-width:1000px">
+    <div class="card"><div class="t">① Pod 网络命名空间</div>
+      <div class="d">每个 Pod 跑在<b>自己的 netns</b> 里，有专属 <code>eth0</code>，从 Calico IPAM 拿到唯一的 <code>/32</code> IP</div></div>
+    <div class="card"><div class="t">② Veth Pairs</div>
+      <div class="d">Calico 给每个 Pod 建一对 veth：一头 <code>eth0</code> 在 Pod，另一头 <code>cali*</code> 在主机，组成点对点链路</div></div>
+    <div class="card"><div class="t">③ 虚拟下一跳 169.254.1.1</div>
+      <div class="d">Pod 所有出向流量都走这个 <b>link-local 虚拟网关</b>。所有 Pod 统一用它，路由大大简化</div></div>
+    <div class="card"><div class="t">④ 主机路由表</div>
+      <div class="d">节点为每个 Pod 维护一条 <code>/32</code> 主机路由，把去往该 Pod IP 的流量指向对应的 Calico 接口</div></div>
+    <div class="card"><div class="t">⑤ DNS 走 CoreDNS</div>
+      <div class="d">Pod 用 <code>CoreDNS (10.96.0.10)</code> 做全部名字解析，配合 search 域，<b>短名也能解析</b></div></div>
+  </div>
+  <div class="okbox" style="max-width:1000px;margin-top:20px">
+    <b>最终画面：</b>Pod 有唯一 IP + 独立 netns + 一根 veth 连主机 + 统一虚拟网关 + 主机上一条 /32 路由 + CoreDNS 找人 = <b>全集群自由通信</b>。
+  </div>
+</section>
+
+<section class="slide" data-title="收尾" data-notes="收尾：实验清理按 Lab cleanup 步骤。留一页 Q&A 提示。回顾：十步流水线是骨架，veth+/32+169.254.1.1 是血肉。">
+  <h1>谢谢大家！</h1>
+  <p class="sub">Pod Networking —— 十步流水线，三板斧收尾</p>
+  <div class="grid g4" style="max-width:1000px;margin-top:22px">
+    <div class="card"><div class="t">十步</div><div class="big">CNI 流水线</div><div class="d">apiserver → … → Running</div></div>
+    <div class="card"><div class="t">veth</div><div class="big">eth0 ↔ cali*</div><div class="d">一根虚拟网线牵手</div></div>
+    <div class="card"><div class="t">/32</div><div class="big">每 Pod 一条</div><div class="d">主机精确路由定位</div></div>
+    <div class="card"><div class="t">网关</div><div class="big">169.254.1.1</div><div class="d">统一虚拟下一跳</div></div>
+  </div>
+  <p style="margin-top:24px;color:var(--dim)">实验清理：按 <b>Lab cleanup</b> 步骤执行 · Q&amp;A 欢迎提问</p>
+</section>
+
+</div>
+
+<div id="hud"><b id="cur">1</b> / <span id="tot">1</span> · S 备注 · O 概览 · F 全屏</div>
+<div id="notes"><div class="lbl">SPEAKER NOTES（演讲者备注）</div><div id="nb"></div></div>
+<div id="ov"><h3>▚ 幻灯片概览（ESC 退出）</h3><div class="ovg" id="ovg"></div></div>
+
+<script>
+const S=[...document.querySelectorAll('.slide')];
+const bar=document.getElementById('bar'),cur=document.getElementById('cur'),tot=document.getElementById('tot'),
+ notes=document.getElementById('notes'),nb=document.getElementById('nb'),ov=document.getElementById('ov'),ovg=document.getElementById('ovg');
+let i=0;tot.textContent=S.length;
+S.forEach((s,x)=>{const d=document.createElement('div');d.className='ovi';
+ d.innerHTML=`<div class="i">${String(x+1).padStart(2,'0')}</div><div class="s">${s.dataset.title||''}</div>`;
+ d.onclick=()=>{go(x);ov.classList.remove('on')};ovg.appendChild(d);});
+function render(){
+  S.forEach((s,n)=>s.classList.toggle('active',n===i));
+  cur.textContent=i+1;bar.style.width=((i+1)/S.length*100)+'%';
+  nb.textContent=S[i].dataset.notes||'（无备注）';
+  [...ovg.children].forEach((c,n)=>c.classList.toggle('cur',n===i));
+  document.title=`${i+1}/${S.length} · ${S[i].dataset.title} — Pod Networking`;
+}
+function go(n){i=Math.max(0,Math.min(S.length-1,n));render()}
+document.addEventListener('keydown',e=>{
+  if(e.key==='ArrowRight'||e.key===' '||e.key==='PageDown'){e.preventDefault();go(i+1)}
+  else if(e.key==='ArrowLeft'||e.key==='PageUp'){e.preventDefault();go(i-1)}
+  else if(e.key==='Home')go(0); else if(e.key==='End')go(S.length-1);
+  else if(e.key.toLowerCase()==='s')notes.classList.toggle('on');
+  else if(e.key.toLowerCase()==='o')ov.classList.toggle('on');
+  else if(e.key==='Escape')ov.classList.remove('on');
+  else if(e.key.toLowerCase()==='f'){document.fullscreenElement?document.exitFullscreen():document.documentElement.requestFullscreen()}
+});
+document.getElementById('deck').addEventListener('click',e=>{
+  if(e.target.closest('.btn,.field,.step,.ovi'))return;
+  if(e.clientX<innerWidth*.15)go(i-1); else if(e.clientX>innerWidth*.85)go(i+1);
+});
+
+/* CNI 十步 */
+const st=[...document.querySelectorAll('.step')],sp=document.getElementById('sprog');
+let si=-1,tm=null;
+function sShow(n){st.forEach((s,k)=>{s.classList.remove('on');
+  if(k<n)s.classList.add('done');else s.classList.remove('done');});
+  if(n>=0&&n<st.length){st[n].classList.add('on');st[n].classList.remove('done')}
+  sp.textContent=n<0?'（点「下一步」开始）':`${n+1} / ${st.length}`;
+  if(n>=st.length){sp.textContent='✅ 十步走完 → Pod Running！';st.forEach(s=>s.classList.add('done'))}
+}
+document.getElementById('sn').onclick=()=>{if(si<st.length){si++;sShow(si)}};
+document.getElementById('sr').onclick=()=>{clearInterval(tm);si=-1;sShow(-1)};
+document.getElementById('sa').onclick=()=>{clearInterval(tm);si=-1;sShow(-1);
+  tm=setInterval(()=>{si++;sShow(si);if(si>=st.length)clearInterval(tm)},1300)};
+st.forEach((s,k)=>s.onclick=()=>{si=k;sShow(k)});
+
+/* 字段解释 */
+const fe=document.getElementById('fexp');
+document.querySelectorAll('.field').forEach(f=>{
+  f.onclick=()=>{document.querySelectorAll('.field').forEach(x=>x.classList.remove('on'));
+    f.classList.add('on');fe.innerHTML=f.dataset.e};
+});
+
+/* veth 动画 */
+const vp=document.getElementById('vpod'),vh=document.getElementById('vhost'),vl=document.getElementById('vln'),vt=document.getElementById('vhint');
+document.getElementById('vbt').onclick=()=>{vp.classList.add('lit');vh.classList.add('lit');vl.classList.add('lit');
+  vl.textContent='◄══⚡══►';
+  vt.innerHTML='✅ 连上了！Pod 的 <b>eth0@if6</b> ↔ 主机的 <b>cali6d09fa47963@if2</b> —— 一根虚拟网线，两头互指。';};
+document.getElementById('vrs').onclick=()=>{vp.classList.remove('lit');vh.classList.remove('lit');vl.classList.remove('lit');
+  vl.textContent='◄══►';vt.textContent='点上面的按钮，让 Pod 和主机连起来…'};
+
+/* DNS 短名展开 */
+const eb=document.getElementById('expandBox');
+document.getElementById('dn').onclick=()=>{eb.innerHTML=
+ `<span class="exq"># 短名：</span> <span class="ex">kubernetes</span>\n`+
+ `<span class="exq"># ndots:5 → 少于5个点，当相对名，依次套 search 后缀：</span>\n`+
+ `<span class="ex">→ kubernetes.default.svc.cluster.local</span>  <span class="exq">✓ 命中！</span>\n`+
+ `<span class="exq">  （若没命中再试 kubernetes.svc.cluster.local → kubernetes.cluster.local → kubernetes.ec2.internal）</span>\n`+
+ `<span class="exq"># 查询发给：</span> <span class="ex">nameserver 10.96.0.10</span> <span class="exq">= CoreDNS（kube-dns 的 ClusterIP）</span>`;};
+document.getElementById('dr').onclick=()=>{eb.innerHTML='<span class="exq">点上面按钮，看 <code>kubernetes</code> 这个短名会被解析成什么…</span>'};
+
+render();
+</script>
+</body>
+</html>
