@@ -250,6 +250,36 @@ Neighbor Status Codes: m - Under maintenance
 - `PfxAcc`: Prefixes Accepted, 通过路由过滤并被路由表接受的已接收前缀数量，这里为1表明每个节点接受一条前缀
 每一个kubernetes节点都在通告相同的负载均衡器CIDR `172.16.0.240/28`，确认所有节点都可以作为LoadBalancer服务流量的下一跳。`State: Estab` 表明BGP会话健康，路由交换正常。
 
+查看详细信息可以使用
+```bash
+ceos#show ip bgp neighbors
+BGP neighbor is 10.10.10.10, remote AS 65010, external link
+ Description: "Calico Kubernetes Nodes"
+  BGP version 4, remote router ID 10.10.10.10, VRF default
+  Inherits configuration from and member of peer-group CALICO-K8S
+  Last read 00:00:08, last write 00:00:09
+  Hold time is 180, keepalive interval is 60 seconds
+  Configured hold time is 180, keepalive interval is 60 seconds
+  Effective minimum hold time is 3 seconds
+  Send failure hold time is 0 seconds
+.........
+  Message Statistics:
+                                  Sent      Rcvd
+    Opens:                           1         1
+    Notifications:                   0         0
+    Updates:                         2         5
+    Keepalives:                    159       152
+    Enhanced Route Refresh:          0         0
+    Begin of Route Refresh:          0         2
+    End of Route Refresh:            0         2
+    Total messages:                162       162
+  Prefix Statistics:
+                                   Sent      Rcvd     Best Paths     Best ECMP Paths
+    IPv4 Unicast:                     1         1              1                   1
+    IPv6 Unicast:                     0         0              0                   0
+```
+
+
 ### 配置多路径(multi-path)
 默认情况下，cEOS容器并未配置支持等价成本多路径路由功能。可以通过一下配置启用该功能。
 ```bash
@@ -323,6 +353,18 @@ Connection: close
 </html>
 Connection closed by foreign host.
 ceos(config-router-bgp)#
+```
+
+验证calico bird
+```bash
+> kubectl exec -n calico-system calico-node-hmv7z -c calico-node -- birdcl show route export Node_10_10_10_1 all
+BIRD v0.3.3+birdv1.6.8 ready.
+172.16.0.240/28    blackhole [static1 01:47:56] * (200)
+        Type: static unicast univ
+        BGP.origin: IGP
+        BGP.as_path: 65010
+        BGP.next_hop: 10.10.10.12
+        BGP.local_pref: 100
 ```
 
 ```bash
