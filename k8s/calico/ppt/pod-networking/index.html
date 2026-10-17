@@ -1,0 +1,698 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="基于 Kubernetes Networking Labs Lesson 02 的 Calico Pod Networking 中文动态演示课件">
+  <title>Calico Pod Networking：从 eth0 到跨节点路由</title>
+  <link rel="stylesheet" href="styles.css?v=2">
+</head>
+<body>
+  <main class="deck-shell" aria-label="Calico Pod Networking HTML 演示文稿">
+    <div id="deck-canvas">
+      <section class="slide cover active" data-section="Calico Pod Networking" data-title="从 eth0 到跨节点路由">
+        <div class="cover-grid">
+          <div class="cover-copy">
+            <p class="eyebrow">ContainerLab · Kind · Calico CNI</p>
+            <h1>Calico Pod Networking<br>从 <span class="yellow-mark">eth0</span> 到跨节点路由</h1>
+            <p class="lead">沿着 Lesson 02 的本地环境，把一个 Pod 的网卡、路由、veth、Node underlay 和跨节点转发连成一条完整路径。</p>
+            <div class="cover-meta">
+              <span>Calico 3.30.0</span>
+              <span>Kubernetes 1.28.0</span>
+              <span>Pod CIDR 192.168.0.0/16</span>
+            </div>
+          </div>
+          <div class="cover-visual" aria-label="三个 Kubernetes 节点上的 Pod 通过节点网络通信的动态示意">
+            <div class="cover-node a"><strong>control-plane</strong><span>172.18.0.4</span><div class="cover-pod">Pod</div></div>
+            <div class="cover-node b"><strong>worker</strong><span>172.18.0.3</span><div class="cover-pod">Pod</div></div>
+            <div class="cover-node c"><strong>worker2</strong><span>172.18.0.2</span><div class="cover-pod">Pod</div></div>
+            <div class="cover-drop d1"></div>
+            <div class="cover-drop d2"></div>
+            <div class="cover-drop d3"></div>
+            <div class="cover-underlay"><span class="cover-packet p1"></span><span class="cover-packet p2"></span></div>
+            <div class="cover-label">Node underlay · 172.18.0.0/16</div>
+            <div class="cover-route-note">Pod /32 路由由各节点接入</div>
+          </div>
+        </div>
+        <aside class="speaker-copy">
+          <p>大家好，今天这节课不从很大的 Kubernetes 网络概念讲起，我们就盯住一个具体问题：multitool Pod 创建以后，它的 eth0 从哪里来，为什么是 /32，默认路由为什么指向 169.254.1.1，包又怎么从 Pod 一路走到另一个 Pod。</p>
+          <p>环境完全沿用课程仓库的 Lesson 02。三节点 Kind 集群运行在 ContainerLab 里，Kind 自带 CNI 被关闭，然后安装 Calico 3.30.0。后面出现的地址和接口名来自课程示例，大家现场操作时要换成自己环境里的实际值。</p>
+          <p class="note-source">主课程：<a href="https://k8snetworking.com/lessons/02-pod-network">https://k8snetworking.com/lessons/02-pod-network</a></p>
+        </aside>
+      </section>
+
+      <section class="slide" data-section="课程主线" data-title="Pod 网络要解决四件事">
+        <div class="slide-header">
+          <div>
+            <p class="eyebrow">从抽象模型落到 Linux</p>
+            <h2>Pod 网络要解决四件事</h2>
+            <div class="rule"></div>
+          </div>
+        </div>
+        <div class="split-45">
+          <div>
+            <img class="course-image" src="assets/course-pod-network.png" alt="课程原图，Pod 网络连接多个 Pod 与节点接口">
+            <p class="source-line">课程原图：Pod Network Architecture</p>
+          </div>
+          <div class="learning-map" style="grid-template-columns: repeat(2, 1fr); margin-top: 0;">
+            <article class="learning-step"><span class="index">01</span><h3>唯一地址</h3><p>每个 Pod 从 Calico IPAM 获得一个唯一 IP，课程池为 192.168.0.0/16。</p></article>
+            <article class="learning-step"><span class="index">02</span><h3>Namespace 隔离</h3><p>Pod 有独立网络命名空间，接口和路由表与宿主机分开。</p></article>
+            <article class="learning-step"><span class="index">03</span><h3>主机接入</h3><p>veth pair 把 Pod 的 eth0 接到宿主机 cali*，形成点到点链路。</p></article>
+            <article class="learning-step"><span class="index">04</span><h3>端到端可达</h3><p>宿主机路由把本地 /32 与远端 Pod 网段接起来，策略在路径上执行。</p></article>
+          </div>
+        </div>
+        <div class="slide-number">02</div>
+        <aside class="speaker-copy">
+          <p>先把目标压缩成四件事。第一，Pod 必须有唯一 IP。第二，这个 IP 放在 Pod 自己的网络命名空间里，隔离还在。第三，隔离以后仍然要接入宿主机，所以需要一对 veth。第四，宿主机和其他节点必须知道去这个 Pod 的路。</p>
+          <p>课程图把 Pod 网络画成一条共享的线，便于理解“Pod 都可达”。Calico 实际采用三层路由，Pod 并没有真的挂在一个二层广播域里。我们后面会用 /32 路由和虚拟下一跳把这件事讲清楚。</p>
+          <p class="note-source">图片来源：<a href="https://raw.githubusercontent.com/aadhilam/k8-networking-calico-containerlab/master/images/pod-network.png">课程仓库 pod-network.png</a></p>
+        </aside>
+      </section>
+
+      <section class="slide" data-section="实验环境" data-title="课程环境与原始配置">
+        <div class="slide-header">
+          <div>
+            <p class="eyebrow">Lesson 02 仓库快照</p>
+            <h2>课程环境与原始配置</h2>
+            <div class="rule"></div>
+          </div>
+          <span class="command">containerlab/02-pod-network</span>
+        </div>
+        <div class="grid-2">
+          <div>
+            <table class="env-table">
+              <thead><tr><th>对象</th><th>课程配置</th><th>作用</th></tr></thead>
+              <tbody>
+                <tr><td>Kind 镜像</td><td>kindest/node:v1.28.0</td><td>3 个节点</td></tr>
+                <tr><td>默认 CNI</td><td>disableDefaultCNI: true</td><td>留给 Calico 接管</td></tr>
+                <tr><td>Pod CIDR</td><td>192.168.0.0/16</td><td>工作负载地址池</td></tr>
+                <tr><td>Service CIDR</td><td>10.96.0.0/16</td><td>ClusterIP 地址池</td></tr>
+                <tr><td>Calico</td><td>v3.30.0</td><td>Operator 安装</td></tr>
+                <tr><td>IPAM block</td><td>/26</td><td>按节点聚合地址</td></tr>
+              </tbody>
+            </table>
+            <div class="flat-block yellow" style="margin-top: 22px;">
+              <h3>课程页面里有一处目录简写</h3>
+              <p class="small">页面示例写了 <code>containerlab/pod-network</code>。仓库真实目录为 <code>containerlab/02-pod-network</code>，以本地仓库为准。</p>
+            </div>
+          </div>
+          <pre class="code manifest-code"><span class="comment"># pod-network-no-cni.yaml</span>
+<span class="key">networking:</span>
+  <span class="key">disableDefaultCNI:</span> <span class="hot">true</span>
+  <span class="key">podSubnet:</span> <span class="value">"192.168.0.0/16"</span>
+  <span class="key">serviceSubnet:</span> <span class="value">"10.96.0.0/16"</span>
+
+<span class="comment"># custom-resources.yaml</span>
+<span class="key">calicoNetwork:</span>
+  <span class="key">ipPools:</span>
+  - <span class="key">blockSize:</span> <span class="value">26</span>
+    <span class="key">cidr:</span> <span class="value">192.168.0.0/16</span>
+    <span class="key">encapsulation:</span> <span class="hot">VXLANCrossSubnet</span>
+    <span class="key">natOutgoing:</span> <span class="value">Enabled</span>
+    <span class="key">nodeSelector:</span> <span class="cool">all()</span></pre>
+        </div>
+        <div class="slide-number">03</div>
+        <aside class="speaker-copy">
+          <p>这页非常重要，因为后面所有现象都从这里来。Kind 的默认 CNI 明确关闭，所以在 Calico 装好以前，普通 Pod 不会拥有完整的集群网络。Pod 网段是 192.168.0.0/16，Service 网段是 10.96.0.0/16，这两组地址不要混。</p>
+          <p>Calico IPAM 的 blockSize 是 /26。它不会每创建一个 Pod 就把一条新路由广播到所有地方，而是先把一个小块分给节点，再从节点自己的块里分配 Pod IP。封装模式是 VXLANCrossSubnet。只有 Node IP 跨 underlay 子网时才封装，本实验三个 Kind 节点通常位于同一个 172.18.0.0/16 Docker 网络，所以跨节点 Pod 流量走直路由，不加 VXLAN 外层。</p>
+          <p class="note-source">配置来源：课程仓库 <a href="https://github.com/aadhilam/k8-networking-calico-containerlab/tree/master/containerlab/02-pod-network">containerlab/02-pod-network</a></p>
+        </aside>
+      </section>
+
+      <section class="slide" data-section="部署" data-title="部署脚本的执行链">
+        <div class="slide-header">
+          <div>
+            <p class="eyebrow">deploy.sh</p>
+            <h2>部署脚本的执行链</h2>
+            <div class="rule"></div>
+          </div>
+        </div>
+        <div class="command-runway">
+          <article class="runway-step"><span class="index">01</span><h3>创建三节点 Kind</h3><p><span class="command">sudo containerlab deploy -t pod-network.clab.yaml</span></p><p class="small muted">ContainerLab 调用 k8s-kind 节点，加载 no-CNI 配置。</p></article>
+          <div class="runway-arrow">›</div>
+          <article class="runway-step"><span class="index">02</span><h3>安装 Calico 3.30.0</h3><p><span class="command">kubectl create -f operator-crds.yaml</span></p><p class="small muted">再安装 Tigera Operator，应用 custom-resources.yaml。</p></article>
+          <div class="runway-arrow">›</div>
+          <article class="runway-step"><span class="index">03</span><h3>部署 multitool</h3><p><span class="command">kubectl apply -f tools/multitool-pod.yaml</span></p><p class="small muted">脚本等待 TigeraStatus 可用后再部署测试 Pod 与 Service。</p></article>
+        </div>
+        <div class="grid-2" style="margin-top: 30px; gap: 24px;">
+          <div class="flat-block green"><h3>kubeconfig 与实验清理</h3><p class="body mono">export KUBECONFIG=$(pwd)/pod-network.kubeconfig</p><p class="small">演示结束后运行 <code>./destroy.sh</code>，按提示确认清理。</p></div>
+          <div class="flat-block orange"><h3>部署完成的两个条件</h3><p class="body"><code>tigerastatus</code> 中 apiserver 与 calico 可用，三个 Node 都是 <code>Ready</code>。</p></div>
+        </div>
+        <div class="slide-number">04</div>
+        <aside class="speaker-copy">
+          <p>deploy.sh 做三段工作。先销毁可能残留的同名拓扑，再创建三节点 Kind。接着拿 kubeconfig，安装 calicoctl、Operator CRD 和 Tigera Operator，然后应用我们刚才看到的自定义资源。</p>
+          <p>脚本不会一提交 YAML 就宣布成功。它会反复查询 TigeraStatus，直到 apiserver 和 calico 的 Available 条件都为 True，最后才部署 multitool。现场演示时建议直接执行仓库里的 deploy.sh，不要手工跳步骤。进入新终端以后，记得重新 export 这个实验自己的 kubeconfig。</p>
+          <p>演示结束以后运行仓库里的 destroy.sh。脚本会识别 topology、Kind cluster 和 kubeconfig，并在输入 yes 后清理本实验资源。这样不会把其他 ContainerLab 实验一起删除。</p>
+          <p class="note-source">部署脚本：<a href="https://github.com/aadhilam/k8-networking-calico-containerlab/blob/master/containerlab/02-pod-network/deploy.sh">deploy.sh</a></p>
+        </aside>
+      </section>
+
+      <section class="slide" data-section="测试载荷" data-title="multitool Pod 与 Service">
+        <div class="slide-header">
+          <div>
+            <p class="eyebrow">tools/multitool-pod.yaml</p>
+            <h2>multitool Pod 与 Service</h2>
+            <div class="rule"></div>
+          </div>
+          <span class="command">kubectl get pod,svc -o wide</span>
+        </div>
+        <div class="workload-layout">
+          <pre class="code workload-code"><span class="key">kind:</span> Pod
+<span class="key">metadata:</span>
+  <span class="key">name:</span> <span class="value">multitool</span>
+  <span class="key">labels:</span> { <span class="key">app:</span> <span class="value">multitool</span> }
+<span class="key">spec:</span>
+  <span class="key">containers:</span>
+  - <span class="key">image:</span> <span class="value">praqma/network-multitool:latest</span>
+    <span class="key">ports:</span> [<span class="value">80</span>, <span class="value">443</span>]
+    <span class="key">command:</span> <span class="value">nginx -g "daemon off;"</span>
+---
+<span class="key">kind:</span> Service
+<span class="key">metadata:</span>
+  <span class="key">name:</span> <span class="value">multitool-service</span>
+<span class="key">spec:</span>
+  <span class="key">selector:</span> { <span class="key">app:</span> <span class="value">multitool</span> }
+  <span class="key">type:</span> <span class="hot">ClusterIP</span>
+  <span class="key">ports:</span> [<span class="value">80</span>, <span class="value">443</span>]</pre>
+          <div class="manifest-facts">
+            <div class="manifest-row"><span class="manifest-index">01</span><div><h3>网络工具箱</h3><p>镜像内带 <code>curl</code>、<code>dig</code>、<code>ping</code>、<code>traceroute</code>、<code>ss</code>、<code>iperf3</code> 与 <code>tcpdump</code>，适合沿路径逐点验证。</p></div></div>
+            <div class="manifest-row"><span class="manifest-index">02</span><div><h3>可观测 HTTP 端点</h3><p>容器以前台方式运行 nginx，并暴露 80 与 443。Pod 网络建立后可以立即做连通性测试。</p></div></div>
+            <div class="manifest-row"><span class="manifest-index">03</span><div><h3>标签连接 Service</h3><p>Service 的 <code>selector app=multitool</code> 选中 Pod。DNS 名称最终解析到这个 ClusterIP，而不是直接解析到 Pod IP。</p></div></div>
+            <div class="manifest-row"><span class="manifest-index">04</span><div><h3>资源边界</h3><p>课程设置 CPU request 100m、limit 200m，内存 request 128Mi、limit 256Mi，避免测试工具无边界占用节点资源。</p></div></div>
+          </div>
+        </div>
+        <div class="flat-block yellow" style="margin-top: 20px;"><p class="small"><strong>演示口径：</strong>Lesson 02 的一个 Pod 足够查看接口、路由、DNS 与本地 veth。要演示同节点和跨节点互访，需要再增加测试 Pod，或进入 Lesson 03。</p></div>
+        <div class="slide-number">05</div>
+        <aside class="speaker-copy">
+          <p>部署完成以后，课程自动创建 multitool Pod。这个镜像不是普通业务镜像，它把常用网络工具和 nginx 放在一起，所以我们既能从里面主动发起 ping、curl 和 DNS 查询，也能把它当成 HTTP 目标端。</p>
+          <p>Pod 的标签是 app 等于 multitool，Service 用相同 selector 选中它，并暴露 80 和 443。这里可以顺手强调，Service 名称经 CoreDNS 解析到 ClusterIP，真正的 Pod IP 仍由 Calico IPAM 分配，两类地址承担不同角色。</p>
+          <p>Lesson 02 默认只有一个测试 Pod，因此本课主实验聚焦单 Pod 的网络创建和主机接入。跨节点互访页属于基于同一环境模型的扩展验证。</p>
+          <p class="note-source">清单来源：<a href="https://github.com/aadhilam/k8-networking-calico-containerlab/blob/master/containerlab/02-pod-network/tools/multitool-pod.yaml">tools/multitool-pod.yaml</a></p>
+        </aside>
+      </section>
+
+      <section class="slide" data-section="组件分工" data-title="Calico 组件的责任边界">
+        <div class="slide-header">
+          <div>
+            <p class="eyebrow">一次配置与持续协调</p>
+            <h2>Calico 组件的责任边界</h2>
+            <div class="rule"></div>
+          </div>
+        </div>
+        <div class="component-layout">
+          <div class="component-stage" aria-label="kubelet、容器运行时、Calico CNI、IPAM、datastore 和 Felix 的关系">
+            <div class="component-node-label">Kubernetes Node</div>
+            <div class="component-stack">
+              <div class="component-box runtime"><strong>kubelet + containerd</strong><span>创建 Pod sandbox，发起 CNI ADD / DEL</span></div>
+              <div class="component-link"></div>
+              <div class="component-pair">
+                <div class="component-box cni"><strong>Calico CNI</strong><span>创建 veth、写路由与 DNS 配置</span></div>
+                <div class="component-box ipam"><strong>Calico IPAM</strong><span>从本节点 block 分配或回收 Pod IP</span></div>
+              </div>
+              <div class="component-link"></div>
+              <div class="component-box felix"><strong>Felix + Linux 数据路径</strong><span>持续协调 workload 接口、路由、策略与远端可达性</span></div>
+            </div>
+            <div class="component-side"><strong>Kubernetes API / Calico datastore</strong><span>WorkloadEndpoint</span><span>IPPool 与 block affinity</span><span>节点与策略状态</span></div>
+          </div>
+          <div class="component-notes">
+            <div class="flat-block orange"><h3>CNI 是同步调用</h3><p class="small">Pod 创建或删除时由容器运行时调用。成功返回前，Pod 网络还没有准备好。</p></div>
+            <div class="flat-block green"><h3>Felix 持续工作</h3><p class="small">它观察期望状态并维护主机数据路径。后续策略或远端路由变化不需要重新创建 Pod。</p></div>
+            <div class="flat-block yellow"><h3>地址逐级收敛</h3><div class="address-strip"><span>IPPool<br><b>/16</b></span><i>›</i><span>Node block<br><b>/26</b></span><i>›</i><span>Pod route<br><b>/32</b></span></div></div>
+          </div>
+        </div>
+        <div class="slide-number">06</div>
+        <aside class="speaker-copy">
+          <p>这一页把容易混在一起的组件拆开。kubelet 通过容器运行时发起 CNI ADD。Calico CNI 在这个同步调用里创建 veth、写入 Pod 侧配置，并让 IPAM 分配地址。调用成功以后，容器运行时才能继续把 Pod 拉起来。</p>
+          <p>Felix 的角色不同。它长期运行在节点上，持续观察资源变化并协调 workload 接口、主机路由和策略。WorkloadEndpoint 记录 Pod IP、节点、接口和标签，IPPool 与 block affinity 则描述地址池和节点块。</p>
+          <p>地址层次也可以这样记：整个池是 /16，IPAM 按需给节点分 /26，宿主机最终为本地 Pod 安装 /32。这个层次解释了为什么地址分配既能聚合，又能精确交付。</p>
+          <p class="note-source">课程流程：<a href="https://k8snetworking.com/lessons/02-pod-network#how-the-pod-network-is-created">How the Pod Network is Created</a>；Calico 架构：<a href="https://docs.tigera.io/calico/latest/reference/architecture/overview">Architecture overview</a></p>
+        </aside>
+      </section>
+
+      <section class="slide" data-section="CNI 生命周期" data-title="Pod 网络的十步创建链路">
+        <div class="slide-header">
+          <div>
+            <p class="eyebrow">从创建请求到 Running</p>
+            <h2>Pod 网络的十步创建链路</h2>
+            <div class="rule"></div>
+          </div>
+          <button class="action-btn" id="replay-build" type="button">↻ 重新播放</button>
+        </div>
+        <div class="build-layout">
+          <img class="build-reference" src="assets/course-pod-interface-cni.png" alt="课程原图，kube-apiserver、kubelet、容器运行时、Calico CNI 和 IPAM 的十步交互">
+          <div class="build-side" id="pod-build">
+            <div class="build-steps">
+              <article class="build-step" data-caption="kube-apiserver 接收 Pod 创建请求，调度器选定节点"><span class="n">01</span><strong>API 接收请求</strong><p>Pod 绑定到某个 Node</p></article>
+              <article class="build-step" data-caption="目标节点 kubelet 发现新的 PodSpec"><span class="n">02</span><strong>kubelet 发现 Pod</strong><p>进入本机创建流程</p></article>
+              <article class="build-step" data-caption="容器运行时先创建 Pod sandbox 和网络命名空间"><span class="n">03</span><strong>创建 sandbox</strong><p>先有 network namespace</p></article>
+              <article class="build-step" data-caption="容器运行时发起 CNI ADD，请 Calico 配置网络"><span class="n">04</span><strong>调用 Calico CNI</strong><p>执行 CNI ADD</p></article>
+              <article class="build-step" data-caption="Calico IPAM 从该节点的 /26 block 中分配一个 Pod IP"><span class="n">05</span><strong>IPAM 分配地址</strong><p>从节点 block 取 IP</p></article>
+              <article class="build-step" data-caption="创建 veth pair，Pod 端改名 eth0，Host 端命名 cali*"><span class="n">06</span><strong>创建 veth pair</strong><p>eth0 ↔ cali*</p></article>
+              <article class="build-step" data-caption="写入 WorkloadEndpoint，记录 Pod IP、接口、节点和标签"><span class="n">07</span><strong>登记工作负载</strong><p>写 WorkloadEndpoint</p></article>
+              <article class="build-step" data-caption="Calico CNI 返回 IP、路由和 DNS 配置"><span class="n">08</span><strong>CNI 返回成功</strong><p>交回网络结果</p></article>
+              <article class="build-step" data-caption="容器运行时把 sandbox 创建成功返回 kubelet"><span class="n">09</span><strong>Runtime 回报</strong><p>网络已就绪</p></article>
+              <article class="build-step" data-caption="kubelet 把 Running 状态和 Pod IP 写回 kube-apiserver"><span class="n">10</span><strong>更新 Pod 状态</strong><p>Running + PodIP</p></article>
+            </div>
+            <div class="build-caption" id="build-caption" aria-live="polite"></div>
+          </div>
+        </div>
+        <div class="slide-number">05</div>
+        <aside class="speaker-copy">
+          <p>现在把一次 Pod 创建放慢。API Server 收到对象以后，调度器先选节点。目标节点上的 kubelet 通过 CRI 要求容器运行时创建 Pod sandbox，运行时先准备网络命名空间，然后发起 CNI ADD。</p>
+          <p>Calico CNI 调 IPAM 拿地址，创建 veth pair，把一端放进 Pod 并命名为 eth0，另一端留在宿主机并命名为 cali 开头。随后它登记 WorkloadEndpoint，返回 IP、路由和 DNS 配置。运行时成功，kubelet 最后才把 Pod 的 Running 和 IP 状态写回 API Server。</p>
+          <p>所以 Pod 卡在 ContainerCreating 时，不要只盯镜像。CNI 二进制、CNI 配置、IPAM、节点路由和 Calico 组件都可能在这条链上。</p>
+          <p class="note-source">流程与图片来源：<a href="https://k8snetworking.com/lessons/02-pod-network#how-the-pod-network-is-created">课程 How the Pod Network is Created</a></p>
+        </aside>
+      </section>
+
+      <section class="slide" data-section="Pod 内部" data-title="Pod 内接口的四个线索">
+        <div class="slide-header">
+          <div>
+            <p class="eyebrow">kubectl exec -it multitool -- sh</p>
+            <h2>Pod 内接口的四个线索</h2>
+            <div class="rule"></div>
+          </div>
+        </div>
+        <div class="terminal-grid">
+          <div class="terminal-stack">
+            <article class="terminal-card">
+              <h3><code>ip addr</code></h3>
+              <pre class="code">2: eth0@if6: &lt;BROADCAST,MULTICAST,UP&gt;
+    mtu <span class="hot">1450</span> state UP
+    link/ether 7e:08:91:93:9c:3b
+    inet <span class="cool">192.168.146.66/32</span> scope global eth0
+    link-netnsid 0</pre>
+            </article>
+            <article class="terminal-card">
+              <h3><code>ip link</code></h3>
+              <pre class="code">1: lo: &lt;LOOPBACK,UP,LOWER_UP&gt;
+2: <span class="hot">eth0@if6</span>: &lt;BROADCAST,MULTICAST,UP&gt;
+    link-netnsid <span class="cool">0</span></pre>
+            </article>
+          </div>
+          <div class="fact-rail">
+            <div class="fact-row"><strong>eth0@if6</strong><p>Pod 里看到接口 2，<code>@if6</code> 指向对端 namespace 中的接口索引 6。</p></div>
+            <div class="fact-row"><strong>/32</strong><p>Pod 只有一个主机地址，没有把整个 /26 当作本地二层网段。</p></div>
+            <div class="fact-row"><strong>MTU 1450</strong><p>为可能出现的 VXLAN 外层预留约 50 字节，避免内层 1500 字节包超出 underlay MTU。</p></div>
+            <div class="fact-row"><strong>netnsid 0</strong><p>说明 eth0 的对端位于宿主机看到的网络命名空间。</p></div>
+          </div>
+        </div>
+        <div class="flat-block yellow" style="margin-top: 25px;"><p class="body"><strong>现场提示：</strong>IP、MAC、接口索引和 cali* 名称都会变化。判断结构，不要背示例值。</p></div>
+        <div class="slide-number">06</div>
+        <aside class="speaker-copy">
+          <p>进入 multitool 以后，先看 ip addr。课程示例的 Pod IP 是 192.168.146.66/32。这个 /32 很关键，它告诉我们 Pod 并没有认为旁边还有一个 192.168.146.0/26 的二层网段，它只拥有自己这个地址。</p>
+          <p>eth0@if6 里的 if6 是对端接口索引的提示。Pod 里的 eth0 和宿主机上的 cali 接口是一对 veth。MTU 1450 则来自 VXLAN 的最坏情况预留。本实验设置 VXLANCrossSubnet，同子网节点间通常不会封装，但 Pod 接口仍按可能封装的路径设置 MTU。</p>
+          <p class="note-source">示例输出：<a href="https://k8snetworking.com/lessons/02-pod-network#31-check-ip-addresses">课程 3.1 Check IP Addresses</a></p>
+        </aside>
+      </section>
+
+      <section class="slide" data-section="Pod 路由" data-title="169.254.1.1 虚拟下一跳">
+        <div class="slide-header">
+          <div>
+            <p class="eyebrow">Pod routing table</p>
+            <h2>169.254.1.1 虚拟下一跳</h2>
+            <div class="rule"></div>
+          </div>
+        </div>
+        <div class="route-focus" style="margin-top: 62px;">
+          <div class="route-command">
+            <p class="tiny muted" style="color:#aab8c7;">multitool:/# ip route</p>
+            <p class="route-line"><strong>default via 169.254.1.1</strong> dev eth0</p>
+            <p class="route-line">169.254.1.1 dev eth0 scope link</p>
+          </div>
+          <div class="gateway-explain">
+            <div class="flat-block yellow"><h3>一致的 Pod 配置</h3><p class="body">每个 Pod 都可以把所有非本地流量交给同一个链路本地下一跳。</p></div>
+            <div class="flat-block orange"><h3>不消耗业务网段地址</h3><p class="body">169.254.1.1 来自 link-local 范围，不需要在宿主机 cali* 上配置这个 IPv4 地址。</p></div>
+            <div class="flat-block green"><h3>主机接管三层转发</h3><p class="body">宿主机返回自己的 MAC，再由 Linux 路由表决定本地 Pod、远端节点或外部网络。</p></div>
+          </div>
+        </div>
+        <div class="slide-number">07</div>
+        <aside class="speaker-copy">
+          <p>很多人第一次看到这两条路由会问：169.254.1.1 到底配在哪张网卡上？答案是 Calico 把它当作一个虚拟的链路本地下一跳。Pod 只需要知道，所有流量从 eth0 交给这个下一跳。</p>
+          <p>宿主机端并不要求 cali 接口真的拥有 169.254.1.1。Calico 让宿主机对这个下一跳表现得可达，并确保 Pod 总是拿到宿主机的 MAC。接下来真正的目的地选择发生在宿主机 Linux 路由表里。</p>
+          <p class="note-source">Calico FAQ：<a href="https://docs.tigera.io/calico/latest/reference/faq#why-does-my-container-have-a-route-to-16925411">Why does my container have a route to 169.254.1.1?</a></p>
+        </aside>
+      </section>
+
+      <section class="slide" data-section="宿主机路由" data-title="宿主机的 Pod /32 路由">
+        <div class="slide-header">
+          <div>
+            <p class="eyebrow">docker exec -it pod-network-worker /bin/bash</p>
+            <h2>宿主机的 Pod /32 路由</h2>
+            <div class="rule"></div>
+          </div>
+        </div>
+        <div class="grid-2" style="margin-top: 28px;">
+          <div>
+            <h3>先定位 Pod 所在节点</h3>
+            <pre class="code" style="margin-top: 14px;">$ kubectl get pod multitool -o wide
+NAME       IP               NODE
+multitool  <span class="cool">192.168.146.66</span>  <span class="hot">pod-network-worker</span></pre>
+            <h3 style="margin-top: 28px;">再看 Host FIB</h3>
+            <pre class="code" style="margin-top: 14px;"># ip route | grep 192.168.146.66
+<span class="cool">192.168.146.66</span> dev <span class="hot">cali6d09fa47963</span> scope link</pre>
+          </div>
+          <div>
+            <h3>最后核对 host-side veth</h3>
+            <pre class="code" style="margin-top: 14px;">6: <span class="hot">cali6d09fa47963@if2</span>: &lt;UP,LOWER_UP&gt;
+    mtu 1450
+    link/ether ee:ee:ee:ee:ee:ee
+    link-netns cni-03a82789-...</pre>
+            <div class="flat-block orange" style="margin-top: 22px;"><h3>这条路由的意思</h3><p class="body">目的地址等于 192.168.146.66 时，包直接发进 cali6d09fa47963。它的 veth 对端正是 Pod 内的 eth0。</p></div>
+            <div class="flat-block yellow" style="margin-top: 18px;"><p class="small">host-side veth 不需要配置 Pod 网段 IPv4 地址。三层可达性由路由与邻居处理完成。</p></div>
+          </div>
+        </div>
+        <div class="slide-number">08</div>
+        <aside class="speaker-copy">
+          <p>从 Pod 回到宿主机，第一步一定要先定位 Pod 在哪台 Node 上。课程示例显示 multitool 在 pod-network-worker，IP 是 192.168.146.66。进入这台 Kind 节点以后查路由，可以看到一条精确的 /32 主机路由，出口就是 cali6d09fa47963。</p>
+          <p>再查这个接口，名字后面的 @if2 指向 Pod namespace 里的接口 2，也就是刚才的 eth0。两个索引从各自 namespace 看会不同，所以不要要求两边显示相同数字。只要 veth 对端关系和路由指向一致，链路就闭合了。</p>
+          <p class="note-source">课程 4.1 与 4.2：<a href="https://k8snetworking.com/lessons/02-pod-network#4-examine-the-host-routing-table">Examine the Host Routing Table</a></p>
+        </aside>
+      </section>
+
+      <section class="slide" data-section="veth" data-title="veth 连接两个网络命名空间">
+        <div class="slide-header">
+          <div>
+            <p class="eyebrow">Point-to-point</p>
+            <h2>veth 连接两个网络命名空间</h2>
+            <div class="rule"></div>
+          </div>
+        </div>
+        <div class="split-55">
+          <img class="veth-reference" src="assets/course-calico-veth.png" alt="课程原图，Pod network namespace 与 Host network namespace 通过 veth pair 相连">
+          <div class="route-side">
+            <div class="section-band"><strong>Pod namespace</strong><span class="mono">eth0 · 192.168.146.66/32</span></div>
+            <pre class="code">default via <span class="hot">169.254.1.1</span> dev eth0
+169.254.1.1 dev eth0 scope link</pre>
+            <div class="section-band"><strong>Host namespace</strong><span class="mono">cali6d09fa47963</span></div>
+            <pre class="code"><span class="cool">192.168.146.66</span> dev <span class="hot">cali6d09fa47963</span> scope link</pre>
+            <div class="flat-block green"><p class="body">Pod 发出的 IP 包跨过 veth 后进入主机协议栈。Calico 的策略、conntrack 与后续路由都能在这里接管。</p></div>
+          </div>
+        </div>
+        <p class="source-line">课程原图：Calico Veth Pair Architecture</p>
+        <div class="slide-number">09</div>
+        <aside class="speaker-copy">
+          <p>把前两页叠在一起，就是这张结构图。上半部分是 Pod network namespace，下面是 Host network namespace，中间只有一对 veth。Pod 端只有 /32 和默认路由，Host 端有指向 Pod IP 的精确路由。</p>
+          <p>这也是 Calico 三层模型的核心。包从 Pod 出来以后进入主机协议栈，Linux 路由决定下一跳，Calico 的策略可以在工作负载接口附近执行。它没有额外引入一个让所有 Pod 做二层广播的 Linux bridge。</p>
+          <p class="note-source">图片来源：<a href="https://raw.githubusercontent.com/aadhilam/k8-networking-calico-containerlab/master/images/calico-veth.png">课程仓库 calico-veth.png</a>；架构补充：<a href="https://docs.tigera.io/calico/latest/reference/architecture/data-path">Calico data path</a></p>
+        </aside>
+      </section>
+
+      <section class="slide" data-section="Node underlay" data-title="节点到节点的 underlay 连通性">
+        <div class="slide-header">
+          <div>
+            <p class="eyebrow">172.18.0.0/16</p>
+            <h2>节点到节点的 underlay 连通性</h2>
+            <div class="rule"></div>
+          </div>
+          <button class="action-btn" id="replay-node" type="button">↻ 重放 ping</button>
+        </div>
+        <div class="node-underlay" id="node-underlay" aria-label="三个 Kind 节点通过 Docker bridge 互相 ping 的动画">
+          <div class="bridge-line"></div>
+          <div class="bridge-label">Docker / ContainerLab bridge</div>
+          <div class="underlay-node n1"><strong>control-plane</strong><span>172.18.0.4</span></div>
+          <div class="underlay-node n2"><strong>worker</strong><span>172.18.0.3</span></div>
+          <div class="underlay-node n3"><strong>worker2</strong><span>172.18.0.2</span></div>
+          <span class="node-packet" aria-hidden="true"></span>
+          <span class="node-reply" aria-hidden="true"></span>
+          <div class="underlay-note"><code>worker ping 172.18.0.2</code> 验证的是 Node IP 网络。Pod 跨节点转发先依赖这条路。</div>
+        </div>
+        <div class="slide-number">10</div>
+        <aside class="speaker-copy">
+          <p>开始讲跨节点以前，先把 Node underlay 单独拿出来。ContainerLab 输出里三个 Kind 节点分别拿到 172.18.0.4、.3 和 .2，它们同属一个 Docker bridge 网络。节点之间先能用 Node IP 通，Calico 才有稳定的下一跳或隧道端点。</p>
+          <p>这一步验证的是 Node 到 Node，不是 Pod 到 Pod。可以在 worker 里 ping worker2 的 172.18.0.2，也可以用 ip route get 看出口。Node IP 不通时，先查 Docker network、iptables、主机防火墙和 MTU，继续盯 Pod 路由通常没有意义。</p>
+          <p class="note-source">节点地址示例：<a href="https://k8snetworking.com/lessons/02-pod-network#11-inspect-containerlab-topology">课程 1.1 Inspect ContainerLab Topology</a></p>
+        </aside>
+      </section>
+
+      <section class="slide" data-section="同节点转发" data-title="同节点 Pod 到 Pod 的数据路径">
+        <div class="slide-header">
+          <div>
+            <p class="eyebrow">Pod A · Host FIB · Pod B</p>
+            <h2>同节点 Pod 到 Pod 的数据路径</h2>
+            <div class="rule"></div>
+          </div>
+          <button class="action-btn" id="replay-same" type="button">↻ 重放数据包</button>
+        </div>
+        <div class="same-host-stage" id="same-host-stage" aria-label="同一节点上两个 Pod 通过宿主机路由互相通信的动画">
+          <div class="host-shell"><span class="label">pod-routing-worker · host network namespace</span></div>
+          <div class="pod-box pod-a"><strong>Pod A</strong><span>192.168.93.201/32</span></div>
+          <div class="pod-box pod-b"><strong>Pod B</strong><span>192.168.93.202/32</span></div>
+          <div class="host-router">Linux FIB<br><span class="tiny mono">/32 routes</span></div>
+          <span class="veth-line left"></span>
+          <span class="veth-line right"></span>
+          <span class="same-packet same-request" aria-hidden="true"></span>
+          <span class="same-packet same-reply" aria-hidden="true"></span>
+          <div class="path-caption">eth0 → cali* → host route lookup → cali* → eth0</div>
+        </div>
+        <div class="slide-number">11</div>
+        <aside class="speaker-copy">
+          <p>同一节点上的两个 Pod 也不会直接 ARP 找对方。Pod A 把包交给 169.254.1.1，包通过 veth 进入主机。主机 FIB 查到 Pod B 的 /32 路由，再从 Pod B 对应的 cali 接口送进去。</p>
+          <p>Lesson 03 的示例 ping 结果 TTL 是 63，起点通常是 64，说明路径经过一次三层转发，也就是宿主机。目的 Pod 抓包还能看到源地址仍是 192.168.93.201，没有做 SNAT，也没有加 overlay 封装。</p>
+          <p class="note-source">同节点验证扩展：<a href="https://k8snetworking.com/lessons/03-pod-routing#3-examine-pod-to-pod-communication-within-the-same-node">Lesson 03 same-node communication</a></p>
+        </aside>
+      </section>
+
+      <section class="slide" data-section="跨节点转发" data-title="跨节点 Pod 到 Pod 的两种路径">
+        <div class="slide-header">
+          <div>
+            <p class="eyebrow">VXLANCrossSubnet</p>
+            <h2>跨节点 Pod 到 Pod 的两种路径</h2>
+            <div class="rule"></div>
+          </div>
+          <div style="display:flex; gap:10px; align-items:center;">
+            <div class="segment" role="group" aria-label="跨节点封装模式">
+              <button class="active" id="mode-direct" type="button" aria-pressed="true">本实验：同子网</button>
+              <button id="mode-vxlan" type="button" aria-pressed="false">扩展：跨子网</button>
+            </div>
+            <button class="action-btn" id="replay-cross" type="button">↻</button>
+          </div>
+        </div>
+        <div class="cross-stage" id="cross-stage" data-mode="direct" aria-label="跨节点 Pod 通信在同子网直路由和跨子网 VXLAN 模式下的动画">
+          <div class="cross-node a"><span class="node-name">worker</span><span class="node-ip">172.18.0.3</span><div class="cross-pod"><strong>Pod A</strong><span>192.168.93.201</span></div><span class="cross-veth"></span><div class="cross-egress">remote route<br>via 172.18.0.2</div></div>
+          <div class="cross-node b"><span class="node-name">worker2</span><span class="node-ip">172.18.0.2</span><div class="cross-pod"><strong>Pod B</strong><span>192.168.112.197</span></div><span class="cross-veth"></span><div class="cross-egress">local /32<br>dev cali*</div></div>
+          <div class="underlay-link"></div>
+          <div class="mode-label"><span class="direct-copy">原始 Pod 包<br><code>192.168.93.201 → 192.168.112.197</code></span><span class="vxlan-copy">UDP/4789 外层<br><code>172.18.0.3 → 172.18.0.2</code></span></div>
+          <span class="cross-packet" aria-hidden="true"></span>
+        </div>
+        <div class="cross-summary" id="cross-summary"></div>
+        <div class="slide-number">12</div>
+        <aside class="speaker-copy">
+          <p>这页可以切换两个模式。先看本实验。worker 的路由把目标 Pod 指向 worker2 的 Node IP 172.18.0.2。两个 Node IP 同属 172.18.0.0/16，所以 VXLANCrossSubnet 判断为同子网，线上传的是原始 Pod 包，源和目的仍然是两个 Pod IP。</p>
+          <p>切到跨子网模式，内层 Pod 包保持不变，Calico 再套一层 VXLAN。外层源和目的变成两个 Node IP，通过 UDP 4789 穿过不认识 Pod CIDR 的 underlay。目的节点解封装后，再用本地 /32 路由把包送进 cali 接口。</p>
+          <p>课程 Lesson 03 的示例跨节点 ping TTL 是 62，可以理解为源节点和目的节点各完成一次三层转发。这个数值是观察线索，实际环境仍要以抓包和路由为准。</p>
+          <p class="note-source">课程跨节点示例：<a href="https://k8snetworking.com/lessons/03-pod-routing#4-examine-pod-to-pod-communication-in-different-nodes">Lesson 03 cross-node communication</a>；Calico 官方：<a href="https://docs.tigera.io/calico/latest/networking/configuring/vxlan-ipip">Overlay networking</a></p>
+        </aside>
+      </section>
+
+      <section class="slide" data-section="封装边界" data-title="VXLANCrossSubnet 的判定边界">
+        <div class="slide-header">
+          <div>
+            <p class="eyebrow">先比较 Node 子网，再决定封装</p>
+            <h2>VXLANCrossSubnet 的判定边界</h2>
+            <div class="rule"></div>
+          </div>
+        </div>
+        <table class="route-table" style="margin-top: 30px; font-size: 19px;">
+          <thead><tr><th>检查项</th><th>本课程环境</th><th>跨 underlay 子网</th></tr></thead>
+          <tbody>
+            <tr><td>Node IP</td><td>172.18.0.3 → 172.18.0.2</td><td>例如 10.10.1.10 → 10.10.2.10</td></tr>
+            <tr><td>子网关系</td><td>同属 172.18.0.0/16</td><td>不在同一 Node 子网</td></tr>
+            <tr><td>线上报文</td><td>原始 Pod IP 包</td><td>VXLAN 外层 Node IP + 内层 Pod IP</td></tr>
+            <tr><td>underlay 要求</td><td>能路由 Pod 前缀或使用远端 Node 下一跳</td><td>只需能路由 Node IP 与放行 UDP/4789</td></tr>
+            <tr><td>MTU</td><td>Pod MTU 仍按 1450 配置</td><td>1450 为 VXLAN 头部留空间</td></tr>
+          </tbody>
+        </table>
+        <div class="grid-3" style="margin-top: 30px;">
+          <div class="flat-block green"><h3>Pod 身份保留</h3><p class="small">集群内 Pod 到 Pod 通信通常不做 SNAT，策略与抓包仍能看到真实 Pod IP。</p></div>
+          <div class="flat-block yellow"><h3>natOutgoing 的边界</h3><p class="small">它针对发往 Calico IPPool 之外的目的地进行源地址转换，不等于集群内互访要 NAT。</p></div>
+          <div class="flat-block orange"><h3>路由来源要实查</h3><p class="small">用 <code>ip route</code>、Calico 配置和组件状态判断，避免把所有远端路由都口头归因于 BGP。</p></div>
+        </div>
+        <div class="slide-number">13</div>
+        <aside class="speaker-copy">
+          <p>VXLANCrossSubnet 的判断对象是 Node IP 所在的 underlay 子网，不是两个 Pod IP 是否属于同一个 /26。Pod A 和 Pod B 一定来自不同节点块，但只要两个 Node IP 同子网，Calico 就可以省掉 VXLAN 外层。</p>
+          <p>natOutgoing 也要讲清边界。课程把它设为 Enabled，主要用于 Pod 访问 Calico 地址池之外的网络。集群内 Pod 到 Pod 通信保留源 Pod IP，这样 NetworkPolicy、日志和服务端看到的身份才准确。</p>
+          <p>至于远端 Pod block 路由由谁下发，不能只凭“Calico”两个字就说是 BGP。VXLAN IPPool 的 cluster route 可以由 Felix 编程，具体环境要看 BGPConfiguration、FelixConfiguration、IPPool 和路由协议状态。</p>
+          <p class="note-source">Calico 官方：<a href="https://docs.tigera.io/calico/latest/networking/configuring/vxlan-ipip">Overlay networking</a>；<a href="https://docs.tigera.io/calico/latest/reference/resources/ippool">IPPool resource</a></p>
+        </aside>
+      </section>
+
+      <section class="slide" data-section="DNS" data-title="Pod DNS 与 Service 发现">
+        <div class="slide-header">
+          <div>
+            <p class="eyebrow">/etc/resolv.conf</p>
+            <h2>Pod DNS 与 Service 发现</h2>
+            <div class="rule"></div>
+          </div>
+        </div>
+        <div class="dns-flow">
+          <article class="dns-node"><h3>Pod 查询</h3><p><code>curl multitool-service</code></p><p class="small muted">短名称少于 5 个点，resolver 会尝试追加 search domain。</p></article>
+          <div class="dns-arrow">›</div>
+          <article class="dns-node"><h3>CoreDNS</h3><p><code>nameserver 10.96.0.10</code></p><p class="small muted">kube-dns Service 接收查询，返回 Service 名称对应的 ClusterIP。</p></article>
+          <div class="dns-arrow">›</div>
+          <article class="dns-node"><h3>Service</h3><p><code>multitool-service.default.svc.cluster.local</code></p><p class="small muted">Lesson 02 manifest 已创建 80 与 443 两个端口的 ClusterIP Service。</p></article>
+        </div>
+        <pre class="code" style="margin-top: 32px; font-size: 19px;">search default.svc.cluster.local svc.cluster.local cluster.local ec2.internal
+nameserver <span class="hot">10.96.0.10</span>
+options <span class="cool">ndots:5</span></pre>
+        <div class="flat-block yellow" style="margin-top: 22px;"><p class="small"><strong>边界提醒：</strong>DNS 先把名字变成地址；Service VIP 到 Endpoint 的转发属于后续 Service 数据路径，不要和 CNI 创建 veth 混在一起。</p></div>
+        <div class="slide-number">14</div>
+        <aside class="speaker-copy">
+          <p>课程还检查了 resolv.conf。Pod 的 nameserver 是 10.96.0.10，也就是 kube-system 里 kube-dns Service 的 ClusterIP。search 列表让 default namespace 里的 Pod 可以直接查询 multitool-service 这个短名字。</p>
+          <p>ndots:5 表示少于 5 个点的名字先当作相对名称，resolver 会依次追加 search domain。像 google.com 这种不带结尾点的名字也可能先尝试集群后缀，所以排查 DNS 延迟时要注意查询序列。</p>
+          <p>DNS 只负责把名字解析为地址。拿到 ClusterIP 后，后续转发由 Service 数据路径处理，那是 Lesson 04 的主题。这里先把 CNI、DNS 和 Service 三件事分清。</p>
+          <p class="note-source">课程 3.4：<a href="https://k8snetworking.com/lessons/02-pod-network#34-check-dns-configuration">Check DNS Configuration</a></p>
+        </aside>
+      </section>
+
+      <section class="slide" data-section="验证" data-title="四个观察点还原完整路径">
+        <div class="slide-header">
+          <div>
+            <p class="eyebrow">命令输出就是证据链</p>
+            <h2>四个观察点还原完整路径</h2>
+            <div class="rule"></div>
+          </div>
+        </div>
+        <div class="evidence-grid">
+          <article class="evidence-point"><span class="index">01</span><h3>Pod 内部</h3><span class="command">kubectl exec multitool -- ip addr</span><span class="command">kubectl exec multitool -- ip route</span><p>确认 /32、MTU、eth0@if* 与 169.254.1.1。</p></article>
+          <article class="evidence-point"><span class="index">02</span><h3>源节点</h3><span class="command">docker exec pod-network-worker ip route get &lt;dst-pod-ip&gt;</span><p>确认远端 Pod 的下一跳、出口接口与是否出现 vxlan.calico。</p></article>
+          <article class="evidence-point"><span class="index">03</span><h3>目的节点</h3><span class="command">docker exec pod-network-worker2 ip route | grep &lt;dst-pod-ip&gt;</span><p>确认最终 /32 直连路由指向目的 Pod 的 cali*。</p></article>
+          <article class="evidence-point"><span class="index">04</span><h3>抓包位置</h3><span class="command">tcpdump -ni any 'host &lt;pod-ip&gt; or udp port 4789'</span><p>同子网看原始 Pod 包，跨子网同时观察 VXLAN 外层。</p></article>
+        </div>
+        <div class="slide-number">15</div>
+        <aside class="speaker-copy">
+          <p>排查网络最有效的方法，是在四个点形成证据链。第一，在 Pod 内看 eth0 和默认路由。第二，在源节点用 ip route get 看系统准备把目标 Pod 发到哪里。第三，在目的节点看本地 /32 是否落到正确 cali 接口。</p>
+          <p>最后用 tcpdump 验证报文形态。同子网直路由时，Node 链路上应看到原始 Pod 源、目的地址。跨子网 VXLAN 时，可以同时用 udp port 4789 和 inner Pod IP 作为过滤条件。抓包要配合路由表解释，单独看到一个包并不能证明整条路径正确。</p>
+        </aside>
+      </section>
+
+      <section class="slide" data-section="现场演示" data-title="十五分钟现场演示顺序">
+        <div class="slide-header">
+          <div>
+            <p class="eyebrow">从环境健康到跨节点证明</p>
+            <h2>十五分钟现场演示顺序</h2>
+            <div class="rule"></div>
+          </div>
+        </div>
+        <div class="demo-grid">
+          <div class="demo-list">
+            <div class="demo-item"><div><code>containerlab inspect -t pod-network.clab.yaml</code><p>先确认三个 Kind 容器都 running。</p></div></div>
+            <div class="demo-item"><div><code>export KUBECONFIG=$(pwd)/pod-network.kubeconfig</code><p>锁定当前实验，避免误操作其他集群。</p></div></div>
+            <div class="demo-item"><div><code>kubectl get nodes -o wide</code><p>确认 Node Ready 与 172.18.0.x InternalIP。</p></div></div>
+            <div class="demo-item"><div><code>kubectl get pod multitool -o wide</code><p>记录 Pod IP 与所在节点。</p></div></div>
+            <div class="demo-item"><div><code>kubectl exec multitool -- ip addr</code><p>讲 /32、MTU 与 eth0@if*。</p></div></div>
+            <div class="demo-item"><div><code>kubectl exec multitool -- ip route</code><p>讲 169.254.1.1 虚拟下一跳。</p></div></div>
+          </div>
+          <div>
+            <div class="demo-list" style="counter-reset: demo 6;">
+              <div class="demo-item"><div><code>kubectl exec multitool -- cat /etc/resolv.conf</code><p>核对 CoreDNS Service IP 与 ndots。</p></div></div>
+              <div class="demo-item"><div><code>docker exec -it &lt;pod-node&gt; /bin/bash</code><p>进入实际承载 Pod 的 Kind Node。</p></div></div>
+              <div class="demo-item"><div><code>ip route | grep &lt;pod-ip&gt;</code><p>找到指向 cali* 的本地 /32。</p></div></div>
+              <div class="demo-item"><div><code>ip addr show &lt;cali-interface&gt;</code><p>把 host-side veth 与 Pod eth0 对上。</p></div></div>
+              <div class="demo-item"><div><code>ip route get &lt;remote-pod-ip&gt;</code><p>展示跨节点下一跳与出口。</p></div></div>
+              <div class="demo-item"><div><code>tcpdump -ni any host &lt;remote-pod-ip&gt;</code><p>用真实包收尾，验证是否封装与源 IP 保留。</p></div></div>
+            </div>
+            <div class="flat-block orange" style="margin-top: 18px;"><p class="small">课程 Lesson 02 默认只有一个 multitool Pod。跨节点演示可沿用 Lesson 03 的两个 DaemonSet，或额外创建固定到不同 Node 的测试 Pod。</p></div>
+          </div>
+        </div>
+        <div class="slide-number">16</div>
+        <aside class="speaker-copy">
+          <p>现场演示建议严格按这个顺序。先证明环境活着，再记录动态值，然后进入 Pod，最后回到 Host。每一步都给下一步提供变量，例如 Pod IP、Node 名称和 cali 接口名。</p>
+          <p>课程 Lesson 02 只部署一个 multitool Pod，所以它足够演示 Pod 内部、veth 和本地 /32 路由。要演示同节点和跨节点 Pod 互访，可以进入 Lesson 03，那里用两个 DaemonSet 保证每台节点各有两个测试 Pod。也可以在 Lesson 02 环境临时部署带 nodeSelector 的测试 Pod，但要明确告诉听众这是扩展步骤。</p>
+        </aside>
+      </section>
+
+      <section class="slide" data-section="排错" data-title="从症状回到责任组件">
+        <div class="slide-header">
+          <div>
+            <p class="eyebrow">少猜，多看路由与抓包</p>
+            <h2>从症状回到责任组件</h2>
+            <div class="rule"></div>
+          </div>
+        </div>
+        <table class="trouble-table">
+          <thead><tr><th>现象</th><th>优先检查</th><th>常见方向</th><th>关键命令</th></tr></thead>
+          <tbody>
+            <tr><td>Pod 一直 ContainerCreating</td><td>CNI ADD 是否成功</td><td>CNI 配置、IPAM、calico-node、地址池耗尽</td><td><code>kubectl describe pod</code><br><code>kubectl logs -n calico-system ds/calico-node</code></td></tr>
+            <tr><td>Pod 有 IP 但出不去</td><td>Pod 默认路由与 host-side veth</td><td>169.254.1.1 路由缺失、veth down、策略阻断</td><td><code>ip route</code><br><code>ip link show</code></td></tr>
+            <tr><td>同节点通，跨节点不通</td><td>Node underlay 与远端路由</td><td>Node IP 不通、远端 block 路由缺失、rp_filter</td><td><code>ip route get</code><br><code>ping &lt;node-ip&gt;</code></td></tr>
+            <tr><td>跨子网才失败</td><td>VXLAN 与 MTU</td><td>UDP/4789 被拦、VXLAN 设备异常、路径 MTU</td><td><code>tcpdump -ni any udp port 4789</code><br><code>ip link show vxlan.calico</code></td></tr>
+            <tr><td>IP 能通，名称不通</td><td>resolv.conf 与 CoreDNS</td><td>kube-dns Service、CoreDNS Pod、NetworkPolicy</td><td><code>nslookup kubernetes.default</code><br><code>kubectl get svc -n kube-system</code></td></tr>
+          </tbody>
+        </table>
+        <div class="flat-block yellow" style="margin-top: 24px;"><p class="body"><strong>排错顺序：</strong>接口存在 → Pod 路由正确 → Host 路由正确 → Node underlay 可达 → 封装与策略允许 → DNS 与 Service 单独验证。</p></div>
+        <div class="slide-number">17</div>
+        <aside class="speaker-copy">
+          <p>排错不要从一个很大的“Calico 有问题”开始。ContainerCreating 时先回到 CNI 生命周期。Pod 已经 Running 但不通，就先看 Pod 内默认路由和 host-side veth。同节点通、跨节点不通，重点马上转向远端路由和 Node underlay。</p>
+          <p>只有跨 underlay 子网失败时，再重点看 VXLAN UDP 4789、vxlan.calico 和 MTU。最后把 DNS 与 IP 连通分开，如果直接 ping Pod IP 能通，nslookup 不通，问题已经不在 veth 主路径上了。</p>
+        </aside>
+      </section>
+
+      <section class="slide" data-section="关键结论" data-title="一条数据路径的三个层次">
+        <div class="slide-header">
+          <div>
+            <p class="eyebrow">把现场现象串成模型</p>
+            <h2>一条数据路径的三个层次</h2>
+            <div class="rule"></div>
+          </div>
+        </div>
+        <div class="summary-stack">
+          <article class="summary-block"><span class="n">01</span><h3>Pod 边界</h3><p><code>eth0 /32</code> 把地址放进独立 namespace，<code>169.254.1.1</code> 把所有非本地流量交给宿主机。</p></article>
+          <article class="summary-block"><span class="n">02</span><h3>Node 路由</h3><p>veth 把包送进 Linux 主机协议栈，本地 Pod 使用 /32 路由，远端 Pod 使用远端节点或隧道下一跳。</p></article>
+          <article class="summary-block"><span class="n">03</span><h3>Underlay 运输</h3><p>同子网直接传原始 Pod 包，跨子网由 VXLAN 以 Node IP 运输，目的节点再交付给 cali*。</p></article>
+        </div>
+        <div class="flat-block green" style="margin-top: 36px;"><p class="body">讲清这三个层次后，Pod IP、Node IP、Service IP、veth、路由和 VXLAN 就不会挤在同一个模糊的“容器网络”概念里。</p></div>
+        <div class="slide-number">18</div>
+        <aside class="speaker-copy">
+          <p>最后收束成三个层次。Pod 边界解决地址和隔离，Node 路由解决本机交付与远端下一跳，underlay 负责把节点之间的包运过去。VXLANCrossSubnet 只改变第三层的运输方式，不改变 Pod 看到的 eth0、/32 和虚拟下一跳模型。</p>
+          <p>现场排错时也按这三层走。先确认 Pod 能把包交出来，再确认源节点知道往哪发，然后确认 underlay 或 VXLAN 能把包运到目的节点。到达目的节点以后，最后一条 /32 路由把包送进目的 Pod。</p>
+        </aside>
+      </section>
+
+      <section class="slide" data-section="资料来源" data-title="课程与官方参考资料">
+        <div class="slide-header">
+          <div>
+            <p class="eyebrow">Sources</p>
+            <h2>课程与官方参考资料</h2>
+            <div class="rule"></div>
+          </div>
+        </div>
+        <div class="source-list">
+          <article class="source-item"><strong>Kubernetes Networking Labs · Lesson 02</strong><a href="https://k8snetworking.com/lessons/02-pod-network">https://k8snetworking.com/lessons/02-pod-network</a><p>本课主线、命令、示例输出与三张课程原图。</p></article>
+          <article class="source-item"><strong>课程 GitHub 仓库</strong><a href="https://github.com/aadhilam/k8-networking-calico-containerlab/tree/master/containerlab/02-pod-network">github.com/aadhilam/.../02-pod-network</a><p>Kind、ContainerLab、custom-resources.yaml、multitool 与 deploy.sh。</p></article>
+          <article class="source-item"><strong>Kubernetes Networking Labs · Lesson 03</strong><a href="https://k8snetworking.com/lessons/03-pod-routing">https://k8snetworking.com/lessons/03-pod-routing</a><p>同节点与跨节点 Pod 路由、TTL、tcpdump 验证。</p></article>
+          <article class="source-item"><strong>Calico · Overlay networking</strong><a href="https://docs.tigera.io/calico/latest/networking/configuring/vxlan-ipip">docs.tigera.io/calico/latest/networking/configuring/vxlan-ipip</a><p>VXLAN、CrossSubnet、cluster route 与封装边界。</p></article>
+          <article class="source-item"><strong>Calico · IPPool resource</strong><a href="https://docs.tigera.io/calico/latest/reference/resources/ippool">docs.tigera.io/calico/latest/reference/resources/ippool</a><p>blockSize、vxlanMode、natOutgoing 与 allowedUses。</p></article>
+          <article class="source-item"><strong>Calico · Data path and FAQ</strong><a href="https://docs.tigera.io/calico/latest/reference/architecture/data-path">docs.tigera.io/calico/latest/reference/architecture/data-path</a><p>Linux 路由、主机数据路径与 169.254.1.1 设计。</p></article>
+        </div>
+        <div class="flat-block yellow" style="margin-top: 20px;"><p class="small">示例地址与接口名来自课程输出，只用于讲解。现场演示请先记录本地的 Pod IP、Node IP 与 cali* 名称，再替换命令中的示例值。</p></div>
+        <div class="slide-number">19</div>
+        <aside class="speaker-copy">
+          <p>这份演示稿的实验步骤、示例地址和课程原图来自 Lesson 02，跨节点验证来自紧邻的 Lesson 03。关于 VXLANCrossSubnet、IPPool 和 169.254.1.1 的解释补充自 Calico 官方文档。</p>
+          <p>本地环境固定在 Calico 3.30.0。官方链接目前指向 latest 文档，后续版本可能调整默认值或组件实现。做版本敏感的排查时，请把链接切换到和现场一致的 3.30 文档，并以集群资源与实际路由表为准。</p>
+        </aside>
+      </section>
+    </div>
+
+    <div class="progress-track" aria-hidden="true"><div id="progress-fill"></div></div>
+    <nav class="controls" aria-label="演示控制">
+      <button class="tool-btn" id="prev" type="button" title="上一页" aria-label="上一页">‹</button>
+      <button class="tool-btn" id="next" type="button" title="下一页" aria-label="下一页">›</button>
+      <button class="tool-btn" id="notes-toggle" type="button" title="讲稿" aria-label="显示或隐藏讲稿" aria-pressed="false">N</button>
+      <button class="tool-btn" id="overview-toggle" type="button" title="总览" aria-label="显示或隐藏总览" aria-pressed="false">▦</button>
+      <button class="tool-btn" id="fullscreen" type="button" title="全屏" aria-label="切换全屏">⛶</button>
+    </nav>
+
+    <button class="notes-backdrop" id="notes-backdrop" type="button" aria-label="关闭讲稿" tabindex="-1"></button>
+    <aside class="notes-panel" id="notes-panel" aria-live="polite" aria-hidden="true">
+      <div class="notes-header">
+        <h2 id="notes-title">讲稿</h2>
+        <button class="notes-close" id="notes-close" type="button" title="关闭讲稿" aria-label="关闭讲稿">×</button>
+      </div>
+      <div id="notes-body"></div>
+    </aside>
+    <aside class="overview" id="overview" aria-label="幻灯片总览"></aside>
+  </main>
+  <script src="app.js?v=2"></script>
+</body>
+</html>
