@@ -1,0 +1,540 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="基于 Kubernetes Networking Labs Lesson 04 的 ClusterIP 与 kube-proxy 中文动态演示课件">
+  <title>Kubernetes Services：ClusterIP 到 Pod</title>
+  <link rel="stylesheet" href="styles.css?v=2">
+</head>
+<body>
+  <main class="deck-shell" aria-label="Kubernetes Services ClusterIP HTML 演示文稿">
+    <div id="deck-canvas">
+      <section class="slide cover active" data-section="Kubernetes Services" data-title="ClusterIP 到 Pod">
+        <div class="cover-grid">
+          <div class="cover-copy">
+            <p class="eyebrow">Lesson 04 · kube-proxy · iptables</p>
+            <h1>Kubernetes Services<br><span class="yellow-mark">ClusterIP</span> 到 Pod</h1>
+            <p class="lead">从稳定 VIP 出发，沿着 EndpointSlice、iptables 链与 Calico 路由走到真实 nginx Pod。</p>
+            <div class="cover-meta"><span>VIP 10.96.204.67:80</span><span>2 Endpoints</span><span>Calico 3.30.0</span></div>
+          </div>
+          <div class="cover-visual service-cover" aria-label="客户端访问 ClusterIP 后动态选择两个 nginx Endpoint">
+            <div class="svc-cover-client"><strong>Client Pod</strong><span>curl / telnet</span></div>
+            <div class="svc-cover-ingress" aria-hidden="true"><span class="svc-cover-packet ingress">VIP</span></div>
+            <div class="svc-cover-vip"><strong>ClusterIP</strong><span>10.96.204.67:80</span></div>
+            <div class="svc-cover-branch" aria-hidden="true">
+              <span class="svc-branch-stem"></span><span class="svc-branch-bus"></span>
+              <span class="svc-branch-drop a"></span><span class="svc-branch-drop b"></span>
+              <span class="svc-cover-packet branch-a">A</span><span class="svc-cover-packet branch-b">B</span>
+            </div>
+            <div class="svc-cover-endpoint ep1"><strong>nginx Pod A</strong><span>192.168.156.5:80</span></div>
+            <div class="svc-cover-endpoint ep2"><strong>nginx Pod B</strong><span>192.168.202.196:80</span></div>
+            <div class="svc-cover-label">kube-proxy DNAT · per connection</div>
+          </div>
+        </div>
+        <aside class="speaker-copy">
+          <p>大家好，这一节我们把 Kubernetes Service 从一个 YAML 对象拆成真实的数据路径。客户端访问的是稳定的 ClusterIP，真正接收请求的是两个会变化的 nginx Pod。</p>
+          <p>我们会先确认 Service 和 EndpointSlice，再从客户端建立连接，最后进入 worker 节点逐条读 iptables。重点不是背链名，而是理解 KUBE-SERVICES 负责匹配 VIP，KUBE-SVC 负责选择 Endpoint，KUBE-SEP 负责 DNAT。</p>
+          <p class="note-source">主课程：<a href="https://k8snetworking.com/lessons/04-k8s-services">https://k8snetworking.com/lessons/04-k8s-services</a></p>
+        </aside>
+      </section>
+
+      <section class="slide" data-section="Service 价值" data-title="Pod 会变化，入口需要稳定">
+        <div class="slide-header"><div><p class="eyebrow">Service decouples clients from Pod lifecycle</p><h2>Pod 会变化，入口需要稳定</h2><div class="rule"></div></div></div>
+        <div class="service-problem">
+          <div class="unstable-side"><h3>直接访问 Pod IP</h3><div class="pod-history"><span class="old">192.168.156.5</span><span class="dead">deleted</span><span class="new">192.168.81.12</span></div><p>Deployment 重建 Pod 后，客户端缓存的旧地址失效。</p></div>
+          <div class="stable-side"><h3>访问 Service</h3><div class="vip-badge">10.96.204.67:80</div><p>VIP 与 DNS 名保持稳定，控制面只更新后端 Endpoint 集合。</p></div>
+        </div>
+        <div class="grid-3" style="margin-top:30px;"><div class="flat-block green"><h3>稳定入口</h3><p class="small">客户端依赖 Service，不依赖 Pod 生命周期。</p></div><div class="flat-block yellow"><h3>四层负载均衡</h3><p class="small">连接被转到一个健康 Pod IP:Port。</p></div><div class="flat-block orange"><h3>服务发现</h3><p class="small">DNS 名称解析到 ClusterIP，而非固定 Pod。</p></div></div>
+        <div class="slide-number">02</div>
+        <aside class="speaker-copy">
+          <p>Pod IP 可以因为滚动更新、节点故障或扩缩容而变化。客户端如果直接保存 Pod IP，就必须理解这些生命周期事件。</p>
+          <p>Service 把这个问题隔离开。客户端只访问稳定 VIP 或 DNS 名，EndpointSlice 维护当前可用 Pod。kube-proxy 再把每个新连接转到其中一个后端。</p>
+        </aside>
+      </section>
+
+      <section class="slide" data-section="Service 类型" data-title="五种 Service 形态">
+        <div class="slide-header"><div><p class="eyebrow">ClusterIP is the default</p><h2>五种 Service 形态</h2><div class="rule"></div></div></div>
+        <table class="env-table service-type-table">
+          <thead><tr><th>类型</th><th>入口</th><th>主要用途</th><th>本课范围</th></tr></thead>
+          <tbody>
+            <tr><td><strong>ClusterIP</strong></td><td>集群内部 VIP</td><td>Pod 间稳定服务入口</td><td class="hot">深入分析</td></tr>
+            <tr><td>NodePort</td><td>每个 Node 的 30000-32767</td><td>从节点端口进入集群</td><td>边界说明</td></tr>
+            <tr><td>LoadBalancer</td><td>外部负载均衡器 IP</td><td>云或 MetalLB 对外暴露</td><td>后续课程</td></tr>
+            <tr><td>ExternalName</td><td>DNS CNAME</td><td>把 Service 名称映射到外部域名</td><td>不做数据面代理</td></tr>
+            <tr><td>Headless</td><td><code>clusterIP: None</code></td><td>DNS 直接返回 Pod IP</td><td>Lesson 11</td></tr>
+          </tbody>
+        </table>
+        <div class="flat-block yellow" style="margin-top:28px;"><p class="body"><strong>关键区别：</strong>ClusterIP 有虚拟 IP 并由代理数据面转发；Headless 没有 VIP，客户端直接获得 Endpoint 地址。</p></div>
+        <div class="slide-number">03</div>
+        <aside class="speaker-copy">
+          <p>Kubernetes Service 不只有 ClusterIP。NodePort 在每台节点开端口，LoadBalancer 再接外部负载均衡器，ExternalName 只生成 CNAME，Headless 则完全取消 VIP。</p>
+          <p>本课只深入 ClusterIP。它是默认类型，也是其他多种 Service 类型内部仍会依赖的基础能力。</p>
+        </aside>
+      </section>
+
+      <section class="slide" data-section="组件分工" data-title="控制面决定后端，节点数据面执行转发">
+        <div class="slide-header"><div><p class="eyebrow">Desired state and packet forwarding</p><h2>控制面决定后端，节点数据面执行转发</h2><div class="rule"></div></div></div>
+        <div class="service-roles">
+          <div class="role-control"><div><strong>kube-apiserver</strong><span>存储 Service、Pod、EndpointSlice</span></div><div><strong>EndpointSlice controller</strong><span>根据 selector 与 readiness 生成后端集合</span></div></div>
+          <div class="role-watch">watch Services<br>watch EndpointSlices</div>
+          <div class="role-node"><div><strong>kube-proxy</strong><span>在每个节点同步本地 Service 数据面规则</span></div><div><strong>iptables / IPVS</strong><span>匹配 VIP、选择 Endpoint、执行 DNAT</span></div><div><strong>Calico routing</strong><span>把 DNAT 后的 Pod IP 送到本地或远端节点</span></div></div>
+        </div>
+        <div class="flat-block orange" style="margin-top:26px;"><p class="body">Calico 默认数据面不会替代本课的 kube-proxy iptables。启用 Calico eBPF 后，Service 实现边界才会改变。</p></div>
+        <div class="slide-number">04</div>
+        <aside class="speaker-copy">
+          <p>先把责任分开。Service selector 和 Pod readiness 由控制面转换成 EndpointSlice。每台节点上的 kube-proxy watch 这些对象，再把期望状态翻译成节点本地规则。</p>
+          <p>数据包命中 ClusterIP 后，iptables 或 IPVS 选择一个 Endpoint 并做目的地址转换。地址已经变成 Pod IP 后，Calico 才负责本地或跨节点可达。</p>
+          <p class="note-source">Calico 支持模式：<a href="https://docs.tigera.io/calico/latest/getting-started/kubernetes/requirements#supported-kube-proxy-modes">Supported kube-proxy modes</a></p>
+        </aside>
+      </section>
+
+      <section class="slide" data-section="实验环境" data-title="Lesson 04 仓库配置">
+        <div class="slide-header"><div><p class="eyebrow">containerlab/04-k8s-services</p><h2>Lesson 04 仓库配置</h2><div class="rule"></div></div><span class="command">kindest/node:v1.28.0</span></div>
+        <div class="grid-2">
+          <table class="env-table"><thead><tr><th>对象</th><th>课程值</th><th>作用</th></tr></thead><tbody><tr><td>Kind 节点</td><td>3</td><td>control-plane + 2 workers</td></tr><tr><td>Pod CIDR</td><td>192.168.0.0/16</td><td>Calico IPPool</td></tr><tr><td>Service CIDR</td><td>10.96.0.0/16</td><td>ClusterIP 分配范围</td></tr><tr><td>Calico</td><td>3.30.0</td><td>Pod 网络与策略</td></tr><tr><td>封装</td><td>VXLANCrossSubnet</td><td>跨 Node 子网才封装</td></tr><tr><td>kube-proxy</td><td>iptables 路径</td><td>本课逐链检查</td></tr></tbody></table>
+          <pre class="code manifest-code"><span class="comment"># k8-services-no-cni.yaml</span>
+<span class="key">networking:</span>
+  <span class="key">disableDefaultCNI:</span> <span class="hot">true</span>
+  <span class="key">podSubnet:</span> <span class="value">"192.168.0.0/16"</span>
+  <span class="key">serviceSubnet:</span> <span class="value">"10.96.0.0/16"</span>
+
+<span class="comment"># custom-resources.yaml</span>
+<span class="key">ipPools:</span>
+- <span class="key">blockSize:</span> <span class="value">26</span>
+  <span class="key">cidr:</span> <span class="value">192.168.0.0/16</span>
+  <span class="key">encapsulation:</span> <span class="hot">VXLANCrossSubnet</span>
+  <span class="key">natOutgoing:</span> <span class="value">Enabled</span></pre>
+        </div>
+        <div class="slide-number">05</div>
+        <aside class="speaker-copy">
+          <p>实验仍然使用三节点 Kind 和 Calico 3.30.0。Pod 地址来自 192.168.0.0/16，ClusterIP 来自完全独立的 10.96.0.0/16。</p>
+          <p>这里分析的是 kube-proxy iptables 路径。现场可以先查看 kube-system 的 kube-proxy ConfigMap 或直接观察 KUBE-SERVICES 链确认模式。</p>
+        </aside>
+      </section>
+
+      <section class="slide" data-section="课程勘误" data-title="当前仓库缺少课程假定的客户端 Pod">
+        <div class="slide-header"><div><p class="eyebrow">Repository drift</p><h2>当前仓库缺少课程假定的客户端 Pod</h2><div class="rule"></div></div></div>
+        <div class="grid-2" style="margin-top:30px;">
+          <div class="flat-block red" style="min-height:390px;"><h3>课程页面与输出</h3><p class="body" style="margin-top:18px;">页面显示 6 个 multitool Pod，并要求：</p><pre class="code" style="margin-top:18px; font-size:16px;">kubectl exec -it multitool-1-bgssq -- sh
+telnet nginx-service 80</pre><p class="small" style="margin-top:18px;">当前仓库的 <code>tools/</code> 只包含 <code>nginx-deployment.yaml</code>。</p></div>
+          <div class="flat-block green" style="min-height:390px;"><h3>现场补齐客户端</h3><pre class="code" style="margin-top:18px; font-size:16px;">kubectl run svc-client \
+  --image=praqma/network-multitool:latest \
+  --restart=Never \
+  --command -- sleep infinity
+
+kubectl wait --for=condition=Ready pod/svc-client</pre><p class="small" style="margin-top:18px;">后续把课程中的 multitool Pod 名替换为 <code>svc-client</code>。</p></div>
+        </div>
+        <div class="flat-block yellow" style="margin-top:24px;"><p class="body">先执行 <code>kubectl get pods -o wide</code>。已有 multitool 就沿用；没有就创建临时客户端。</p></div>
+        <div class="slide-number">06</div>
+        <aside class="speaker-copy">
+          <p>这页是为了避免现场卡住。课程页面和示例输出假定存在两个 multitool DaemonSet，但当前仓库 tools 目录只有 nginx Deployment 与 Service，deploy.sh 不会凭空创建 multitool。</p>
+          <p>先查看本地 Pod。如果你的仓库版本已经带客户端，就直接沿用。如果没有，可以临时创建 svc-client。它只用于从 Pod 视角发起 DNS、telnet、curl 和抓包，不改变 Service 数据面。</p>
+        </aside>
+      </section>
+
+      <section class="slide" data-section="工作负载" data-title="两个 nginx Pod 与一个 ClusterIP">
+        <div class="slide-header"><div><p class="eyebrow">tools/nginx-deployment.yaml</p><h2>两个 nginx Pod 与一个 ClusterIP</h2><div class="rule"></div></div></div>
+        <div class="workload-layout">
+          <pre class="code workload-code"><span class="key">kind:</span> Deployment
+<span class="key">metadata:</span>
+  <span class="key">name:</span> <span class="value">nginx-deployment</span>
+<span class="key">spec:</span>
+  <span class="key">replicas:</span> <span class="hot">2</span>
+  <span class="key">selector:</span>
+    <span class="key">matchLabels:</span> { <span class="key">app:</span> <span class="value">nginx</span> }
+  <span class="key">template:</span>
+    <span class="key">metadata:</span>
+      <span class="key">labels:</span> { <span class="key">app:</span> <span class="value">nginx</span> }
+---
+<span class="key">kind:</span> Service
+<span class="key">metadata:</span>
+  <span class="key">name:</span> <span class="value">nginx-service</span>
+<span class="key">spec:</span>
+  <span class="key">selector:</span> { <span class="key">app:</span> <span class="value">nginx</span> }
+  <span class="key">ports:</span> [{ <span class="key">port:</span> <span class="value">80</span>, <span class="key">targetPort:</span> <span class="value">80</span> }]
+  <span class="key">type:</span> <span class="hot">ClusterIP</span></pre>
+          <div class="manifest-facts"><div class="manifest-row"><span class="manifest-index">01</span><div><h3>Deployment 管副本</h3><p>两个 nginx Pod 可以被替换、漂移或滚动更新。</p></div></div><div class="manifest-row"><span class="manifest-index">02</span><div><h3>selector 连接对象</h3><p>Service 使用 <code>app=nginx</code> 选择 Pod，控制器生成 EndpointSlice。</p></div></div><div class="manifest-row"><span class="manifest-index">03</span><div><h3>端口映射</h3><p>客户端访问 Service 80，DNAT 后仍到 Pod 80。</p></div></div><div class="manifest-row"><span class="manifest-index">04</span><div><h3>VIP 自动分配</h3><p>未显式指定 <code>clusterIP</code>，API Server 从 Service CIDR 分配。</p></div></div></div>
+        </div>
+        <div class="slide-number">07</div>
+        <aside class="speaker-copy">
+          <p>这个 manifest 很简单。Deployment 保持两个 nginx 副本，Pod 标签为 app 等于 nginx。Service 使用同一个 selector，因此 EndpointSlice 会收集所有 Ready 的 nginx Pod。</p>
+          <p>Service 没有写死 clusterIP，所以 API Server 从 10.96.0.0/16 自动分配。课程这一轮得到 10.96.204.67，现场值可能不同。</p>
+        </aside>
+      </section>
+
+      <section class="slide" data-section="部署" data-title="部署与验证顺序">
+        <div class="slide-header"><div><p class="eyebrow">deploy.sh</p><h2>部署与验证顺序</h2><div class="rule"></div></div></div>
+        <div class="command-runway"><article class="runway-step"><span class="index">01</span><h3>创建 Kind</h3><p><span class="command">containerlab deploy -t k8-services.clab.yaml</span></p><p class="small muted">三节点，禁用默认 CNI。</p></article><div class="runway-arrow">›</div><article class="runway-step"><span class="index">02</span><h3>安装 Calico</h3><p><span class="command">kubectl apply -f custom-resources.yaml</span></p><p class="small muted">等待 TigeraStatus Available。</p></article><div class="runway-arrow">›</div><article class="runway-step"><span class="index">03</span><h3>创建 nginx</h3><p><span class="command">kubectl apply -f tools/nginx-deployment.yaml</span></p><p class="small muted">Deployment、Service 与 EndpointSlice。</p></article></div>
+        <div class="grid-2" style="margin-top:30px; gap:24px;"><div class="flat-block yellow"><h3>目录名称</h3><p class="small">仓库真实目录为 <code>containerlab/04-k8s-services</code>，页面示例少了 <code>04-</code>。</p></div><div class="flat-block green"><h3>三类 Ready</h3><p class="small">Node Ready、Calico Available、nginx Pod Ready 后再分析 Endpoint 与 iptables。</p></div></div>
+        <div class="slide-number">08</div>
+        <aside class="speaker-copy">
+          <p>部署顺序与前两课相同，区别是 tools 目录创建 nginx Deployment 和 ClusterIP Service。开始实验以前确认三类状态：Node Ready、Calico Available、两个 nginx Pod Ready。</p>
+          <p>仓库目录带 04 前缀。演示结束仍然使用 destroy.sh 清理当前 topology、Kind cluster 和 kubeconfig。</p>
+        </aside>
+      </section>
+
+      <section class="slide" data-section="对象验证" data-title="先把 Pod、VIP 与 Endpoint 对齐">
+        <div class="slide-header"><div><p class="eyebrow">kubectl get pods,svc,endpointslice</p><h2>先把 Pod、VIP 与 Endpoint 对齐</h2><div class="rule"></div></div></div>
+        <div class="object-map">
+          <div class="object-pods"><h3>nginx Pods</h3><div><span>worker2</span><code>192.168.156.5:80</code></div><div><span>worker</span><code>192.168.202.196:80</code></div></div>
+          <div class="object-service"><h3>nginx-service</h3><strong>10.96.204.67:80</strong><span>type: ClusterIP</span></div>
+          <div class="object-slice"><h3>EndpointSlice</h3><code>192.168.156.5:80</code><code>192.168.202.196:80</code><span>addressType: IPv4</span></div>
+        </div>
+        <div class="flat-block orange" style="margin-top:28px;"><p class="body"><strong>一致性检查：</strong>EndpointSlice 中的地址应与两个 Ready nginx Pod 的 IP 完全一致。</p></div>
+        <div class="slide-number">09</div>
+        <aside class="speaker-copy">
+          <p>分析 iptables 以前先把三个对象对齐。课程示例中的两个 nginx Pod 地址是 192.168.156.5 和 192.168.202.196，Service VIP 是 10.96.204.67。</p>
+          <p>EndpointSlice 应列出相同两个 Pod IP 和端口 80。如果这里已经不一致，先查 selector 和 readiness，继续看节点规则只会浪费时间。</p>
+        </aside>
+      </section>
+
+      <section class="slide" data-section="ClusterIP" data-title="ClusterIP 是虚拟地址">
+        <div class="slide-header"><div><p class="eyebrow">VIP exists in rules, not as a Pod interface</p><h2>ClusterIP 是虚拟地址</h2><div class="rule"></div></div></div>
+        <div class="vip-model">
+          <div class="vip-question"><code>ip addr show</code><strong>找不到 10.96.204.67</strong><p>iptables 模式通常不会把每个 ClusterIP 配到普通网卡。</p></div>
+          <div class="vip-answer"><code>iptables -t nat</code><strong>匹配 10.96.204.67:80</strong><p>Netfilter hook 截获连接并执行 DNAT。</p></div>
+        </div>
+        <div class="grid-3" style="margin-top:36px;"><div class="flat-block green"><h3>地址稳定</h3><p class="small">Service 对象存在期间 VIP 保持不变。</p></div><div class="flat-block yellow"><h3>本地规则</h3><p class="small">每台节点都有针对 Service 的数据面规则。</p></div><div class="flat-block orange"><h3>后端可变</h3><p class="small">EndpointSlice 更新后，kube-proxy同步规则。</p></div></div>
+        <div class="slide-number">10</div>
+        <aside class="speaker-copy">
+          <p>ClusterIP 是 VIP，不必在 ip addr 里找到它。iptables 模式通过 Netfilter hook 匹配发往 VIP:Port 的新连接，然后把目的地址改成某个 Pod IP。</p>
+          <p>这也解释了为什么每台节点都运行 kube-proxy。客户端在哪台节点发起连接，就先命中那台节点的本地规则，不需要先寻找一台固定的 Service 网关。</p>
+        </aside>
+      </section>
+
+      <section class="slide" data-section="服务发现" data-title="DNS 先返回 VIP，再进入 Service 数据面">
+        <div class="slide-header"><div><p class="eyebrow">nginx-service.default.svc.cluster.local</p><h2>DNS 先返回 VIP，再进入 Service 数据面</h2><div class="rule"></div></div></div>
+        <div class="dns-service-flow">
+          <div><strong>Client Pod</strong><span>telnet nginx-service 80</span></div><i>DNS query</i><div><strong>CoreDNS</strong><span>返回 10.96.204.67</span></div><i>TCP SYN</i><div><strong>ClusterIP</strong><span>10.96.204.67:80</span></div><i>DNAT</i><div><strong>nginx Pod</strong><span>Endpoint IP:80</span></div>
+        </div>
+        <div class="grid-2" style="margin-top:34px; gap:24px;"><div class="flat-block yellow"><h3>DNS 只负责名称到 VIP</h3><p class="body">解析成功不能单独证明 kube-proxy 和 Endpoint 转发正常。</p></div><div class="flat-block green"><h3>TCP 成功证明后半程</h3><p class="body">连接建立说明 VIP 匹配、Endpoint 选择和 Pod 路由都已工作。</p></div></div>
+        <div class="slide-number">11</div>
+        <aside class="speaker-copy">
+          <p>当客户端写 nginx-service 时，CoreDNS 先把名称解析成 ClusterIP 10.96.204.67。随后客户端发出的 TCP SYN 才进入 kube-proxy 数据面。</p>
+          <p>DNS 查询和 Service 转发要分开验证。nslookup 成功只证明名字解析，telnet 或 curl 成功才证明 VIP 到 Endpoint 的路径。</p>
+        </aside>
+      </section>
+
+      <section class="slide" data-section="连通测试" data-title="400 Bad Request 也能证明路径到达 nginx">
+        <div class="slide-header"><div><p class="eyebrow">Pod to Service connectivity</p><h2>400 Bad Request 也能证明路径到达 nginx</h2><div class="rule"></div></div></div>
+        <div class="grid-2">
+          <div><h3>课程操作</h3><pre class="code" style="margin-top:16px;">$ kubectl exec -it svc-client -- sh
+$ telnet nginx-service 80
+Connected to nginx-service
+
+get
+
+HTTP/1.1 <span class="hot">400 Bad Request</span>
+Server: nginx/1.28.0</pre><div class="flat-block orange" style="margin-top:20px;"><p class="small">小写且不完整的 <code>get</code> 不是合法 HTTP 请求，因此 400 符合预期。</p></div></div>
+          <div><h3>更规范的验证</h3><pre class="code" style="margin-top:16px;">$ printf 'GET / HTTP/1.0\r\nHost: nginx-service\r\n\r\n' \
+  | nc nginx-service 80
+
+HTTP/1.1 <span class="cool">200 OK</span>
+Server: nginx</pre><div class="flat-block green" style="margin-top:20px;"><p class="small">两种结果都证明连接到达 nginx；200 更适合正式演示。</p></div></div>
+        </div>
+        <div class="slide-number">12</div>
+        <aside class="speaker-copy">
+          <p>课程使用 telnet 建立 TCP 连接，然后输入小写 get。nginx 返回 400，因为 HTTP 方法区分大小写，而且请求头不完整。这个 400 不是 Service 故障，反而证明请求已经到达 nginx。</p>
+          <p>正式演示可以再补一个规范 HTTP/1.0 请求，得到 200 OK。这样既保留课程步骤，也避免观众把 400 理解成网络失败。</p>
+        </aside>
+      </section>
+
+      <section class="slide" data-section="控制面" data-title="Service 更新如何变成节点规则">
+        <div class="slide-header"><div><p class="eyebrow">API event to dataplane</p><h2>Service 更新如何变成节点规则</h2><div class="rule"></div></div><button class="action-btn" id="replay-control" type="button">↻ 重放控制面</button></div>
+        <div class="control-flow" id="control-flow">
+          <div class="control-step"><span>01</span><strong>kubectl apply</strong><p>提交 Service 与 Deployment</p></div><div class="control-step"><span>02</span><strong>API Server / etcd</strong><p>保存期望状态</p></div><div class="control-step"><span>03</span><strong>EndpointSlice</strong><p>选择 Ready nginx Pod</p></div><div class="control-step"><span>04</span><strong>kube-proxy watch</strong><p>每台节点收到增量更新</p></div><div class="control-step"><span>05</span><strong>iptables sync</strong><p>创建或更新链和规则</p></div>
+        </div>
+        <div class="control-caption" id="control-caption"></div>
+        <div class="slide-number">13</div>
+        <aside class="speaker-copy">
+          <p>Service 规则不是 kubectl 直接写进 iptables。API Server 保存对象，EndpointSlice controller 根据 selector 和 Pod readiness 维护后端列表。kube-proxy 在每台节点 watch Service 与 EndpointSlice，再同步本地规则。</p>
+          <p>后端变化时，客户端仍使用相同 VIP。变化发生在 EndpointSlice 和每台节点的 kube-proxy 规则里。</p>
+        </aside>
+      </section>
+
+      <section class="slide" data-section="kube-proxy" data-title="每台节点都有相同的 Service 入口">
+        <div class="slide-header"><div><p class="eyebrow">DaemonSet-style node agent</p><h2>每台节点都有相同的 Service 入口</h2><div class="rule"></div></div></div>
+        <div class="proxy-nodes">
+          <div><strong>control-plane</strong><span>kube-proxy</span><code>10.96.204.67:80</code></div><div><strong>worker</strong><span>kube-proxy</span><code>10.96.204.67:80</code></div><div><strong>worker2</strong><span>kube-proxy</span><code>10.96.204.67:80</code></div>
+        </div>
+        <div class="proxy-endpoints"><span>Endpoint A · 192.168.156.5:80</span><span>Endpoint B · 192.168.202.196:80</span></div>
+        <div class="flat-block yellow" style="margin-top:28px;"><p class="body">客户端在任意节点访问 VIP，先命中本节点规则；选中远端 Endpoint 后，Calico 再完成跨节点 Pod 路由。</p></div>
+        <div class="slide-number">14</div>
+        <aside class="speaker-copy">
+          <p>kube-proxy 在每个节点运行，因此每台节点都能识别同一个 ClusterIP。Service 没有一台固定的代理服务器，规则直接分布在所有节点内核数据面。</p>
+          <p>如果本节点规则选中远端 Pod，DNAT 后的目标地址就是远端 Pod IP。后续路径与 Lesson 03 完全相同，由 Calico 的远端 block 路由送到目的节点。</p>
+        </aside>
+      </section>
+
+      <section class="slide" data-section="课程原图" data-title="课程原图：kube-proxy Service 流程">
+        <div class="slide-header compact-header"><div><p class="eyebrow">Kube-proxy ClusterIP Service Flow</p><h2>课程原图：kube-proxy Service 流程</h2><div class="rule"></div></div></div>
+        <img class="course-image service-course-image" src="assets/course-kube-proxy.png" alt="课程原图，kube-proxy watch Service 和 EndpointSlice 并为 ClusterIP 编程 iptables">
+        <p class="source-line">课程仓库：images/kube-proxy.png</p>
+        <div class="slide-number">15</div>
+        <aside class="speaker-copy">
+          <p>课程原图上半部分是控制面。kube-proxy watch API Server 中的 Service 和 EndpointSlice，下半部分是每台节点的 iptables NAT 规则。</p>
+          <p>请求初始目的地址是 ClusterIP，规则选择后端并做 DNAT。返回包经过 conntrack 的反向转换，客户端仍认为自己在与 ClusterIP 通信。</p>
+          <p class="note-source">图片来源：<a href="https://raw.githubusercontent.com/aadhilam/k8-networking-calico-containerlab/master/images/kube-proxy.png">kube-proxy.png</a></p>
+        </aside>
+      </section>
+
+      <section class="slide" data-section="iptables" data-title="三层链条完成一次 Service 选择">
+        <div class="slide-header"><div><p class="eyebrow">KUBE-SERVICES · KUBE-SVC · KUBE-SEP</p><h2>三层链条完成一次 Service 选择</h2><div class="rule"></div></div><button class="action-btn" id="replay-chain" type="button">↻ 重放规则链</button></div>
+        <div class="chain-stage" id="chain-stage">
+          <div class="chain-client"><strong>Client</strong><span>dst 10.96.204.67:80</span></div>
+          <div class="chain-link"><span class="chain-link-packet p1">SYN</span></div>
+          <div class="chain-box global"><strong>KUBE-SERVICES</strong><span>匹配 VIP:Port</span></div>
+          <div class="chain-link"><span class="chain-link-packet p2">VIP</span></div>
+          <div class="chain-box service"><strong>KUBE-SVC-*</strong><span>选择 Endpoint</span></div>
+          <div class="chain-link"><span class="chain-link-packet p3">LB</span></div>
+          <div class="chain-box endpoint"><strong>KUBE-SEP-*</strong><span>DNAT 到 Pod IP:80</span></div>
+          <div class="chain-link"><span class="chain-link-packet p4">Pod</span></div>
+          <div class="chain-backend"><strong>nginx Pod</strong><span>192.168.x.x:80</span></div>
+        </div>
+        <div class="flat-block green" style="margin-top:26px;"><p class="body">链名中的哈希会随 Service、端口和集群状态变化。现场必须从上一级规则动态发现下一条链。</p></div>
+        <div class="slide-number">16</div>
+        <aside class="speaker-copy">
+          <p>记住职责，不要背哈希。KUBE-SERVICES 是全局入口，匹配 VIP 和端口。它跳到这个 Service 专属的 KUBE-SVC 链。KUBE-SVC 选择一个 Endpoint，再跳到 KUBE-SEP。KUBE-SEP 最终执行 DNAT。</p>
+          <p>课程里的链名是某一轮输出，重建 Service 后可能不同。排查时从 KUBE-SERVICES 的 jump target 开始逐级跟。</p>
+        </aside>
+      </section>
+
+      <section class="slide" data-section="KUBE-SERVICES" data-title="第一层匹配 ClusterIP 与端口">
+        <div class="slide-header"><div><p class="eyebrow">Locate Service Rule</p><h2>第一层匹配 ClusterIP 与端口</h2><div class="rule"></div></div></div>
+        <pre class="code" style="margin-top:42px; font-size:18px; line-height:1.72;">$ iptables -t nat -S KUBE-SERVICES | grep nginx-service
+
+-A KUBE-SERVICES
+  -d <span class="hot">10.96.204.67/32</span>
+  -p tcp --dport <span class="cool">80</span>
+  -m comment --comment "default/nginx-service:http cluster IP"
+  -j <span class="value">KUBE-SVC-6IM33IEVEEV7U3GP</span></pre>
+        <div class="route-decode"><div><strong>表</strong><span>nat</span></div><div><strong>目的地址</strong><span>VIP /32 精确匹配</span></div><div><strong>协议端口</strong><span>TCP 80</span></div><div><strong>动作</strong><span>jump to KUBE-SVC</span></div></div>
+        <div class="slide-number">17</div>
+        <aside class="speaker-copy">
+          <p>第一条命令从 KUBE-SERVICES 找 nginx-service。规则精确匹配 10.96.204.67/32、TCP 和目标端口 80，然后跳到专属 KUBE-SVC 链。</p>
+          <p>把 jump target 复制出来，下一步再查它。不要把课程里的 6IM33... 当作固定名称。</p>
+        </aside>
+      </section>
+
+      <section class="slide" data-section="KUBE-SVC" data-title="第二层进行连接级 Endpoint 选择">
+        <div class="slide-header"><div><p class="eyebrow">Inspect Service Chain</p><h2>第二层进行连接级 Endpoint 选择</h2><div class="rule"></div></div></div>
+        <pre class="code" style="margin-top:24px; font-size:16px; line-height:1.62;">Chain KUBE-SVC-6IM33IEVEEV7U3GP
+1  KUBE-MARK-MASQ  tcp  !192.168.0.0/16  10.96.204.67  tcp dpt:80
+2  KUBE-SEP-M6MI3YLHVX7DA53R  all  0.0.0.0/0  0.0.0.0/0
+   statistic mode random probability <span class="hot">0.50000000000</span>
+   /* nginx-service:http -&gt; <span class="cool">192.168.156.5:80</span> */
+3  KUBE-SEP-MJ46KNWYZBDUIDMY  all  0.0.0.0/0  0.0.0.0/0
+   /* nginx-service:http -&gt; <span class="cool">192.168.202.196:80</span> */</pre>
+        <div class="grid-3" style="margin-top:24px;"><div class="flat-block yellow"><h3>Rule 1</h3><p class="small">客户端来自 Pod CIDR 外时打 MASQ mark。</p></div><div class="flat-block green"><h3>Rule 2</h3><p class="small">约 50% 新连接进入 Endpoint A。</p></div><div class="flat-block orange"><h3>Rule 3</h3><p class="small">未命中前一概率分支的连接进入 Endpoint B。</p></div></div>
+        <div class="slide-number">18</div>
+        <aside class="speaker-copy">
+          <p>KUBE-SVC 链先处理可能需要 masquerade 的来源，然后做 Endpoint 选择。两个后端时，第一条 Endpoint 规则使用 0.5 概率，未命中的剩余连接落到第二条。</p>
+          <p>这不是每个包交替轮询。选择发生在连接建立阶段，后续包由 conntrack 保持同一个 NAT 映射。</p>
+        </aside>
+      </section>
+
+      <section class="slide" data-section="负载均衡" data-title="概率规则选择新连接，不是逐包轮询">
+        <div class="slide-header"><div><p class="eyebrow">Connection tracking</p><h2>概率规则选择新连接，不是逐包轮询</h2><div class="rule"></div></div><div class="segment" role="group"><button class="active" id="backend-a" type="button" aria-pressed="true">Endpoint A</button><button id="backend-b" type="button" aria-pressed="false">Endpoint B</button></div></div>
+        <div class="selection-stage" id="selection-stage" data-backend="a">
+          <div class="selection-client"><strong>Client</strong><span>5-tuple creates a connection</span></div>
+          <div class="selection-link-in" aria-hidden="true"><span class="selection-packet input">NEW</span></div>
+          <div class="selection-service"><strong>KUBE-SVC</strong><span>first packet evaluates probability</span></div>
+          <div class="selection-branch" aria-hidden="true">
+            <span class="selection-branch-in"></span><span class="selection-branch-spine"></span>
+            <span class="selection-branch-out a"></span><span class="selection-branch-out b"></span>
+            <span class="selection-packet branch">NEW</span>
+          </div>
+          <div class="selection-endpoints"><div class="selection-ep a"><strong>Endpoint A</strong><span>192.168.156.5:80</span></div><div class="selection-ep b"><strong>Endpoint B</strong><span>192.168.202.196:80</span></div></div>
+        </div>
+        <div class="grid-2" style="margin-top:24px; gap:24px;"><div class="flat-block green"><h3>首包选择</h3><p class="body">新 TCP 连接的首包经过统计规则并创建 conntrack/NAT 状态。</p></div><div class="flat-block yellow"><h3>后续固定</h3><p class="body">同一连接后续包沿已建立映射，不会在两个 nginx Pod 之间跳动。</p></div></div>
+        <div class="slide-number">19</div>
+        <aside class="speaker-copy">
+          <p>iptables 的 random probability 很容易被讲成逐包轮询。更准确的说法是，新连接的首包参与规则选择，选中 Endpoint 后 conntrack 记录 NAT 状态。</p>
+          <p>同一 TCP 连接里的后续包会继续到同一个 Pod。多次新建连接时，长期统计结果才会接近 50/50。</p>
+        </aside>
+      </section>
+
+      <section class="slide" data-section="KUBE-SEP" data-title="Endpoint A 链执行 DNAT">
+        <div class="slide-header"><div><p class="eyebrow">Examine Endpoint DNAT #1</p><h2>Endpoint A 链执行 DNAT</h2><div class="rule"></div></div></div>
+        <div class="dnat-layout"><pre class="code">$ iptables -t nat -L KUBE-SEP-M6MI3YLHVX7DA53R -n -v
+
+1  KUBE-MARK-MASQ  all
+   source <span class="cool">192.168.156.5</span>
+
+2  DNAT  tcp
+   tcp to:<span class="hot">192.168.156.5:80</span></pre><div class="dnat-transform"><div><span>before</span><code>src 192.168.202.194<br>dst 10.96.204.67:80</code></div><b>DNAT</b><div><span>after</span><code>src 192.168.202.194<br>dst 192.168.156.5:80</code></div></div></div>
+        <div class="flat-block green" style="margin-top:28px;"><p class="body">DNAT 只改目的地址和端口。集群内 Pod 客户端的源地址保持不变。</p></div>
+        <div class="slide-number">20</div>
+        <aside class="speaker-copy">
+          <p>Endpoint A 的 KUBE-SEP 链最终执行 DNAT，把目的从 Service VIP 改为 192.168.156.5:80。客户端源地址仍然是原 Pod IP。</p>
+          <p>第一条自源 Endpoint 的 mark 规则用于处理 hairpin 等需要 masquerade 的特殊路径，普通跨 Pod 集群内访问主要看第二条 DNAT。</p>
+        </aside>
+      </section>
+
+      <section class="slide" data-section="KUBE-SEP" data-title="Endpoint B 链指向另一个 Pod">
+        <div class="slide-header"><div><p class="eyebrow">Examine Endpoint DNAT #2</p><h2>Endpoint B 链指向另一个 Pod</h2><div class="rule"></div></div></div>
+        <div class="dnat-layout"><pre class="code">$ iptables -t nat -L KUBE-SEP-MJ46KNWYZBDUIDMY -n -v
+
+1  KUBE-MARK-MASQ  all
+   source <span class="cool">192.168.202.196</span>
+
+2  DNAT  tcp
+   tcp to:<span class="hot">192.168.202.196:80</span></pre><div class="dnat-transform"><div><span>before</span><code>src 192.168.202.194<br>dst 10.96.204.67:80</code></div><b>DNAT</b><div><span>after</span><code>src 192.168.202.194<br>dst 192.168.202.196:80</code></div></div></div>
+        <div class="flat-block orange" style="margin-top:28px;"><p class="body">两个 KUBE-SEP 链的结构相同，差别只在目标 Pod IP:Port。</p></div>
+        <div class="slide-number">21</div>
+        <aside class="speaker-copy">
+          <p>Endpoint B 链与前一页结构相同，只是 DNAT 目标换成 192.168.202.196:80。KUBE-SVC 的选择决定当前连接跳入哪一个 KUBE-SEP。</p>
+          <p>扩容 nginx 后，EndpointSlice 增加地址，kube-proxy 会生成更多 KUBE-SEP 并调整概率规则。</p>
+        </aside>
+      </section>
+
+      <section class="slide" data-section="课程原图" data-title="课程原图：iptables 链级结构">
+        <div class="slide-header compact-header"><div><p class="eyebrow">Chains and Flow</p><h2>课程原图：iptables 链级结构</h2><div class="rule"></div></div></div>
+        <img class="course-image service-course-image" src="assets/course-kube-proxy-chains.png" alt="课程原图，KUBE-SERVICES 跳转 KUBE-SVC 再分支到两个 KUBE-SEP">
+        <p class="source-line">课程仓库：images/kube-proxy-chains.png</p>
+        <div class="slide-number">22</div>
+        <aside class="speaker-copy">
+          <p>这张图只保留链级结构。全局 KUBE-SERVICES 指向每个 Service 的 KUBE-SVC，KUBE-SVC 再分到每个 Endpoint 的 KUBE-SEP。</p>
+          <p>适合在演讲中快速回顾三种链的职责，不需要在这一页读具体地址。</p>
+          <p class="note-source">图片来源：<a href="https://raw.githubusercontent.com/aadhilam/k8-networking-calico-containerlab/master/images/kube-proxy-chains.png">kube-proxy-chains.png</a></p>
+        </aside>
+      </section>
+
+      <section class="slide" data-section="课程原图" data-title="课程原图：规则与 Endpoint 对照">
+        <div class="slide-header compact-header"><div><p class="eyebrow">Rule details</p><h2>课程原图：规则与 Endpoint 对照</h2><div class="rule"></div></div></div>
+        <img class="course-image service-course-image wide" src="assets/course-kube-proxy-chains2.png" alt="课程原图，ClusterIP Service 对应的 KUBE-SERVICES、KUBE-SVC 和两个 KUBE-SEP 规则">
+        <p class="source-line">课程仓库：images/kube-proxy-chains2.png</p>
+        <div class="slide-number">23</div>
+        <aside class="speaker-copy">
+          <p>第二张原图把课程示例值放回链级结构。KUBE-SERVICES 匹配 10.96.204.67:80，KUBE-SVC 包含 MASQ 与随机分支，两个 KUBE-SEP 分别 DNAT 到 .156.5 和 .202.196。</p>
+          <p>现场链哈希可能不同，但 VIP、Endpoint 地址和规则职责应该能一一对应。</p>
+          <p class="note-source">图片来源：<a href="https://raw.githubusercontent.com/aadhilam/k8-networking-calico-containerlab/master/images/kube-proxy-chains2.png">kube-proxy-chains2.png</a></p>
+        </aside>
+      </section>
+
+      <section class="slide" data-section="数据路径" data-title="选中本地 Endpoint 的路径">
+        <div class="slide-header"><div><p class="eyebrow">Local backend</p><h2>选中本地 Endpoint 的路径</h2><div class="rule"></div></div><button class="action-btn" id="replay-local" type="button">↻ 重放本地路径</button></div>
+        <div class="service-path local" id="local-path"><div class="path-client"><strong>Client Pod</strong><span>192.168.202.194</span></div><div class="path-proxy"><strong>iptables DNAT</strong><span>VIP to 192.168.202.196</span></div><div class="path-node"><strong>同一 worker</strong><span>local /32 dev cali*</span></div><div class="path-backend"><strong>nginx Pod</strong><span>192.168.202.196:80</span></div><span class="path-packet">TCP</span></div>
+        <div class="grid-2" style="margin-top:28px; gap:24px;"><div class="flat-block green"><h3>不离开节点</h3><p class="body">DNAT 后目标 Pod 在本机，Linux FIB 直接命中本地 /32。</p></div><div class="flat-block yellow"><h3>源 Pod IP 保留</h3><p class="body">后端看到 192.168.202.194，conntrack 负责返回方向的反向 NAT。</p></div></div>
+        <div class="slide-number">24</div>
+        <aside class="speaker-copy">
+          <p>假设客户端 Pod 和 Endpoint B 都在 worker。iptables 把目的地址改成 192.168.202.196 后，Host FIB 直接命中本地 /32，从对应 cali 接口送到 nginx。</p>
+          <p>这条路径不离开节点。返回包以 nginx Pod IP 发出，conntrack 在回到客户端前执行反向转换，所以客户端看到的对端仍是 ClusterIP。</p>
+        </aside>
+      </section>
+
+      <section class="slide" data-section="数据路径" data-title="选中远端 Endpoint 的路径">
+        <div class="slide-header"><div><p class="eyebrow">Remote backend and Calico routing</p><h2>选中远端 Endpoint 的路径</h2><div class="rule"></div></div><button class="action-btn" id="replay-remote" type="button">↻ 重放跨节点路径</button></div>
+        <div class="service-path remote" id="remote-path"><div class="path-client"><strong>Client Pod</strong><span>192.168.202.194</span></div><div class="path-proxy"><strong>iptables DNAT</strong><span>VIP to 192.168.156.5</span></div><div class="path-node"><strong>Calico route</strong><span>remote /26 via worker2</span></div><div class="path-backend"><strong>nginx Pod</strong><span>192.168.156.5:80</span></div><span class="path-packet">TCP</span></div>
+        <div class="grid-2" style="margin-top:28px; gap:24px;"><div class="flat-block orange"><h3>Service 选择结束</h3><p class="body">DNAT 完成后，数据包已经只包含真实 Pod 目标地址。</p></div><div class="flat-block green"><h3>Calico 接管后半程</h3><p class="body">远端 block 路由把包送到 worker2，再由本地 /32 交付。</p></div></div>
+        <div class="slide-number">25</div>
+        <aside class="speaker-copy">
+          <p>选中远端 Endpoint 时，iptables 的职责同样在 DNAT 后结束。目标地址成为 192.168.156.5，随后就按普通 Pod 路由处理。</p>
+          <p>源节点匹配 worker2 的远端 /26，Calico 把包送到目的节点。worker2 再用本地 /32 交给 nginx Pod。这正是 Lesson 03 路径在 Service 后半程的复用。</p>
+        </aside>
+      </section>
+
+      <section class="slide" data-section="NAT" data-title="集群内访问通常只需要 DNAT">
+        <div class="slide-header"><div><p class="eyebrow">KUBE-MARK-MASQ boundary</p><h2>集群内访问通常只需要 DNAT</h2><div class="rule"></div></div></div>
+        <div class="grid-2" style="margin-top:34px;">
+          <div class="flat-block green" style="min-height:410px;"><h3>客户端来自 Pod CIDR</h3><pre class="code" style="margin-top:18px;">src <span class="cool">192.168.202.194</span>
+dst 10.96.204.67:80
+
+DNAT
+
+src <span class="cool">192.168.202.194</span>
+dst 192.168.156.5:80</pre><p class="small" style="margin-top:18px;">源地址保持不变，NetworkPolicy 和应用日志仍能识别客户端 Pod。</p></div>
+          <div class="flat-block orange" style="min-height:410px;"><h3>来源在 Pod CIDR 外</h3><pre class="code" style="margin-top:18px;">!192.168.0.0/16
+  jump KUBE-MARK-MASQ
+
+POSTROUTING
+  MASQUERADE when marked</pre><p class="small" style="margin-top:18px;">特定拓扑需要 SNAT 以保证回复回到代理节点并完成反向 NAT。</p></div>
+        </div>
+        <div class="slide-number">26</div>
+        <aside class="speaker-copy">
+          <p>课程 KUBE-SVC 第一条规则只在来源不属于 192.168.0.0/16 时打 MASQ mark。集群内 Pod 访问 Service，源地址通常保留，只修改目的地址。</p>
+          <p>外部来源、hairpin 或其他需要保证对称回程的拓扑可能需要 SNAT。是否发生要看 mark、POSTROUTING 规则和真实抓包，不能简单说所有 Service 流量都会 SNAT。</p>
+        </aside>
+      </section>
+
+      <section class="slide" data-section="Endpoint 健康" data-title="kube-proxy 信任 EndpointSlice 与 readiness">
+        <div class="slide-header"><div><p class="eyebrow">kube-proxy does not probe application health</p><h2>kube-proxy 信任 EndpointSlice 与 readiness</h2><div class="rule"></div></div></div>
+        <div class="readiness-flow"><div><strong>nginx readiness</strong><span>kubelet 更新 Pod condition</span></div><div><strong>EndpointSlice controller</strong><span>维护 ready / serving / terminating</span></div><div><strong>kube-proxy</strong><span>同步可用 Endpoint 规则</span></div></div>
+        <div class="grid-3" style="margin-top:34px;"><div class="flat-block green"><h3>新增 Ready Pod</h3><p class="small">EndpointSlice 增加地址，节点规则随后加入新分支。</p></div><div class="flat-block orange"><h3>Pod NotReady</h3><p class="small">控制面移除或标记不可用，kube-proxy 不再给新连接选择它。</p></div><div class="flat-block yellow"><h3>kube-proxy 本身</h3><p class="small">不主动发送 HTTP 健康检查，它消费控制面状态。</p></div></div>
+        <div class="slide-number">27</div>
+        <aside class="speaker-copy">
+          <p>kube-proxy 不会自己 curl nginx。kubelet 根据 readiness probe 更新 Pod condition，EndpointSlice controller 再维护可用后端，kube-proxy只消费结果。</p>
+          <p>排查 Service 没有后端时，先看 Pod Ready 和 EndpointSlice，不要一开始就重启 kube-proxy。</p>
+        </aside>
+      </section>
+
+      <section class="slide" data-section="扩展特性" data-title="Session Affinity 与双栈边界">
+        <div class="slide-header"><div><p class="eyebrow">Additional notes</p><h2>Session Affinity 与双栈边界</h2><div class="rule"></div></div></div>
+        <div class="grid-2" style="margin-top:34px;">
+          <div><div class="section-band"><strong>sessionAffinity: ClientIP</strong><span>optional</span></div><div class="flat-block green"><p class="body">同一客户端 IP 在超时时间内倾向固定到同一个后端。它改变选择行为，不改变 VIP 与 Endpoint 模型。</p></div><pre class="code" style="margin-top:20px; font-size:16px;">spec:
+  sessionAffinity: ClientIP
+  sessionAffinityConfig:
+    clientIP:
+      timeoutSeconds: 10800</pre></div>
+          <div><div class="section-band"><strong>Dual-stack Service</strong><span>IPv4 + IPv6</span></div><div class="flat-block orange"><p class="body">双栈集群可以为 Service 分配两种地址族，kube-proxy 为每个 family 编程规则，EndpointSlice 也按 addressType 区分。</p></div><pre class="code" style="margin-top:20px; font-size:16px;">spec:
+  ipFamilyPolicy: PreferDualStack
+  ipFamilies:
+  - IPv4
+  - IPv6</pre></div>
+        </div>
+        <div class="slide-number">28</div>
+        <aside class="speaker-copy">
+          <p>课程附加说明里提到 session affinity 和双栈。ClientIP affinity 会让同一个客户端在超时时间内固定到某个后端，适合需要简单粘性的应用，但不要把它当作应用层会话共享。</p>
+          <p>双栈 Service 可以同时拥有 IPv4 和 IPv6 VIP。EndpointSlice 用 addressType 区分地址族，节点数据面分别维护规则。</p>
+        </aside>
+      </section>
+
+      <section class="slide" data-section="实现模式" data-title="iptables、IPVS 与 Calico eBPF">
+        <div class="slide-header"><div><p class="eyebrow">Implementation boundaries</p><h2>iptables、IPVS 与 Calico eBPF</h2><div class="rule"></div></div></div>
+        <table class="env-table mode-table"><thead><tr><th>模式</th><th>Service 实现</th><th>选择后端</th><th>本课命令是否适用</th></tr></thead><tbody><tr><td><strong>kube-proxy iptables</strong></td><td>NAT 链与规则</td><td>统计规则 + conntrack</td><td class="hot">完全适用</td></tr><tr><td>kube-proxy IPVS</td><td>内核 virtual server</td><td>IPVS scheduler</td><td>应使用 <code>ipvsadm</code></td></tr><tr><td>kube-proxy nftables</td><td>nftables ruleset</td><td>nft data plane</td><td>链名与命令不同</td></tr><tr><td>Calico eBPF</td><td>BPF program + maps</td><td>Calico kube-proxy replacement</td><td>iptables 链可能不存在</td></tr></tbody></table>
+        <div class="grid-2" style="margin-top:28px; gap:24px;"><div class="flat-block yellow"><h3>先确认模式</h3><p class="small"><code>kubectl -n kube-system get cm kube-proxy -o yaml</code></p></div><div class="flat-block orange"><h3>不要跨实现套命令</h3><p class="small">访问行为相似，不代表底层对象和排查命令相同。</p></div></div>
+        <div class="slide-number">29</div>
+        <aside class="speaker-copy">
+          <p>本课所有 KUBE 链命令只适用于 kube-proxy iptables 模式。IPVS 使用内核 virtual server，nftables 使用不同规则集，Calico eBPF 则可以完全替代 kube-proxy。</p>
+          <p>遇到“课程里有链，我这里没有”的情况，第一步不是重装，而是确认当前 Service 实现。</p>
+          <p class="note-source">Calico IPVS：<a href="https://docs.tigera.io/calico/latest/networking/configuring/use-ipvs">Use IPVS kube-proxy</a>；eBPF：<a href="https://docs.tigera.io/calico/latest/about/kubernetes-training/about-ebpf">About Calico eBPF</a></p>
+        </aside>
+      </section>
+
+      <section class="slide" data-section="现场演示" data-title="现场演示与故障定位">
+        <div class="slide-header"><div><p class="eyebrow">从对象到连接，再到规则链</p><h2>现场演示与故障定位</h2><div class="rule"></div></div></div>
+        <div class="demo-grid">
+          <div><h3>推荐演示顺序</h3><div class="demo-list compact-demo"><div class="demo-item"><div><code>kubectl get pod,svc,endpointslice -o wide</code><p>先锁定动态值。</p></div></div><div class="demo-item"><div><code>nslookup nginx-service</code><p>验证名称到 VIP。</p></div></div><div class="demo-item"><div><code>nc -vz nginx-service 80</code><p>验证 TCP 到 Service。</p></div></div><div class="demo-item"><div><code>iptables -t nat -S KUBE-SERVICES</code><p>发现实际 KUBE-SVC 链名。</p></div></div><div class="demo-item"><div><code>iptables -t nat -L &lt;KUBE-SVC-chain&gt; -n -v</code><p>复制真实链名，看概率与计数器。</p></div></div></div></div>
+          <div><h3>按症状定位</h3><table class="trouble-table compact-trouble"><tbody><tr><td>DNS 不通</td><td>查 CoreDNS、resolv.conf、kube-dns Service</td></tr><tr><td>VIP 不通</td><td>查 kube-proxy 模式与 KUBE-SERVICES</td></tr><tr><td>Service 无 Endpoint</td><td>查 selector、Pod label、readiness</td></tr><tr><td>只有远端 Endpoint 失败</td><td>查 Calico 跨节点 Pod 路由</td></tr><tr><td>负载不均</td><td>区分长连接、ClientIP affinity 与样本量</td></tr></tbody></table></div>
+        </div>
+        <div class="flat-block red" style="margin-top:22px;"><p class="small"><strong>演示结束：</strong>运行 <code>./destroy.sh</code> 并输入 yes，清理本实验 topology、Kind cluster 与 kubeconfig。</p></div>
+        <div class="slide-number">30</div>
+        <aside class="speaker-copy">
+          <p>现场演示先从 Kubernetes 对象开始，确认 Pod、VIP、Endpoint 三者一致。然后验证 DNS 和 TCP，最后再进入节点读规则链。这样每一步都有清晰的前置条件。</p>
+          <p>故障定位也按层次走。DNS 失败与 iptables 无关，Service 没有 Endpoint 时不要查 Calico，只有 DNAT 后的远端 Pod 路由失败时才回到 Lesson 03。</p>
+        </aside>
+      </section>
+
+      <section class="slide" data-section="总结与来源" data-title="ClusterIP 路径的完整证据链">
+        <div class="slide-header"><div><p class="eyebrow">Summary and sources</p><h2>ClusterIP 路径的完整证据链</h2><div class="rule"></div></div></div>
+        <div class="summary-stack service-summary"><article class="summary-block"><span class="n">01</span><h3>控制面</h3><p>Service selector 与 readiness 形成 EndpointSlice，kube-proxy watch 变化。</p></article><article class="summary-block"><span class="n">02</span><h3>Service 数据面</h3><p>KUBE-SERVICES 匹配 VIP，KUBE-SVC 选后端，KUBE-SEP 执行 DNAT。</p></article><article class="summary-block"><span class="n">03</span><h3>Pod 路由</h3><p>DNAT 后按真实 Pod IP 转发，Calico 负责本地或跨节点可达。</p></article></div>
+        <div class="source-list compact-sources"><article class="source-item"><strong>Lesson 04</strong><a href="https://k8snetworking.com/lessons/04-k8s-services">k8snetworking.com/lessons/04-k8s-services</a></article><article class="source-item"><strong>课程仓库</strong><a href="https://github.com/aadhilam/k8-networking-calico-containerlab/tree/master/containerlab/04-k8s-services">github.com/aadhilam/.../04-k8s-services</a></article><article class="source-item"><strong>Calico Services</strong><a href="https://docs.tigera.io/calico/latest/network-policy/services/services-cluster-ips">docs.tigera.io/calico/latest/network-policy/services</a></article><article class="source-item"><strong>Calico kube-proxy modes</strong><a href="https://docs.tigera.io/calico/latest/getting-started/kubernetes/requirements">docs.tigera.io/calico/latest/getting-started/kubernetes/requirements</a></article></div>
+        <div class="slide-number">31</div>
+        <aside class="speaker-copy">
+          <p>最后把路径压缩成三层。控制面维护 Service 和 EndpointSlice。节点 Service 数据面负责匹配 VIP、选择 Endpoint 和 DNAT。目标变成 Pod IP 后，Calico 路由负责最后交付。</p>
+          <p>排查时依次验证对象、DNS、TCP、KUBE-SERVICES、KUBE-SVC、KUBE-SEP 和 Pod 路由。不要把所有问题都归到 kube-proxy 或 Calico。</p>
+          <p>课程中的 VIP、Pod IP、链哈希和 Pod 后缀都是示例值。现场必须从当前集群重新获取。</p>
+        </aside>
+      </section>
+    </div>
+
+    <div class="progress-track" aria-hidden="true"><div id="progress-fill"></div></div>
+    <nav class="controls" aria-label="演示控制"><button class="tool-btn" id="prev" type="button" title="上一页" aria-label="上一页">‹</button><button class="tool-btn" id="next" type="button" title="下一页" aria-label="下一页">›</button><button class="tool-btn" id="notes-toggle" type="button" title="讲稿" aria-label="显示或隐藏讲稿" aria-pressed="false">N</button><button class="tool-btn" id="overview-toggle" type="button" title="总览" aria-label="显示或隐藏总览" aria-pressed="false">▦</button><button class="tool-btn" id="fullscreen" type="button" title="全屏" aria-label="切换全屏">⛶</button></nav>
+    <button class="notes-backdrop" id="notes-backdrop" type="button" aria-label="关闭讲稿" tabindex="-1"></button>
+    <aside class="notes-panel" id="notes-panel" aria-live="polite" aria-hidden="true"><div class="notes-header"><h2 id="notes-title">讲稿</h2><button class="notes-close" id="notes-close" type="button" title="关闭讲稿" aria-label="关闭讲稿">×</button></div><div id="notes-body"></div></aside>
+    <aside class="overview" id="overview" aria-label="幻灯片总览"></aside>
+  </main>
+  <script src="app.js?v=1"></script>
+</body>
+</html>
