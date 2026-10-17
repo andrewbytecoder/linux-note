@@ -4,19 +4,21 @@
     "type": "split",
     "children": [
       {
-        "id": "a2e4483ce5cfc71c",
+        "id": "17624853dc70b13c",
         "type": "tabs",
         "children": [
           {
-            "id": "65777e8b1cc7be1b",
+            "id": "7ea399d169100e45",
             "type": "leaf",
             "state": {
-              "type": "html-docs",
+              "type": "markdown",
               "state": {
-                "file": "k8s/calico/ppt/pod-network.html"
+                "file": "k8s/calico/IPAM.md",
+                "mode": "source",
+                "source": false
               },
-              "icon": "code",
-              "title": "pod-network"
+              "icon": "lucide-file",
+              "title": "IPAM"
             }
           }
         ]
@@ -53,7 +55,7 @@
             "state": {
               "type": "search",
               "state": {
-                "query": "Felix's primary responsibility is to program ",
+                "query": "metallb",
                 "matchingCase": false,
                 "explainSearch": false,
                 "collapseAll": false,
@@ -78,7 +80,7 @@
       }
     ],
     "direction": "horizontal",
-    "width": 300
+    "width": 314.5
   },
   "right": {
     "id": "e7caec816f7dccec",
@@ -94,7 +96,7 @@
             "state": {
               "type": "backlink",
               "state": {
-                "file": "go/go_package.md",
+                "file": "go/高并发.md",
                 "collapseAll": false,
                 "extraContext": false,
                 "sortOrder": "alphabetical",
@@ -104,7 +106,7 @@
                 "unlinkedCollapsed": true
               },
               "icon": "links-coming-in",
-              "title": "go_package 的反向链接列表"
+              "title": "高并发 的反向链接列表"
             }
           },
           {
@@ -113,12 +115,12 @@
             "state": {
               "type": "outgoing-link",
               "state": {
-                "file": "linux/perf.adoc",
+                "file": "go/高并发.md",
                 "linksCollapsed": false,
                 "unlinkedCollapsed": true
               },
               "icon": "links-going-out",
-              "title": "perf 的出链列表"
+              "title": "高并发 的出链列表"
             }
           },
           {
@@ -142,7 +144,7 @@
             "state": {
               "type": "outline",
               "state": {
-                "file": "k8s/calico/ppt/pod-network.html",
+                "file": "k8s/calico/IPAM.md",
                 "followCursor": false,
                 "showSearch": false,
                 "searchQuery": ""
@@ -162,7 +164,29 @@
             }
           },
           {
-            "id": "93020730b870d35c",
+            "id": "aa7b02b0b013cbbe",
+            "type": "leaf",
+            "state": {
+              "type": "footnotes",
+              "state": {
+                "file": "k8s/kubernetes_network.md"
+              },
+              "icon": "lucide-file-signature",
+              "title": "脚注"
+            }
+          },
+          {
+            "id": "b44ad17fdd274341",
+            "type": "leaf",
+            "state": {
+              "type": "advanced-tables-toolbar",
+              "state": {},
+              "icon": "spreadsheet",
+              "title": "Advanced Tables"
+            }
+          },
+          {
+            "id": "1464268fcc3831c9",
             "type": "leaf",
             "state": {
               "type": "mermaid-toolbar-view",
@@ -172,18 +196,15 @@
             }
           }
         ],
-        "currentTab": 2
+        "currentTab": 3
       }
     ],
     "direction": "horizontal",
-    "width": 517.5
+    "width": 328.5
   },
   "left-ribbon": {
     "hiddenItems": {
-      "table-editor-obsidian:Advanced Tables Toolbar": false,
       "bases:新建数据库": false,
-      "mp-preview:打开公众号预览": false,
-      "media-sync:Media sync": false,
       "switcher:打开快速切换": false,
       "graph:查看关系图谱": false,
       "canvas:新建白板": false,
@@ -192,55 +213,60 @@
       "command-palette:打开命令面板": false,
       "obsidian-excalidraw-plugin:新建绘图文件": false,
       "obsidian-kanban:创建新看板": false,
-      "mermaid-tools:Open Mermaid Toolbar": false
+      "mermaid-tools:Open Mermaid Toolbar": false,
+      "mp-preview:打开公众号预览": false,
+      "media-sync:Media sync": false,
+      "table-editor-obsidian:Advanced Tables Toolbar": false,
+      "xminder:新建思维导图": false
     }
   },
-  "active": "65777e8b1cc7be1b",
+  "active": "7ea399d169100e45",
   "lastOpenFiles": [
-    "k8s/calico/ppt/Calico_IPAM.html",
-    "k8s/calico/ppt/pod-network.html",
-    "k8s/calico/calicoctl.md",
-    "k8s/calico/ppt/images/pod-network.png",
-    "k8s/calico/ppt/images",
-    "k8s/calico/ppt/新建文件夹",
-    "attachments/2026/10/16/235654/93612.png.md",
-    "attachments/2026/10/16/235654/93612.png",
-    "attachments/2026/10/16/235654/19254.png.md",
-    "attachments/2026/10/16/235654/19254.png",
-    "attachments/2026/10/16/235654/36811.png.md",
-    "attachments/2026/10/16/235654/36811.png",
-    "attachments/2026/10/16/235654",
-    "attachments/2026/10/16",
-    "attachments/2026/10",
-    "k8s/calico/calico.excalidraw.md",
+    "k8s/calico/IPv4 & IPv6 Dual-Stack.md",
+    "k8s/ocp/metaLB/metalLB三层BGP模式配置.md",
+    "k8s/calico/Advertise IPPool via BGP.md",
     "k8s/calico/IPAM.md",
-    "k8s/calico/ppt/未命名",
-    "k8s/calico/ppt",
-    "k8s/calico/Pod Networking.md",
-    "k8s/kubernetes_rbac.md",
-    "k8s/kubernetes_security.md",
-    "k8s/kubernetes_service.md",
-    "k8s/ocp/network/新集群网络配置.md",
-    "k8s/ocp/network/ovn网络.md",
-    "k8s/components/ingress.md",
-    "k8s/components/pod.md",
-    "k8s/components/cadvisor.md",
-    "k8s/components/controller-manager.md",
+    "k8s/calico/WireGuard Encryption.md",
+    "k8s/calico/attachments/Pasted image 20261015093915.png",
+    "k8s/calico/Network QoS - Bandwidth Limiting.md",
+    "k8s/calico/attachments/qos.png",
     "k8s/calico/headless services.md",
-    "network/命令.md",
-    "k8s/calico/Kubernetes DNS.md",
-    "k8s/calico/Kubernetes Services - ClusterIP.md",
-    "k8s/calico/calico-net.excalidraw.md",
-    "k8s/calico/calico.excalidraw 1.md",
-    "k8s/calico/calico架构.md",
-    "k8s/calico/calico.md",
-    "k8s/calico/BGP.md",
-    "k8s/calico/attachments/Pasted image 20260925200407.png",
-    "k8s/calico/attachments/Pasted image 20260925200246.png",
-    "k8s/calico/attachments/Pasted image 20260925200048.png",
-    "k8s/calico/attachments/Pasted image 20260925173154.png",
-    "k8s/calico/attachments/Pasted image 20260924233513.png",
     "k8s/calico/attachments/Pasted image 20260924133713.png",
-    "k8s/calico/attachments/kubernetes-icons.excalidrawlib"
+    "k8s/calico/Calico BGP.md",
+    "k8s/calico/Multiple IPPool.md",
+    "k8s/calico/calico.excalidraw.md",
+    "k8s/calico/calico-net.excalidraw.md",
+    "k8s/calico/Calico Overlay Networks.md",
+    "新建思维导图.xmind",
+    "k8s/calico/attachments/Pasted image 20261012101423.png",
+    "k8s/calico/attachments/Pasted image 20261012094017.png",
+    "k8s/calico/LoadBalancer & BGP Advertisements.md",
+    "k8s/calico/attachments/Pasted image 20261009151258.png",
+    "k8s/metalLB/BGP.md",
+    "k8s/metalLB/attachments/Calico Multiple IPPools 实验文档思维导图_ima脑图.xmind",
+    "k8s/metalLB/attachments",
+    "k8s/metalLB",
+    "k8s/calico/calico.md",
+    "k8s/calico/network.md",
+    "k8s/calico/network policy.md",
+    "k8s/calico/attachments/Pasted image 20261009140806.png",
+    "k8s/calico/attachments/Pasted image 20261009091918.png",
+    "k8s/calico/attachments/Pasted image 20261008173002.png",
+    "k8s/calico/Pod Routing Across Nodes 跨节点的Pod路由.md",
+    "k8s/calico/attachments/Pasted image 20261008151128.png",
+    "k8s/containerlab/containerlab.md",
+    "docker/命令.md",
+    "docker/network.md",
+    "docker/docker.md",
+    "Excalidraw/CNI.excalidraw.md",
+    "k8s/containerlab",
+    "k8s/calico/Kubernetes Services - ClusterIP.md",
+    "k8s/calico/Kubernetes DNS.md",
+    "DevTools/git.md",
+    "attachments/2026/09/20/172540/06269.pdf",
+    "attachments/2026/09/20/172539/25771.pdf",
+    "attachments/2026/09/20/172539/06918.pdf",
+    "attachments/2026/09/20/170553/05370.pdf",
+    "attachments/2026/09/20/172535/54594.pdf"
   ]
 }
