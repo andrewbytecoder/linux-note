@@ -1,0 +1,437 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Calico Overlay Networks</title>
+  <link rel="stylesheet" href="styles.css?v=1">
+</head>
+<body>
+  <main class="deck-shell">
+    <div id="deck-canvas">
+      <section class="slide cover-slide active" data-section="开场" data-title="Calico Overlay Networks">
+        <div class="cover-grid">
+          <div class="cover-copy">
+            <p class="eyebrow">Lesson 06 · Calico · VXLAN CrossSubnet</p>
+            <h1>Calico Overlay<br><span class="yellow-mark">跨子网</span>通信</h1>
+            <p class="lead">同一子网保留直接路由，跨越三层边界时再套上 VXLAN，把 Pod 网络建立在现有 underlay 之上。</p>
+            <div class="cover-meta"><span>4 Kind nodes</span><span>VLAN 10 / VLAN 20</span><span>UDP 4789</span></div>
+          </div>
+          <div class="overlay-cover" aria-label="两个子网之间通过 VXLAN 隧道传送 Pod 流量">
+            <div class="cover-zone left"><span>10.10.10.0/24</span><strong>worker</strong><small>VTEP 192.168.81.64</small></div>
+            <div class="cover-zone right"><span>10.10.20.0/24</span><strong>worker3</strong><small>VTEP 192.168.209.64</small></div>
+            <div class="cover-underlay-link"><span class="cover-switch">Arista L3</span></div>
+            <div class="cover-tunnel"><span>VXLAN</span><b class="cover-overlay-packet">Pod packet</b></div>
+            <div class="cover-pod left">Pod A</div><div class="cover-pod right">Pod B</div>
+          </div>
+        </div>
+        <aside class="speaker-copy">
+          <p>大家好，这一节我们来看 Calico Overlay。实验里有四个 Kind 节点，前三个在 10.10.10.0/24，worker3 在 10.10.20.0/24，中间由 Arista cEOS 做三层转发。</p>
+          <p>我们重点观察一个选择题：目的节点和源节点在同一个子网时，Calico 直接路由；跨子网时，Calico 才通过 vxlan.calico 封装。这就是 VXLANCrossSubnet。</p>
+          <p class="note-source">课程：<a href="https://k8snetworking.com/lessons/06-calico-overlay">Lesson 06 Calico Overlay Networks</a></p>
+        </aside>
+      </section>
+
+      <section class="slide" data-section="概念" data-title="Overlay 解决 underlay 不认识 Pod CIDR 的问题">
+        <div class="slide-header"><div><p class="eyebrow">Why an overlay exists</p><h2>Overlay 解决 underlay 不认识 Pod CIDR 的问题</h2><div class="rule"></div></div></div>
+        <div class="compare-layout overlay-why">
+          <article class="compare-panel red"><h3>没有 Overlay</h3><p class="big-mono">192.168.209.64/26 ?</p><p class="body">underlay 路由器需要知道每个节点后的 Pod CIDR，否则它无法把原始 Pod 包送到目标节点。</p></article>
+          <article class="compare-panel green"><h3>使用 VXLAN</h3><p class="big-mono">10.10.10.11 → 10.10.20.20</p><p class="body">underlay 只转发节点 IP。Pod 包藏在 VXLAN 外层，目标节点解封装后再交给 Pod。</p></article>
+        </div>
+        <div class="flat-block yellow" style="margin-top:30px;"><p class="body">CrossSubnet 只在跨越子网边界时封装，减少同子网流量的额外开销。</p></div>
+        <div class="slide-number">02</div>
+        <aside class="speaker-copy"><p>Overlay 的价值不是让包凭空消失，而是把 underlay 不认识的 Pod 地址藏起来。交换机和路由器只需要认识 10.10.10.11 与 10.10.20.20 这样的节点地址。</p><p>Calico 官方也建议在可以直连时尽量避免无必要的封装。CrossSubnet 正好折中：同一二层域直接转发，跨路由边界再封装。</p><p class="note-source">Calico 官方：<a href="https://docs.tigera.io/calico/latest/networking/configuring/vxlan-ipip">Overlay networking</a></p></aside>
+      </section>
+
+      <section class="slide" data-section="概念" data-title="CrossSubnet 的转发判断">
+        <div class="slide-header"><div><p class="eyebrow">One route lookup, two outcomes</p><h2>CrossSubnet 的转发判断</h2><div class="rule"></div></div><button class="action-btn" id="replay-decision" type="button">↻ 重放判断</button></div>
+        <div class="decision-flow" id="crosssubnet-decision">
+          <div class="decision-source"><strong>源节点</strong><span>10.10.10.11</span></div>
+          <span class="decision-link"><b>route</b></span>
+          <div class="decision-check"><strong>目标 Node IP</strong><span>是否同子网</span></div>
+          <div class="decision-branches">
+            <div class="branch-row same"><span class="branch-line"><b>same</b></span><div><strong>同子网</strong><small>eth1 直接路由</small></div></div>
+            <div class="branch-row cross"><span class="branch-line"><b>cross</b></span><div><strong>跨子网</strong><small>vxlan.calico 封装</small></div></div>
+          </div>
+        </div>
+        <div class="grid-2" style="margin-top:28px; gap:24px;"><div class="flat-block green"><h3>同子网</h3><p class="body">远端 Pod block 经目标 Node 的 eth1 地址到达。</p></div><div class="flat-block orange"><h3>跨子网</h3><p class="body">远端 Pod block 的下一跳是远端 VTEP，设备为 vxlan.calico。</p></div></div>
+        <div class="slide-number">03</div>
+        <aside class="speaker-copy"><p>CrossSubnet 的核心判断发生在节点侧。Felix 根据节点地址和 IPPool 模式安装不同的路由。同子网的目标 block 指向远端节点的 underlay IP，跨子网的目标 block 指向远端 VTEP。</p><p>所以排错时不要先猜 VXLAN。先看路由表选了 eth1 还是 vxlan.calico，选择结果已经告诉我们接下来应该检查哪条路径。</p></aside>
+      </section>
+
+      <section class="slide" data-section="实验环境" data-title="Lesson 06 仓库文件">
+        <div class="slide-header"><div><p class="eyebrow">containerlab/06-calico-overlay</p><h2>Lesson 06 仓库文件</h2><div class="rule"></div></div></div>
+        <table class="course-table"><thead><tr><th>文件</th><th>内容</th><th>演示重点</th></tr></thead><tbody>
+          <tr><td><code>topology.clab.yaml</code></td><td>cEOS、Kind 与 ext-container 链路</td><td>节点 underlay 地址和静态路由</td></tr>
+          <tr><td><code>k01-no-cni.yaml</code></td><td>4 节点 Kind，关闭默认 CNI</td><td>node-ip 固定到 10.10.x.x</td></tr>
+          <tr><td><code>custom-resources.yaml</code></td><td>Calico Installation 与 IPPool</td><td>VXLANCrossSubnet、/26 block</td></tr>
+          <tr><td><code>ceos01-startup-config.config</code></td><td>VLAN 10、VLAN 20 与 SVI</td><td>两个节点子网的三层网关</td></tr>
+          <tr><td><code>deploy.sh / destroy.sh</code></td><td>部署与清理</td><td>cEOS 镜像、Calico 3.30.0</td></tr>
+        </tbody></table>
+        <div class="flat-block red" style="margin-top:25px;"><p class="body"><strong>环境提醒：</strong>cEOS 4.34.0F 需要用户自行从 Arista 下载，仓库不会分发该镜像。</p></div>
+        <div class="slide-number">04</div>
+        <aside class="speaker-copy"><p>这一页先把文件与作用对应起来。课程目录就是 containerlab/06-calico-overlay。拓扑文件负责把现有 Kind 容器接到 cEOS，Kind 文件负责节点数量和 node-ip，Calico 文件决定封装模式。</p><p>cEOS 镜像属于 Arista 软件，需要按仓库说明自行下载。运行 deploy.sh 前先确认压缩包放在 containerlab 目录的上一层引用位置。</p></aside>
+      </section>
+
+      <section class="slide" data-section="实验环境" data-title="四个节点分布在两个子网">
+        <div class="slide-header"><div><p class="eyebrow">Physical view</p><h2>四个节点分布在两个子网</h2><div class="rule"></div></div></div>
+        <div class="lab-topology">
+          <div class="subnet-area vlan10"><h3>VLAN 10 · 10.10.10.0/24</h3><div class="node-strip"><div><strong>control-plane</strong><span>10.10.10.10</span></div><div><strong>worker</strong><span>10.10.10.11</span></div><div><strong>worker2</strong><span>10.10.10.12</span></div></div></div>
+          <div class="topology-switch"><strong>Arista cEOS</strong><span>Vlan10 10.10.10.1</span><span>Vlan20 10.10.20.1</span></div>
+          <div class="subnet-area vlan20"><h3>VLAN 20 · 10.10.20.0/24</h3><div class="node-strip one"><div><strong>worker3</strong><span>10.10.20.20</span></div></div></div>
+        </div>
+        <div class="flat-block yellow" style="margin-top:24px;"><p class="body">这里的“同子网”和“跨子网”比较的是 Node underlay 地址，不是 Pod IP 是否来自同一个 IPPool。</p></div>
+        <div class="slide-number">05</div>
+        <aside class="speaker-copy"><p>实验的关键不是四个节点本身，而是它们的 node-ip 分布。control-plane、worker 和 worker2 在 VLAN 10，worker3 单独在 VLAN 20。</p><p>判断 CrossSubnet 时看节点地址的可达子网。所有 Pod 都来自 192.168.0.0/16，并不代表所有 Pod 都处在同一个 underlay 子网。</p></aside>
+      </section>
+
+      <section class="slide" data-section="实验环境" data-title="ext-container 把 Kind 容器接入实验拓扑">
+        <div class="slide-header"><div><p class="eyebrow">ContainerLab wrapper</p><h2>ext-container 把 Kind 容器接入实验拓扑</h2><div class="rule"></div></div></div>
+        <div class="ext-flow"><div><strong>k8s-kind</strong><span>创建 k01 集群</span></div><span></span><div><strong>Kind node container</strong><span>k01-worker</span></div><span></span><div><strong>ext-container</strong><span>追加 eth1 和 exec 配置</span></div><span></span><div><strong>cEOS port</strong><span>Ethernet2 / VLAN 10</span></div></div>
+        <pre class="terminal medium"><code>k01-worker:
+  kind: ext-container
+  exec:
+    - ip addr add dev eth1 10.10.10.11/24
+    - ip route add 10.10.20.0/24 via 10.10.10.1</code></pre>
+        <div class="flat-block green" style="margin-top:24px;"><p class="body">ext-container 不会再创建一台节点，它包装已经存在的 Kind 容器，让 ContainerLab 可以追加接口和启动命令。</p></div>
+        <div class="slide-number">06</div>
+        <aside class="speaker-copy"><p>containerlab inspect 里同名节点可能同时出现 k8s-kind 和 ext-container 视图。它们不是两套 Kubernetes 节点。</p><p>k8s-kind 创建 Kind 集群，ext-container 再把已有的 Docker 容器接到 cEOS 并执行地址和路由命令。理解这一点可以避免把输出中的重复名称误认为八个节点。</p></aside>
+      </section>
+
+      <section class="slide" data-section="实验环境" data-title="Kind 固定 Kubernetes Node IP">
+        <div class="slide-header"><div><p class="eyebrow">k01-no-cni.yaml</p><h2>Kind 固定 Kubernetes Node IP</h2><div class="rule"></div></div></div>
+        <div class="grid-2"><pre class="terminal tall"><code>networking:
+  disableDefaultCNI: true
+  podSubnet: 192.168.0.0/16
+  serviceSubnet: 10.96.0.0/16
+
+nodeRegistration:
+  kubeletExtraArgs:
+    node-ip: 10.10.10.11</code></pre><div class="stack-list"><div class="flat-block cyan"><h3>关闭默认 CNI</h3><p class="body">节点先 NotReady，等待 Calico 安装。</p></div><div class="flat-block orange"><h3>明确 node-ip</h3><p class="body">Calico 节点地址与课程的 eth1 underlay 对齐。</p></div><div class="flat-block green"><h3>四节点地址</h3><p class="body">.10、.11、.12 位于 VLAN 10，.20 位于 VLAN 20。</p></div></div></div>
+        <div class="slide-number">07</div>
+        <aside class="speaker-copy"><p>Kind 默认会选择 Docker 网络地址，但课程需要 Kubernetes Node IP 走实验的 eth1，所以 kubeletExtraArgs 明确写出 node-ip。</p><p>Calico 的 nodeAddressAutodetectionV4 也限制在 10.10.0.0/16。两边同时约束，可以减少多网卡环境中选错地址的概率。</p></aside>
+      </section>
+
+      <section class="slide" data-section="交换网络" data-title="cEOS 端口划分 VLAN 10 与 VLAN 20">
+        <div class="slide-header"><div><p class="eyebrow">show interface status</p><h2>cEOS 端口划分 VLAN 10 与 VLAN 20</h2><div class="rule"></div></div></div>
+        <table class="course-table port-table"><thead><tr><th>端口</th><th>连接对象</th><th>VLAN</th><th>状态</th></tr></thead><tbody><tr><td>Et1</td><td>k01-control-plane</td><td>10</td><td class="ok">connected</td></tr><tr><td>Et2</td><td>k01-worker</td><td>10</td><td class="ok">connected</td></tr><tr><td>Et3</td><td>k01-worker2</td><td>10</td><td class="ok">connected</td></tr><tr><td>Et4</td><td>k01-worker3</td><td>20</td><td class="ok">connected</td></tr></tbody></table>
+        <pre class="terminal compact"><code>docker exec -it clab-calico-overlay-ceos01 Cli
+ceos&gt; enable
+ceos# show interface status</code></pre>
+        <div class="slide-number">08</div>
+        <aside class="speaker-copy"><p>先从交换机确认物理视图。Et1 到 Et3 都是 VLAN 10，Et4 是 VLAN 20，四条链路应该 connected。</p><p>如果某个节点后面的路由异常，先看端口是否 up、VLAN 是否正确。Overlay 依赖可用的 underlay，隧道不会修复底层链路问题。</p></aside>
+      </section>
+
+      <section class="slide" data-section="交换网络" data-title="两个 SVI 为节点子网提供三层转发">
+        <div class="slide-header"><div><p class="eyebrow">show ip interface brief / route</p><h2>两个 SVI 为节点子网提供三层转发</h2><div class="rule"></div></div></div>
+        <div class="grid-2"><pre class="terminal tall"><code>Interface   IP Address       Status
+Vlan10      10.10.10.1/24    up/up
+Vlan20      10.10.20.1/24    up/up
+
+C 10.10.10.0/24 via Vlan10
+C 10.10.20.0/24 via Vlan20
+C 172.20.20.0/24 via Management0</code></pre><div class="route-explain"><div class="flat-block cyan"><h3>SVI 网关</h3><p class="body">节点跨 VLAN 时，把外层 IP 包交给各自网关。</p></div><div class="flat-block yellow"><h3>仅直连路由</h3><p class="body">课程输出没有默认路由，cEOS 只负责已连接网段。</p></div><div class="flat-block red"><h3>Pod CIDR 不出现</h3><p class="body">交换机无需学习 192.168.x.x，跨子网 Pod 包已经封装。</p></div></div></div>
+        <div class="slide-number">09</div>
+        <aside class="speaker-copy"><p>Vlan10 和 Vlan20 是两个节点网段的网关。cEOS 路由表只看到 10.10.10.0/24 与 10.10.20.0/24，没有任何 192.168 的 Pod 路由。</p><p>这正是 VXLAN 的意义。跨子网时，交换机看到的是源节点到目标节点的外层 IP 包，而不是 Pod 到 Pod 的内层地址。</p></aside>
+      </section>
+
+      <section class="slide image-slide" data-section="交换网络" data-title="课程原图中的双子网拓扑">
+        <div class="slide-header"><div><p class="eyebrow">Course topology</p><h2>课程原图中的双子网拓扑</h2><div class="rule"></div></div></div>
+        <img class="course-image overlay-topology-image" src="assets/overlay-topology.png" alt="Calico overlay 双子网实验拓扑">
+        <p class="image-caption">VLAN 10 内节点可以直接互达，worker3 位于 VLAN 20，跨子网 Pod 通信使用 VXLAN。</p>
+        <div class="slide-number">10</div>
+        <aside class="speaker-copy"><p>这张课程原图把 underlay 和 overlay 放在同一张图里。演讲时可以先沿实线看节点与交换机，再沿 VXLAN 标记看跨子网的覆盖路径。</p><p>注意图中的 IP、MAC 和 Pod block 是课程示例，运行时以你自己的 blockaffinity、ip route、ip neigh 和 bridge fdb 输出为准。</p><p class="note-source">课程仓库图片：<a href="https://raw.githubusercontent.com/aadhilam/k8-networking-calico-containerlab/master/images/overlay-topology.png">overlay-topology.png</a></p></aside>
+      </section>
+
+      <section class="slide" data-section="部署" data-title="deploy.sh 的部署顺序">
+        <div class="slide-header"><div><p class="eyebrow">cEOS, Kind, Calico</p><h2>deploy.sh 的部署顺序</h2><div class="rule"></div></div></div>
+        <div class="deploy-flow overlay-deploy"><article><span>01</span><h3>导入 cEOS</h3><code>docker import ... ceos:4.34.0F</code></article><i></i><article><span>02</span><h3>部署拓扑</h3><code>containerlab deploy</code></article><i></i><article><span>03</span><h3>取得 kubeconfig</h3><code>kind get kubeconfig --name=k01</code></article><i></i><article><span>04</span><h3>安装 Calico</h3><code>operator + custom resources</code></article></div>
+        <div class="grid-2" style="margin-top:30px; gap:24px;"><div class="flat-block green"><h3>就绪条件</h3><p class="body">脚本等待 TigeraStatus 中 apiserver 与 calico 的 Available=True。</p></div><div class="flat-block yellow"><h3>版本</h3><p class="body">课程仓库脚本安装 Calico 3.30.0，页面示例 Kind 镜像为 v1.32.2。</p></div></div>
+        <div class="slide-number">11</div>
+        <aside class="speaker-copy"><p>部署链路先准备网络设备和 Kind，再安装 Calico。脚本会先销毁同名拓扑，导入 cEOS 镜像，部署 ContainerLab，然后获取 k01 kubeconfig。</p><p>Calico 通过 operator 安装。不要只看 Pod Running，脚本用 TigeraStatus 的 Available 条件确认 apiserver 和 calico 核心组件已经就绪。</p></aside>
+      </section>
+
+      <section class="slide" data-section="部署" data-title="ContainerLab 与 Kubernetes 状态确认">
+        <div class="slide-header"><div><p class="eyebrow">First verification</p><h2>ContainerLab 与 Kubernetes 状态确认</h2><div class="rule"></div></div></div>
+        <div class="grid-2"><pre class="terminal tall"><code>$ containerlab inspect topology.clab.yaml
+
+k01-control-plane  running  172.18.0.2
+k01-worker         running  172.18.0.5
+k01-worker2        running  172.18.0.3
+k01-worker3        running  172.18.0.4
+ceos01             running  172.20.20.2</code></pre><pre class="terminal tall"><code>$ export KUBECONFIG=$(pwd)/k01.kubeconfig
+$ kubectl get nodes -o wide
+
+k01-control-plane  Ready  10.10.10.10
+k01-worker         Ready  10.10.10.11
+k01-worker2        Ready  10.10.10.12
+k01-worker3        Ready  10.10.20.20</code></pre></div>
+        <div class="flat-block orange" style="margin-top:24px;"><p class="body">ContainerLab 的 172.x 管理地址与 Kubernetes Node InternalIP 是两套地址，分析数据面时使用 10.10.x.x。</p></div>
+        <div class="slide-number">12</div>
+        <aside class="speaker-copy"><p>containerlab inspect 展示的 172.x 地址来自 Docker 管理网络。它能确认容器正在运行，但不是这节课用来判断同子网和跨子网的 Node IP。</p><p>真正的数据面地址看 kubectl get nodes -o wide，应当分别是 10.10.10.10、.11、.12 和 10.10.20.20。</p></aside>
+      </section>
+
+      <section class="slide" data-section="IPPool" data-title="Installation 资源定义 VXLAN CrossSubnet">
+        <div class="slide-header"><div><p class="eyebrow">calico-cni-config/custom-resources.yaml</p><h2>Installation 资源定义 VXLAN CrossSubnet</h2><div class="rule"></div></div></div>
+        <div class="grid-2"><pre class="terminal tall"><code>calicoNetwork:
+  ipPools:
+  - name: default-ipv4-ippool
+    blockSize: 26
+    cidr: 192.168.0.0/16
+    encapsulation: VXLANCrossSubnet
+    natOutgoing: Enabled
+    nodeSelector: all()
+    disableBGPExport: true
+  nodeAddressAutodetectionV4:
+    cidrs:
+    - 10.10.0.0/16</code></pre><div class="stack-list"><div class="flat-block orange"><h3>VXLANCrossSubnet</h3><p class="body">只封装跨节点子网流量。</p></div><div class="flat-block cyan"><h3>blockSize: 26</h3><p class="body">Calico IPAM 按 /26 block 分给节点。</p></div><div class="flat-block green"><h3>地址自动检测</h3><p class="body">只从 10.10.0.0/16 选择节点地址。</p></div></div></div>
+        <div class="flat-block yellow" style="margin-top:20px;"><p class="body">同一清单还创建 APIServer、Goldmane 和 Whisker；Overlay 数据面参数集中在 <code>Installation.spec.calicoNetwork</code>。</p></div>
+        <div class="slide-number">13</div>
+        <aside class="speaker-copy"><p>这一段是整个实验的关键配置。Operator 会根据 Installation 创建实际的 default-ipv4-ippool。</p><p>natOutgoing 用于 Pod 访问 IPPool 外部地址时做源 NAT，不是 Pod 跨节点 VXLAN 成立的条件。disableBGPExport 表示不要把该池路由导出给 BGP，它也不等于“关闭所有 Calico 路由编程”。</p></aside>
+      </section>
+
+      <section class="slide" data-section="IPPool" data-title="运行中的 IPPool 字段">
+        <div class="slide-header"><div><p class="eyebrow">kubectl get ippools</p><h2>运行中的 IPPool 字段</h2><div class="rule"></div></div></div>
+        <pre class="terminal wide-terminal"><code>$ kubectl get ippools default-ipv4-ippool -o yaml
+
+spec:
+  allowedUses: [Workload, Tunnel]
+  assignmentMode: Automatic
+  blockSize: 26
+  cidr: 192.168.0.0/16
+  disableBGPExport: true
+  ipipMode: Never
+  natOutgoing: true
+  nodeSelector: all()
+  vxlanMode: CrossSubnet</code></pre>
+        <div class="feature-row four"><div><strong>Workload</strong><span>为 Pod 分配地址</span></div><div><strong>Tunnel</strong><span>允许隧道地址用途</span></div><div><strong>IPIP Never</strong><span>不创建 IP-in-IP 路径</span></div><div><strong>VXLAN CrossSubnet</strong><span>按子网决定封装</span></div></div>
+        <div class="slide-number">14</div>
+        <aside class="speaker-copy"><p>运行中的 projectcalico IPPool 会展开 operator 配置。这里可以直接看到 ipipMode Never 和 vxlanMode CrossSubnet。</p><p>allowedUses 中包含 Workload 与 Tunnel。assignmentMode Automatic 表示符合 nodeSelector 的节点可以自动从这个池分配 Pod 地址。</p></aside>
+      </section>
+
+      <section class="slide" data-section="IPAM" data-title="IPPool 与 Block Affinity 的关系">
+        <div class="slide-header"><div><p class="eyebrow">Pool is global, blocks are per node</p><h2>IPPool 与 Block Affinity 的关系</h2><div class="rule"></div></div></div>
+        <div class="block-map"><div class="pool"><strong>IPPool 192.168.0.0/16</strong><span>可分配地址总范围</span></div><div class="block-grid"><div><strong>192.168.23.64/26</strong><span>control-plane</span></div><div><strong>192.168.81.64/26</strong><span>worker</span></div><div><strong>192.168.164.128/26</strong><span>worker2</span></div><div><strong>192.168.209.64/26</strong><span>worker3</span></div></div></div>
+        <div class="flat-block yellow" style="margin-top:26px;"><p class="body">Block Affinity 表示某个 IPAM block 归哪个节点管理。它不是 Kubernetes Node.spec.podCIDR 的同义词。</p></div>
+        <div class="slide-number">15</div>
+        <aside class="speaker-copy"><p>IPPool 是全局范围，block affinity 是实际分配给节点的 /26 块。路由表按 /26 展示，正好可以和 block affinity 对齐。</p><p>课程通过 grep /26 简化观察。现场地址可能完全不同，所以先获取 block affinity，再去节点路由表寻找对应前缀。</p></aside>
+      </section>
+
+      <section class="slide" data-section="IPAM" data-title="四个节点各自获得一个 /26 block">
+        <div class="slide-header"><div><p class="eyebrow">blockaffinities</p><h2>四个节点各自获得一个 /26 block</h2><div class="rule"></div></div></div>
+        <pre class="terminal compact"><code>kubectl get blockaffinities -o=jsonpath='{range .items[*]}{.metadata.name}{"\t"}{.spec.node}{"\t"}{.spec.cidr}{"\n"}{end}'</code></pre>
+        <table class="course-table block-table"><thead><tr><th>节点</th><th>课程示例 Pod block</th><th>underlay 子网</th></tr></thead><tbody><tr><td>k01-control-plane</td><td>192.168.23.64/26</td><td>10.10.10.0/24</td></tr><tr><td>k01-worker</td><td>192.168.81.64/26</td><td>10.10.10.0/24</td></tr><tr><td>k01-worker2</td><td>192.168.164.128/26</td><td>10.10.10.0/24</td></tr><tr><td>k01-worker3</td><td>192.168.209.64/26</td><td>10.10.20.0/24</td></tr></tbody></table>
+        <div class="slide-number">16</div>
+        <aside class="speaker-copy"><p>这四行是后续所有路由验证的索引。worker 的本地 block 是 192.168.81.64/26，worker2 是 192.168.164.128/26，worker3 是 192.168.209.64/26。</p><p>示例值会随部署变化。讲解时最好先把你现场输出贴出来，再进入节点验证，这样观众不会把课程 IP 当成固定配置。</p></aside>
+      </section>
+
+      <section class="slide" data-section="封装选择" data-title="Calico 数据面选项的职责不同">
+        <div class="slide-header"><div><p class="eyebrow">Encapsulation and encryption</p><h2>Calico 数据面选项的职责不同</h2><div class="rule"></div></div></div>
+        <table class="course-table mode-table"><thead><tr><th>选项</th><th>主要作用</th><th>underlay 要求</th><th>典型开销</th></tr></thead><tbody><tr><td>None</td><td>保留原始 Pod IP 路由</td><td>underlay 必须学习 Pod 路由</td><td>最低</td></tr><tr><td>IP-in-IP</td><td>IPv4 包套在 IPv4 包中</td><td>允许 IP 协议 4</td><td>约 20B</td></tr><tr><td>VXLAN</td><td>二层帧套入 UDP 隧道</td><td>节点间允许 UDP 4789</td><td>IPv4 常见约 50B</td></tr><tr><td>WireGuard</td><td>加密节点间工作负载流量</td><td>允许 UDP 51820/51821</td><td>取决于协议族</td></tr></tbody></table>
+        <div class="flat-block red" style="margin-top:24px;"><p class="body"><strong>术语修正：</strong>WireGuard 主要提供加密，可以与路由或封装方案组合使用，不应简单归类为 VXLAN/IP-in-IP 同类的封装模式。</p></div>
+        <div class="slide-number">17</div>
+        <aside class="speaker-copy"><p>课程列出了 IP-in-IP、VXLAN、None 和 WireGuard。为了术语准确，这里把它们称为数据面选项，而不是都叫封装类型。</p><p>VXLAN 和 IP-in-IP解决 underlay 不认识 Pod 路由的问题。WireGuard主要解决传输加密，它可以叠加在 Calico 的节点间通信之上。</p></aside>
+      </section>
+
+      <section class="slide" data-section="路由选择" data-title="同子网与跨子网的路由对比">
+        <div class="slide-header"><div><p class="eyebrow">Route table tells the story</p><h2>同子网与跨子网的路由对比</h2><div class="rule"></div></div><button class="action-btn" id="replay-routes" type="button">↻ 重放对比</button></div>
+        <div class="route-choice" id="route-choice-animation"><div class="route-source"><strong>worker</strong><span>10.10.10.11</span></div><div class="route-lanes"><div class="route-lane direct"><span class="route-wire"><b>DIRECT</b></span><div><strong>worker2 block</strong><small>via 10.10.10.12 dev eth1</small></div></div><div class="route-lane tunnel"><span class="route-wire"><b>VXLAN</b></span><div><strong>worker3 block</strong><small>via VTEP dev vxlan.calico</small></div></div></div></div>
+        <div class="flat-block yellow" style="margin-top:26px;"><p class="body">两条路由都由 Calico 维护。区别在于下一跳是 underlay Node IP，还是 vxlan.calico 上的远端 VTEP。</p></div>
+        <div class="slide-number">18</div>
+        <aside class="speaker-copy"><p>这一页把课程最重要的两条路由放在一起。worker 到 worker2 的 Pod block 走 10.10.10.12 和 eth1；worker 到 worker3 的 Pod block 走远端 VTEP 和 vxlan.calico。</p><p>不要把“同子网不封装”理解成 Calico 不参与。路由仍由 Calico/Felix 编程，只是数据包不需要额外的 VXLAN 外层。</p></aside>
+      </section>
+
+      <section class="slide" data-section="同子网" data-title="worker 路由表同时出现直连与 VXLAN">
+        <div class="slide-header"><div><p class="eyebrow">docker exec k01-worker</p><h2>worker 路由表同时出现直连与 VXLAN</h2><div class="rule"></div></div></div>
+        <pre class="terminal wide-terminal"><code># ip route | grep /26
+
+192.168.23.64/26 via 10.10.10.10 dev eth1 proto 80 onlink
+blackhole 192.168.81.64/26 proto 80
+192.168.164.128/26 via 10.10.10.12 dev eth1 proto 80 onlink
+192.168.209.64/26 via 192.168.209.64 dev vxlan.calico onlink</code></pre>
+        <div class="feature-row four"><div><strong>control-plane</strong><span>eth1 直连</span></div><div><strong>本地 block</strong><span>blackhole 聚合保护</span></div><div><strong>worker2</strong><span>eth1 直连</span></div><div><strong>worker3</strong><span>vxlan.calico</span></div></div>
+        <div class="slide-number">19</div>
+        <aside class="speaker-copy"><p>worker 的路由表一页就能证明 CrossSubnet。control-plane 和 worker2 的 block 都通过 eth1，worker3 的 block 才进入 vxlan.calico。</p><p>blackhole 指向本节点分配的聚合 block。如果某个目标地址落在本地 block 但没有更具体的 workload 路由，blackhole 会阻止它被错误转发或形成环路。</p></aside>
+      </section>
+
+      <section class="slide" data-section="同子网" data-title="同子网 Pod 流量保持原始地址">
+        <div class="slide-header"><div><p class="eyebrow">worker to worker2</p><h2>同子网 Pod 流量保持原始地址</h2><div class="rule"></div></div><button class="action-btn" id="replay-direct" type="button">↻ 重放直连</button></div>
+        <div class="direct-path" id="direct-path-animation"><div><strong>Pod A</strong><span>192.168.81.x</span></div><span class="direct-link"><b>inner</b></span><div><strong>worker</strong><span>10.10.10.11</span></div><span class="direct-link"><b>Pod IP</b></span><div><strong>VLAN 10</strong><span>same L2 subnet</span></div><span class="direct-link"><b>inner</b></span><div><strong>worker2</strong><span>10.10.10.12</span></div><span class="direct-link"><b>deliver</b></span><div><strong>Pod B</strong><span>192.168.164.x</span></div></div>
+        <div class="grid-2" style="margin-top:28px; gap:24px;"><div class="flat-block green"><h3>没有 UDP 4789</h3><p class="body">抓 eth1 时看到原始 Pod 源/目的 IP。</p></div><div class="flat-block cyan"><h3>underlay 直达节点</h3><p class="body">目标 block 路由的下一跳是 10.10.10.12。</p></div></div>
+        <div class="slide-number">20</div>
+        <aside class="speaker-copy"><p>同一子网内，worker 根据路由把原始 Pod 包直接交给 10.10.10.12。外层没有 VXLAN，所以抓包能直接看到 192.168.81.x 到 192.168.164.x。</p><p>交换机在 VLAN 10 内完成二层转发。到达 worker2 后，主机上的更具体 cali 接口路由把包交给目标 Pod。</p></aside>
+      </section>
+
+      <section class="slide image-slide" data-section="同子网" data-title="课程原图中的 worker 到 worker2 路径">
+        <div class="slide-header"><div><p class="eyebrow">Same subnet reference</p><h2>课程原图中的 worker 到 worker2 路径</h2><div class="rule"></div></div></div>
+        <img class="course-image route-image" src="assets/overlay-w1-w2.png" alt="worker 与 worker2 同子网直连路由图">
+        <p class="image-caption">目标 Pod block 经 10.10.10.12 和 eth1 转发，不经过 vxlan.calico。</p>
+        <div class="slide-number">21</div>
+        <aside class="speaker-copy"><p>这张课程图专门展示 worker 和 worker2。讲解时从源 Pod 出发，先到源节点，再看节点路由选择 eth1，最后到目标节点和目标 Pod。</p><p>如果现场抓包出现 UDP 4789，就说明节点子网判断、Node IP 自动检测或者 IPPool 模式需要重新核对。</p><p class="note-source">课程仓库图片：<a href="https://raw.githubusercontent.com/aadhilam/k8-networking-calico-containerlab/master/images/overlay-w1-w2.png">overlay-w1-w2.png</a></p></aside>
+      </section>
+
+      <section class="slide" data-section="同子网" data-title="worker2 路由表提供反向证据">
+        <div class="slide-header"><div><p class="eyebrow">docker exec k01-worker2</p><h2>worker2 路由表提供反向证据</h2><div class="rule"></div></div></div>
+        <pre class="terminal wide-terminal"><code># ip route | grep /26
+
+192.168.23.64/26 via 10.10.10.10 dev eth1 proto 80 onlink
+192.168.81.64/26 via 10.10.10.11 dev eth1 proto 80 onlink
+blackhole 192.168.164.128/26 proto 80
+192.168.209.64/26 via 192.168.209.64 dev vxlan.calico onlink</code></pre>
+        <div class="flat-block green" style="margin-top:28px;"><p class="body">正向和反向路径都应成立。worker2 返回 worker 时同样选择 10.10.10.11 dev eth1。</p></div>
+        <div class="slide-number">22</div>
+        <aside class="speaker-copy"><p>只看源节点还不够，返回路径也需要正确。worker2 到 worker block 的路由是 10.10.10.11 dev eth1，证明同子网通信双向都不需要 VXLAN。</p><p>网络策略、rp_filter 或主机防火墙仍可能影响实际流量，所以“路由正确”表示路由阶段通过，不代表所有后续阶段自动成功。</p></aside>
+      </section>
+
+      <section class="slide" data-section="跨子网" data-title="vxlan.calico 是节点上的 VTEP 接口">
+        <div class="slide-header"><div><p class="eyebrow">Virtual Tunnel Endpoint</p><h2>vxlan.calico 是节点上的 VTEP 接口</h2><div class="rule"></div></div></div>
+        <div class="grid-2"><pre class="terminal tall"><code># ip addr show vxlan.calico
+
+vxlan.calico:
+  mtu 1450
+  state UNKNOWN
+  link/ether 66:fb:ad:98:aa:13
+  inet 192.168.81.64/32</code></pre><div class="stack-list"><div class="flat-block orange"><h3>VTEP 地址</h3><p class="body">课程示例使用本节点 IPAM block 的首地址 /32。</p></div><div class="flat-block cyan"><h3>接口 MAC</h3><p class="body">neighbor 表把远端 VTEP IP 映射到远端 VXLAN MAC。</p></div><div class="flat-block green"><h3>MTU 1450</h3><p class="body">为 IPv4 VXLAN 外层预留约 50 字节。</p></div></div></div>
+        <div class="slide-number">23</div>
+        <aside class="speaker-copy"><p>vxlan.calico 是 Linux 内核的 VXLAN 设备，也是 VTEP。它的 /32 地址通常与本节点 block 的网关地址对应。</p><p>state UNKNOWN 对这类虚拟接口很常见，不能单凭 UNKNOWN 判断故障。更重要的是接口要 UP、LOWER_UP，并且路由、neighbor 和 FDB 条目完整。</p></aside>
+      </section>
+
+      <section class="slide" data-section="跨子网" data-title="跨子网 Pod block 指向远端 VTEP">
+        <div class="slide-header"><div><p class="eyebrow">worker to worker3 block</p><h2>跨子网 Pod block 指向远端 VTEP</h2><div class="rule"></div></div></div>
+        <pre class="terminal wide-terminal"><code># ip route | grep 192.168.209.64
+
+192.168.209.64 dev vxlan.calico scope link
+192.168.209.64/26 via 192.168.209.64 dev vxlan.calico onlink</code></pre>
+        <div class="route-steps"><div><span>1</span><strong>Pod 目标落入 /26</strong><small>匹配 192.168.209.64/26</small></div><div><span>2</span><strong>下一跳是 VTEP</strong><small>192.168.209.64</small></div><div><span>3</span><strong>设备选择 VXLAN</strong><small>dev vxlan.calico</small></div></div>
+        <div class="slide-number">24</div>
+        <aside class="speaker-copy"><p>第一条 host route 把 192.168.209.64 这个 VTEP 标记为 vxlan.calico 上直接可达。第二条 /26 路由把整个 worker3 Pod block 指向该 VTEP。</p><p>这里的“直接可达”是隧道设备语义，并不是说 192.168.209.64 出现在 underlay 二层网络。内核还要通过 neighbor 和 FDB 查到远端 VTEP 的 MAC 与 10.10.20.20。</p></aside>
+      </section>
+
+      <section class="slide" data-section="跨子网" data-title="worker3 到其他节点都经过 VXLAN">
+        <div class="slide-header"><div><p class="eyebrow">Node in VLAN 20</p><h2>worker3 到其他节点都经过 VXLAN</h2><div class="rule"></div></div></div>
+        <pre class="terminal wide-terminal"><code># ip route | grep /26
+
+192.168.23.64/26 via 192.168.23.64 dev vxlan.calico onlink
+192.168.81.64/26 via 192.168.81.64 dev vxlan.calico onlink
+192.168.164.128/26 via 192.168.164.128 dev vxlan.calico onlink
+blackhole 192.168.209.64/26 proto 80</code></pre>
+        <div class="flat-block orange" style="margin-top:28px;"><p class="body">worker3 独自在 10.10.20.0/24，因此到 VLAN 10 上三个节点的 Pod block 都需要跨子网封装。</p></div>
+        <div class="slide-number">25</div>
+        <aside class="speaker-copy"><p>worker3 是最容易观察 CrossSubnet 的节点，因为它独自在 VLAN 20。到 control-plane、worker、worker2 的三个远端 block 全部走 vxlan.calico。</p><p>本地 192.168.209.64/26 仍然是 blackhole 聚合路由，具体 Pod 由更长前缀的 cali 接口路由覆盖。</p></aside>
+      </section>
+
+      <section class="slide" data-section="跨子网" data-title="跨子网 Pod 包的完整路径">
+        <div class="slide-header"><div><p class="eyebrow">Encapsulate, route, decapsulate</p><h2>跨子网 Pod 包的完整路径</h2><div class="rule"></div></div><button class="action-btn" id="replay-vxlan" type="button">↻ 重放 VXLAN</button></div>
+        <div class="vxlan-path" id="vxlan-path-animation">
+          <div><strong>Pod A</strong><span>192.168.81.x</span></div><span class="vx-link inner"><b>inner</b></span>
+          <div><strong>worker VTEP</strong><span>10.10.10.11</span></div><span class="vx-link outer"><b>UDP 4789</b></span>
+          <div><strong>cEOS underlay</strong><span>route outer IP</span></div><span class="vx-link outer"><b>UDP 4789</b></span>
+          <div><strong>worker3 VTEP</strong><span>10.10.20.20</span></div><span class="vx-link inner"><b>inner</b></span>
+          <div><strong>Pod B</strong><span>192.168.209.x</span></div>
+        </div>
+        <div class="flat-block green" style="margin-top:28px;"><p class="body">外层目的地址是 worker3 的 Node IP，内层目的地址始终是 Pod B。解封装不会改变原始 Pod 五元组。</p></div>
+        <div class="slide-number">26</div>
+        <aside class="speaker-copy"><p>源 Pod 包到 worker 后进入 vxlan.calico。内核根据 neighbor 和 FDB 找到远端 VTEP，添加外层 Ethernet、IP、UDP 与 VXLAN 头。</p><p>cEOS 只按 10.10.20.20 转发外层包。worker3 收到 UDP 4789 后解封装，恢复原始 Pod 包，再根据本地 cali 路由交给目标 Pod。</p></aside>
+      </section>
+
+      <section class="slide image-slide" data-section="跨子网" data-title="课程原图中的 worker 到 worker3 路径">
+        <div class="slide-header"><div><p class="eyebrow">Cross-subnet reference</p><h2>课程原图中的 worker 到 worker3 路径</h2><div class="rule"></div></div></div>
+        <img class="course-image route-image" src="assets/overlay-w1-w3.png" alt="worker 与 worker3 跨子网 VXLAN 路由图">
+        <p class="image-caption">源节点封装，cEOS 只转发外层 Node IP，目标节点解封装并交付 Pod。</p>
+        <div class="slide-number">27</div>
+        <aside class="speaker-copy"><p>这张课程图把跨子网的关键对象都画出来了：源 block、目标 block、两个 VTEP 和 underlay Node IP。</p><p>讲解时建议分两遍。第一遍只看内层 Pod IP，第二遍只看外层 10.10.10.11 到 10.10.20.20，观众会更容易理解封装没有替换原始地址。</p><p class="note-source">课程仓库图片：<a href="https://raw.githubusercontent.com/aadhilam/k8-networking-calico-containerlab/master/images/overlay-w1-w3.png">overlay-w1-w3.png</a></p></aside>
+      </section>
+
+      <section class="slide" data-section="封装细节" data-title="VXLAN 在原始二层帧外增加约 50 字节">
+        <div class="slide-header"><div><p class="eyebrow">Packet anatomy</p><h2>VXLAN 在原始二层帧外增加约 50 字节</h2><div class="rule"></div></div><button class="action-btn" id="replay-header" type="button">↻ 重放封装</button></div>
+        <div class="header-stack" id="header-stack-animation"><div class="inner-frame"><strong>Inner Ethernet</strong><span>Pod IP packet</span></div><div class="vx-header">VXLAN · VNI</div><div class="udp-header">UDP · dst 4789</div><div class="ip-header">Outer IP · Node to Node</div><div class="eth-header">Outer Ethernet</div></div>
+        <div class="grid-2" style="margin-top:30px; gap:24px;"><div class="flat-block yellow"><h3>Underlay MTU 1500</h3><p class="body">IPv4 VXLAN 常见 workload MTU 为 1450。</p></div><div class="flat-block red"><h3>MTU 错误的表现</h3><p class="body">小包正常，大包丢失、重传或依赖分片。</p></div></div>
+        <div class="slide-number">28</div>
+        <aside class="speaker-copy"><p>VXLAN 把原始二层帧包在 VXLAN、UDP、外层 IP 和外层 Ethernet 后面。IPv4 常见增加约 50 字节，因此课程里的 vxlan.calico MTU 是 1450。</p><p>这是常见值，不是所有环境的固定答案。Calico 会根据启用的封装和节点 MTU 自动检测，云平台或嵌套隧道可能需要更小值。</p><p class="note-source">Calico 官方：<a href="https://docs.tigera.io/calico/latest/networking/configuring/mtu">Configure MTU</a></p></aside>
+      </section>
+
+      <section class="slide" data-section="转发表" data-title="VXLAN 转发需要路由、Neighbor 与 FDB">
+        <div class="slide-header"><div><p class="eyebrow">Linux forwarding chain</p><h2>VXLAN 转发需要路由、Neighbor 与 FDB</h2><div class="rule"></div></div></div>
+        <div class="lookup-chain"><div><span>01</span><strong>Route</strong><code>Pod CIDR → remote VTEP</code></div><i></i><div><span>02</span><strong>Neighbor</strong><code>VTEP IP → VXLAN MAC</code></div><i></i><div><span>03</span><strong>Bridge FDB</strong><code>VXLAN MAC → Node IP</code></div><i></i><div><span>04</span><strong>Underlay route</strong><code>Node IP → gateway / eth1</code></div></div>
+        <div class="flat-block cyan" style="margin-top:30px;"><p class="body">Calico/Felix 预编程这些静态条目，内核无需广播 ARP 或通过动态 MAC 学习寻找远端 VTEP。</p></div>
+        <div class="slide-number">29</div>
+        <aside class="speaker-copy"><p>课程把 VXLAN 转发拆成四次查找。先由路由表决定远端 VTEP，再由 neighbor 把 VTEP IP 映射到隧道 MAC，FDB 把该 MAC 映射到远端 Node IP，最后 underlay 路由外层 Node IP。</p><p>neighbor 和 FDB 中的 PERMANENT 表示由控制面安装，而不是靠数据面广播学习。任意一个映射缺失，都可能导致跨子网失败。</p></aside>
+      </section>
+
+      <section class="slide" data-section="转发表" data-title="Neighbor 表绑定远端 VTEP IP 与 MAC">
+        <div class="slide-header"><div><p class="eyebrow">ip neighbor show</p><h2>Neighbor 表绑定远端 VTEP IP 与 MAC</h2><div class="rule"></div></div></div>
+        <pre class="terminal wide-terminal"><code># ip neighbor show | grep vxlan
+
+192.168.81.64 dev vxlan.calico lladdr 66:fb:ad:98:aa:13 PERMANENT
+192.168.164.128 dev vxlan.calico lladdr 66:c7:4d:6e:6b:f3 PERMANENT
+192.168.23.64 dev vxlan.calico lladdr 66:15:9d:fa:c6:aa PERMANENT</code></pre>
+        <div class="neighbor-meaning"><div><strong>192.168.81.64</strong><span>远端 VTEP 逻辑 IP</span></div><span>maps to</span><div><strong>66:fb:ad:98:aa:13</strong><span>远端 VXLAN 设备 MAC</span></div><span>state</span><div><strong>PERMANENT</strong><span>控制面静态编程</span></div></div>
+        <div class="slide-number">30</div>
+        <aside class="speaker-copy"><p>这张表回答的是：如果下一跳是 192.168.81.64，在 vxlan.calico 上应该构造哪个目标 MAC。</p><p>它还没有告诉内核外层 IP 应该发给哪个节点。那一步要继续查 bridge FDB，把这个 VXLAN MAC 解析成远端 underlay IP。</p></aside>
+      </section>
+
+      <section class="slide" data-section="转发表" data-title="Bridge FDB 把 VXLAN MAC 指向远端 Node IP">
+        <div class="slide-header"><div><p class="eyebrow">bridge fdb show</p><h2>Bridge FDB 把 VXLAN MAC 指向远端 Node IP</h2><div class="rule"></div></div></div>
+        <pre class="terminal wide-terminal"><code># bridge fdb show | grep 66:fb:ad:98:aa:13
+
+66:fb:ad:98:aa:13 dev vxlan.calico dst 10.10.10.11 self permanent</code></pre>
+        <div class="fdb-map"><div><strong>Inner destination MAC</strong><span>66:fb:ad:98:aa:13</span></div><span class="fdb-arrow"></span><div><strong>Remote VTEP underlay IP</strong><span>10.10.10.11</span></div><span class="fdb-arrow"></span><div><strong>Outer UDP packet</strong><span>dst port 4789</span></div></div>
+        <div class="flat-block yellow" style="margin-top:30px;"><p class="body">Neighbor 与 FDB 配合完成两次映射：VTEP IP → VTEP MAC → Node underlay IP。</p></div>
+        <div class="slide-number">31</div>
+        <aside class="speaker-copy"><p>FDB 的 dst 字段是远端节点 underlay IP。内核会把 VXLAN UDP 包发往 10.10.10.11，而不是把 192.168.81.64 直接交给物理网络。</p><p>排错时要用同一个 MAC 串起 neighbor 和 FDB。只看任意一张表，很容易漏掉中间映射不一致的问题。</p></aside>
+      </section>
+
+      <section class="slide" data-section="验证" data-title="抓包同时观察内层与外层">
+        <div class="slide-header"><div><p class="eyebrow">Evidence on both interfaces</p><h2>抓包同时观察内层与外层</h2><div class="rule"></div></div></div>
+        <div class="capture-split"><article><h3>vxlan.calico</h3><pre class="terminal"><code>tcpdump -ni vxlan.calico
+
+inner src: 192.168.81.x
+inner dst: 192.168.209.x</code></pre><p>验证原始 Pod 包进入隧道设备。</p></article><article><h3>eth1</h3><pre class="terminal"><code>tcpdump -ni eth1 udp port 4789
+
+outer src: 10.10.10.11
+outer dst: 10.10.20.20</code></pre><p>验证外层 Node-to-Node VXLAN 包。</p></article></div>
+        <div class="flat-block red" style="margin-top:26px;"><p class="body">同子网测试时，eth1 上应看到原始 Pod IP，而不是 UDP 4789。跨子网测试才应看到 VXLAN。</p></div>
+        <div class="slide-number">32</div>
+        <aside class="speaker-copy"><p>抓包最好同时开两个窗口。vxlan.calico 展示隧道设备处理的内层流量，eth1 展示真正离开节点的外层 UDP 4789。</p><p>如果 vxlan.calico 有包但 eth1 没有，重点看 neighbor、FDB 和主机防火墙。如果 eth1 发出但对端收不到，继续检查 cEOS 路由、VLAN 和 UDP 4789 可达性。</p></aside>
+      </section>
+
+      <section class="slide" data-section="排障" data-title="按转发阶段定位 Overlay 故障">
+        <div class="slide-header"><div><p class="eyebrow">Find the first missing fact</p><h2>按转发阶段定位 Overlay 故障</h2><div class="rule"></div></div></div>
+        <table class="trouble-table overlay-trouble"><thead><tr><th>现象</th><th>优先检查</th><th>命令</th><th>常见原因</th></tr></thead><tbody>
+          <tr><td>节点 NotReady</td><td>Calico 状态与 node-ip</td><td><code>kubectl get tigerastatus; kubectl get nodes -o wide</code></td><td>地址自动检测错误、CNI 未就绪</td></tr>
+          <tr><td>同子网 Pod 不通</td><td>远端 block 的 eth1 路由</td><td><code>ip route | grep /26</code></td><td>Node IP、VLAN、主机防火墙</td></tr>
+          <tr><td>仅跨子网不通</td><td>VTEP、UDP 4789、cEOS 路由</td><td><code>ip link; tcpdump -ni eth1 udp port 4789</code></td><td>端口被拦、SVI/静态路由错误</td></tr>
+          <tr><td>有 VXLAN 路由但不发包</td><td>neighbor 与 FDB</td><td><code>ip neigh; bridge fdb show</code></td><td>Felix 编程缺失、映射不一致</td></tr>
+          <tr><td>小包通、大包失败</td><td>MTU 与分片</td><td><code>ip link show vxlan.calico; ping -M do -s SIZE</code></td><td>嵌套封装、路径 MTU 偏小</td></tr>
+        </tbody></table>
+        <div class="flat-block yellow" style="margin-top:22px;"><p class="body"><strong>顺序：</strong>先确认 Node underlay，再看路由选择，最后检查隧道映射和包是否真正离开接口。</p></div>
+        <div class="slide-number">33</div>
+        <aside class="speaker-copy"><p>Overlay 排错也沿路径找第一个缺失事实。节点地址不对时，不要直接看 FDB；路由没有选择 vxlan.calico 时，也不应该期待 UDP 4789。</p><p>同子网和跨子网分别测试很重要。只有跨子网失败，范围就可以快速收敛到 VTEP、UDP 4789、三层 underlay 或 MTU。</p></aside>
+      </section>
+
+      <section class="slide" data-section="演示" data-title="十五分钟现场演示顺序">
+        <div class="slide-header"><div><p class="eyebrow">From topology to packet evidence</p><h2>十五分钟现场演示顺序</h2><div class="rule"></div></div></div>
+        <div class="demo-columns"><div class="demo-list"><div><span>01</span><code>containerlab inspect topology.clab.yaml</code><small>确认 Kind 与 cEOS 容器。</small></div><div><span>02</span><code>kubectl get nodes -o wide</code><small>核对 10.10.10.x 与 10.10.20.20。</small></div><div><span>03</span><code>show interface status / show ip route</code><small>验证 VLAN 与 SVI。</small></div><div><span>04</span><code>kubectl get ippools default-ipv4-ippool -o yaml</code><small>确认 CrossSubnet。</small></div><div><span>05</span><code>kubectl get blockaffinities ...</code><small>记录四个 /26。</small></div></div><div class="demo-list"><div><span>06</span><code>docker exec -it k01-worker bash</code><small>查看 /26 路由。</small></div><div><span>07</span><code>ip addr show vxlan.calico</code><small>确认本地 VTEP。</small></div><div><span>08</span><code>ip neigh show dev vxlan.calico</code><small>核对远端 MAC。</small></div><div><span>09</span><code>bridge fdb show dev vxlan.calico</code><small>核对远端 Node IP。</small></div><div><span>10</span><code>tcpdump -ni eth1 udp port 4789</code><small>生成跨子网流量并观察。</small></div></div></div>
+        <div class="flat-block red" style="margin-top:20px;"><p class="body"><strong>清理：</strong>运行 <code>./destroy.sh</code>，确认 topology、Kind cluster、容器、网络与 kubeconfig 的删除范围后输入 yes。</p></div>
+        <div class="slide-number">34</div>
+        <aside class="speaker-copy"><p>现场演示按证据链推进。先证实物理拓扑和 Node IP，再看 IPPool 与 block，最后进入节点观察 route、VTEP、neighbor、FDB 和抓包。</p><p>课程本身没有固定测试 Pod 清单。如果需要产生流量，可以把两个临时 multitool Pod 分别调度到 worker 与 worker3，记录实际 Pod IP 后再 ping。演示结束删除临时 Pod并运行 destroy.sh。</p></aside>
+      </section>
+
+      <section class="slide" data-section="总结" data-title="CrossSubnet Overlay 的完整证据链">
+        <div class="slide-header"><div><p class="eyebrow">Summary and sources</p><h2>CrossSubnet Overlay 的完整证据链</h2><div class="rule"></div></div></div>
+        <div class="summary-row overlay-summary"><article><span>01</span><h3>Underlay</h3><p>VLAN 10 与 VLAN 20 提供 Node IP 可达性。</p></article><article><span>02</span><h3>Calico 路由</h3><p>同子网选择 eth1，跨子网选择远端 VTEP。</p></article><article><span>03</span><h3>VXLAN 映射</h3><p>Route、neighbor 与 FDB 合成 UDP 4789 外层包。</p></article></div>
+        <div class="source-list compact-sources"><article class="source-item"><strong>Lesson 06</strong><a href="https://k8snetworking.com/lessons/06-calico-overlay">k8snetworking.com/lessons/06-calico-overlay</a></article><article class="source-item"><strong>课程仓库</strong><a href="https://github.com/aadhilam/k8-networking-calico-containerlab/tree/master/containerlab/06-calico-overlay">github.com/aadhilam/.../06-calico-overlay</a></article><article class="source-item"><strong>Calico Overlay</strong><a href="https://docs.tigera.io/calico/latest/networking/configuring/vxlan-ipip">docs.tigera.io/.../vxlan-ipip</a></article><article class="source-item"><strong>Calico MTU</strong><a href="https://docs.tigera.io/calico/latest/networking/configuring/mtu">docs.tigera.io/.../configuring/mtu</a></article></div>
+        <div class="slide-number">35</div>
+        <aside class="speaker-copy"><p>最后用三句话收尾。第一，underlay 必须先让 Node IP 可达。第二，CrossSubnet 通过节点子网判断选择直连或 VXLAN。第三，跨子网转发依靠 route、neighbor 和 FDB 共同建立远端 VTEP 映射。</p><p>看到跨子网故障时，从这条证据链逐项验证，比直接重启 calico-node 更快定位真正的断点。</p></aside>
+      </section>
+    </div>
+
+    <div class="progress-track" aria-hidden="true"><div id="progress-fill"></div></div>
+    <nav class="controls" aria-label="演示控制"><button class="tool-btn" id="prev" type="button" title="上一页" aria-label="上一页">‹</button><button class="tool-btn" id="next" type="button" title="下一页" aria-label="下一页">›</button><button class="tool-btn" id="notes-toggle" type="button" title="讲稿" aria-label="显示或隐藏讲稿" aria-pressed="false">N</button><button class="tool-btn" id="overview-toggle" type="button" title="总览" aria-label="显示或隐藏总览" aria-pressed="false">▦</button><button class="tool-btn" id="fullscreen" type="button" title="全屏" aria-label="切换全屏">⛶</button></nav>
+    <button class="notes-backdrop" id="notes-backdrop" type="button" aria-label="关闭讲稿" tabindex="-1"></button>
+    <aside class="notes-panel" id="notes-panel" aria-live="polite" aria-hidden="true"><div class="notes-header"><h2 id="notes-title">讲稿</h2><button class="notes-close" id="notes-close" type="button" title="关闭讲稿" aria-label="关闭讲稿">×</button></div><div id="notes-body"></div></aside>
+    <aside class="overview" id="overview" aria-label="幻灯片总览"></aside>
+  </main>
+  <script src="app.js?v=1"></script>
+</body>
+</html>

@@ -1,0 +1,369 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Calico Multiple IPPools</title>
+  <link rel="stylesheet" href="styles.css?v=1">
+</head>
+<body>
+  <main class="deck-shell">
+    <div id="deck-canvas">
+      <section class="slide cover-slide active" data-section="开场" data-title="Calico Multiple IPPools">
+        <div class="cover-grid">
+          <div class="cover-copy">
+            <p class="eyebrow">Lesson 09 · Calico IPAM · Workload Annotations</p>
+            <h1>Calico Multiple<br><span class="yellow-mark">IPPools</span></h1>
+            <p class="lead">把同一个 Pod CIDR 划分成两个地址池，让普通工作负载走默认池，让指定工作负载按需进入 Secondary 池。</p>
+            <div class="cover-meta"><span>192.168.0.0/17</span><span>192.168.128.0/17</span><span>/26 blocks</span></div>
+          </div>
+          <div class="multi-cover" aria-label="同一节点上的 Pod 从默认池和 Secondary 池获得不同地址">
+            <div class="cover-node-core"><strong>Calico IPAM</strong><span>k01 nodes</span></div>
+            <div class="cover-pool primary"><strong>Default Pool</strong><span>192.168.0.0/17</span></div>
+            <div class="cover-pool secondary"><strong>Secondary Pool</strong><span>192.168.128.0/17</span></div>
+            <span class="cover-pool-link primary"><b class="multi-cover-packet primary">auto</b></span>
+            <span class="cover-pool-link secondary"><b class="multi-cover-packet secondary">annotation</b></span>
+            <div class="cover-workload primary"><strong>multitool-1</strong><span>192.168.42.x</span></div>
+            <div class="cover-workload secondary"><strong>multitool-2</strong><span>192.168.170.x</span></div>
+          </div>
+        </div>
+        <aside class="speaker-copy">
+          <p>大家好，这一节我们学习 Calico Multiple IPPools。实验把 192.168.0.0/16 划成两个 /17，普通 Pod 从 Default 池拿地址，指定的 multitool-2 从 Secondary 池拿地址。</p>
+          <p>重点不是创建两个 YAML 对象，而是观察 Calico IPAM 什么时候给节点创建 block，以及 Pod 模板上的注解如何改变 CNI 的选池结果。</p>
+          <p class="note-source">课程：<a href="https://k8snetworking.com/lessons/09-multi-ippool">Lesson 09 Multiple IPPools</a></p>
+        </aside>
+      </section>
+
+      <section class="slide" data-section="概念" data-title="多个 IPPool 提供可控的地址分组">
+        <div class="slide-header"><div><p class="eyebrow">Address allocation boundaries</p><h2>多个 IPPool 提供可控的地址分组</h2><div class="rule"></div></div></div>
+        <div class="grid-2 multi-value"><div class="flat-block cyan"><h3>默认分配</h3><p class="pool-cidr">192.168.0.0/17</p><p class="body">匹配所有节点，未指定地址池的 Pod 从这里分配。</p></div><div class="flat-block orange"><h3>按需分配</h3><p class="pool-cidr">192.168.128.0/17</p><p class="body">默认不匹配任何节点，只接受显式请求该池的工作负载。</p></div></div>
+        <div class="flat-block yellow" style="margin-top:30px;"><p class="body"><strong>边界：</strong>IPPool 只改变地址分配范围，不会自动建立 NetworkPolicy，也不会阻止两个池之间通信。</p></div>
+        <div class="slide-number">02</div>
+        <aside class="speaker-copy"><p>多个池适合把工作负载地址按用途分组，例如给外部防火墙、旧系统白名单或不同租户提供稳定的地址范围。</p><p>但地址分组不等于安全隔离。只要路由和策略允许，两个池里的 Pod 仍然可以互通。真正的访问控制要另外配置 NetworkPolicy。</p></aside>
+      </section>
+
+      <section class="slide" data-section="实验环境" data-title="Lesson 09 继承 BGP 与 LoadBalancer 拓扑">
+        <div class="slide-header"><div><p class="eyebrow">Same physical lab, different focus</p><h2>Lesson 09 继承 BGP 与 LoadBalancer 拓扑</h2><div class="rule"></div></div></div>
+        <div class="inherited-topology"><div class="arista-block"><strong>Arista cEOS</strong><span>10.10.10.1 · AS 65001</span></div><span class="fabric-line"></span><div class="kind-nodes"><div><strong>control-plane</strong><span>10.10.10.10</span></div><div><strong>worker</strong><span>10.10.10.11</span></div><div><strong>worker2</strong><span>10.10.10.12</span></div></div></div>
+        <div class="grid-2" style="margin-top:30px; gap:24px;"><div class="flat-block green"><h3>本节关注</h3><p class="body">Workload IPPool、Pod 注解和 IPAM block。</p></div><div class="flat-block red"><h3>环境中仍存在</h3><p class="body">BGP peer、LoadBalancer 池与 nginx LoadBalancer Service。</p></div></div>
+        <div class="slide-number">03</div>
+        <aside class="speaker-copy"><p>课程直接复用前一节 BGP 与 LoadBalancer 的实验环境。三个 Kind 节点都在 10.10.10.0/24，并与 cEOS 建立实验链路。</p><p>本节只分析两个 Workload 池。`loadbalancer-ip-pool` 会出现在命令输出里，但它的 allowedUses 是 LoadBalancer，不能和 Pod 地址池混在一起解释。</p></aside>
+      </section>
+
+      <section class="slide" data-section="实验环境" data-title="Lesson 09 仓库文件">
+        <div class="slide-header"><div><p class="eyebrow">containerlab/09-multi-ippool</p><h2>Lesson 09 仓库文件</h2><div class="rule"></div></div></div>
+        <table class="course-table multi-files"><thead><tr><th>目录</th><th>关键文件</th><th>本节用途</th></tr></thead><tbody><tr><td>ContainerLab</td><td><code>topology.clab.yaml</code></td><td>cEOS 与 3 节点 Kind 拓扑</td></tr><tr><td>Kind</td><td><code>k01-no-cni.yaml</code></td><td>关闭默认 CNI，Pod CIDR 192.168.0.0/16</td></tr><tr><td>Calico</td><td><code>custom-resources.yaml</code></td><td>创建 Default 与 Secondary Workload 池</td></tr><tr><td>BGP / LB</td><td><code>bgpconfiguration-*.yaml</code>、<code>bgppeer.yaml</code>、<code>lb-ippool.yaml</code></td><td>继承实验基础设施</td></tr><tr><td>Tools</td><td><code>multitool-1.yaml</code>、<code>multitool-2.yaml</code>、<code>nginx-deployment.yaml</code></td><td>对比变更前后的 Pod IP</td></tr></tbody></table>
+        <div class="slide-number">04</div>
+        <aside class="speaker-copy"><p>这一页把仓库文件按职责分开。真正控制 Workload 选池的是 custom-resources 和 multitool-2 的 Pod 模板。</p><p>BGP、LoadBalancer 和 cEOS 文件需要保留，因为 deploy.sh 会应用它们，但分析 Pod IP 时应该把 LoadBalancer 池排除在外。</p></aside>
+      </section>
+
+      <section class="slide image-slide" data-section="概念" data-title="课程原图中的双地址池分配">
+        <div class="slide-header"><div><p class="eyebrow">Course overview</p><h2>课程原图中的双地址池分配</h2><div class="rule"></div></div></div>
+        <img class="course-image multi-course-image" src="assets/multi-ippool1.png" alt="Calico 多 IPPool 工作负载地址分配图">
+        <p class="image-caption">同一节点可以同时持有不同 IPPool 的 IPAM block，Pod 根据选池结果从对应 block 获取地址。</p>
+        <div class="slide-number">05</div>
+        <aside class="speaker-copy"><p>这张课程原图展示了多个地址池的最终效果。节点不是只能绑定一个池，同一节点可以同时拥有 Default block 和 Secondary block。</p><p>决定 Pod 使用哪个 block 的关键是 CNI 创建 Pod 网络时收到的池列表。没有注解时走自动池，有注解时使用指定池。</p><p class="note-source">课程仓库图片：<a href="https://raw.githubusercontent.com/aadhilam/k8-networking-calico-containerlab/master/images/multi-ippool1.png">multi-ippool1.png</a></p></aside>
+      </section>
+
+      <section class="slide" data-section="实验环境" data-title="三个 Kind 节点使用固定 Node IP">
+        <div class="slide-header"><div><p class="eyebrow">k01-no-cni.yaml</p><h2>三个 Kind 节点使用固定 Node IP</h2><div class="rule"></div></div></div>
+        <div class="node-address-grid"><div><span>control-plane</span><strong>10.10.10.10</strong></div><div><span>worker</span><strong>10.10.10.11</strong></div><div><span>worker2</span><strong>10.10.10.12</strong></div></div>
+        <pre class="terminal compact"><code>networking:
+  disableDefaultCNI: true
+  podSubnet: 192.168.0.0/16
+  serviceSubnet: 10.96.0.0/16</code></pre>
+        <div class="flat-block yellow" style="margin-top:24px;"><p class="body">两个 Workload 池正好把 Kubernetes Pod CIDR 的低半段与高半段各占一个 <code>/17</code>。</p></div>
+        <div class="slide-number">06</div>
+        <aside class="speaker-copy"><p>Kind 的 Pod CIDR 是 192.168.0.0/16。Default 池使用前半段，Secondary 池使用后半段，两者不重叠并且都落在 Kubernetes 认定的 Pod 地址范围内。</p><p>三个节点 Node IP 都在同一个 10.10.10.0/24，因此 VXLANCrossSubnet 的节点间流量通常不需要 VXLAN 封装。</p></aside>
+      </section>
+
+      <section class="slide" data-section="部署" data-title="deploy.sh 同时部署 Calico、BGP、LB 与工具 Pod">
+        <div class="slide-header"><div><p class="eyebrow">Deployment chain</p><h2>deploy.sh 同时部署 Calico、BGP、LB 与工具 Pod</h2><div class="rule"></div></div></div>
+        <div class="multi-deploy"><article><span>01</span><h3>ContainerLab</h3><code>cEOS + Kind</code></article><i></i><article><span>02</span><h3>Calico 3.30.0</h3><code>operator + dual pools</code></article><i></i><article><span>03</span><h3>BGP / LB</h3><code>peer + LB IPPool</code></article><i></i><article><span>04</span><h3>Tools</h3><code>two DaemonSets + nginx</code></article></div>
+        <div class="flat-block red" style="margin-top:30px;"><p class="body">课程脚本输出中的拓扑名仍是 <code>calico-bgp-lb</code>，这是继承前一实验的命名，不影响 Multi-IPPool 行为。</p></div>
+        <div class="slide-number">07</div>
+        <aside class="speaker-copy"><p>部署脚本会依次创建物理拓扑、安装 Calico、应用 BGP 与 LoadBalancer 配置，然后部署两个 multitool DaemonSet 和 nginx。</p><p>实验目录叫 09-multi-ippool，但 topology 的 name 是 calico-bgp-lb，所以 ContainerLab 生成的 cEOS 容器名也沿用 clab-calico-bgp-lb-ceos01。</p></aside>
+      </section>
+
+      <section class="slide" data-section="部署" data-title="ContainerLab 与 Kubernetes 就绪检查">
+        <div class="slide-header"><div><p class="eyebrow">First verification</p><h2>ContainerLab 与 Kubernetes 就绪检查</h2><div class="rule"></div></div></div>
+        <div class="grid-2"><pre class="terminal tall"><code>$ containerlab inspect topology.clab.yaml
+
+k01-control-plane       running
+k01-worker              running
+k01-worker2             running
+clab-calico-bgp-ceos01  running</code></pre><pre class="terminal tall"><code>$ export KUBECONFIG=$(pwd)/k01.kubeconfig
+$ kubectl get nodes
+
+k01-control-plane  Ready  v1.32.2
+k01-worker         Ready  v1.32.2
+k01-worker2        Ready  v1.32.2</code></pre></div>
+        <div class="flat-block green" style="margin-top:24px;"><p class="body">先确认节点 Ready，再分析 IPPool。CNI 未就绪时，Pod 不会进入正常的 IPAM 分配阶段。</p></div>
+        <div class="slide-number">08</div>
+        <aside class="speaker-copy"><p>ContainerLab 输出会同时出现 ext-container 与 k8s-kind 视图，同名条目不代表重复节点。</p><p>课程页面使用绝对 kubeconfig 路径，演示稿改成当前目录写法，避免不同用户路径不一致。两种方式都可以，关键是 kubectl 指向 k01。</p></aside>
+      </section>
+
+      <section class="slide" data-section="IPPool" data-title="Pod CIDR 被平均拆成两个 /17">
+        <div class="slide-header"><div><p class="eyebrow">CIDR partition</p><h2>Pod CIDR 被平均拆成两个 /17</h2><div class="rule"></div></div></div>
+        <div class="cidr-split"><div class="whole"><strong>192.168.0.0/16</strong><span>Kubernetes Pod CIDR</span></div><div class="halves"><div><strong>192.168.0.0/17</strong><span>192.168.0.0 - 192.168.127.255</span></div><div><strong>192.168.128.0/17</strong><span>192.168.128.0 - 192.168.255.255</span></div></div></div>
+        <div class="flat-block yellow" style="margin-top:28px;"><p class="body">每个 <code>/17</code> 包含 32,768 个地址，Calico 再以 <code>/26</code> 为单位按需分配到节点。</p></div>
+        <div class="slide-number">09</div>
+        <aside class="speaker-copy"><p>/16 增加一位前缀就得到两个 /17。低半段从 192.168.0.0 开始，高半段从 192.168.128.0 开始。</p><p>IPPool 是可用地址范围，Block Affinity 才是节点当前持有的分配单元。创建池不会马上给每个节点铺满所有 block。</p></aside>
+      </section>
+
+      <section class="slide" data-section="IPPool" data-title="Installation 资源声明两个 Workload IPPool">
+        <div class="slide-header"><div><p class="eyebrow">custom-resources.yaml</p><h2>Installation 资源声明两个 Workload IPPool</h2><div class="rule"></div></div></div>
+        <div class="grid-2"><pre class="terminal tall"><code>- name: default-ipv4-ippool
+  blockSize: 26
+  cidr: 192.168.0.0/17
+  encapsulation: VXLANCrossSubnet
+  natOutgoing: Enabled
+  nodeSelector: all()
+  disableBGPExport: true</code></pre><pre class="terminal tall"><code>- name: secondary-ipv4-ippool
+  blockSize: 26
+  cidr: 192.168.128.0/17
+  encapsulation: VXLANCrossSubnet
+  natOutgoing: Enabled
+  nodeSelector: "!all()"
+  disableBGPExport: true</code></pre></div>
+        <div class="flat-block cyan" style="margin-top:24px;"><p class="body">两池的封装、NAT 与 blockSize 相同，决定自动分配行为的差异只有 `nodeSelector`。</p></div>
+        <div class="slide-number">10</div>
+        <aside class="speaker-copy"><p>两个池的网络行为完全相同，都使用 VXLANCrossSubnet、natOutgoing 和 /26 block。不同点是 Default 匹配所有节点，Secondary 默认不匹配任何节点。</p><p>disableBGPExport 为 true 表示不要把这两个 Workload 池的 CIDR 对外导出。实验里的 BGP 与 LoadBalancer 广告是另外的配置面。</p></aside>
+      </section>
+
+      <section class="slide" data-section="IPPool" data-title="Default 与 Secondary 的自动分配行为">
+        <div class="slide-header"><div><p class="eyebrow">Same pool features, different selector</p><h2>Default 与 Secondary 的自动分配行为</h2><div class="rule"></div></div></div>
+        <table class="course-table pool-compare"><thead><tr><th>字段</th><th>Default</th><th>Secondary</th><th>影响</th></tr></thead><tbody><tr><td>CIDR</td><td>192.168.0.0/17</td><td>192.168.128.0/17</td><td>Pod 地址所属范围</td></tr><tr><td>blockSize</td><td>/26</td><td>/26</td><td>节点按需获得 64 地址 block</td></tr><tr><td>nodeSelector</td><td><code>all()</code></td><td><code>!all()</code></td><td>自动选池是否考虑该池</td></tr><tr><td>Workload annotation</td><td>不需要</td><td>显式请求</td><td>指定 Pod 使用哪个池</td></tr></tbody></table>
+        <div class="slide-number">11</div>
+        <aside class="speaker-copy"><p>把这四个字段放在一起，选池逻辑就清楚了。未指定池时，Calico IPAM 从对当前节点可用的自动池中选择，Default 满足条件。</p><p>Secondary 的 `!all()` 让自动流程忽略它，但 Pod 或 Namespace 的 ipv4pools 注解可以显式指定该池。</p></aside>
+      </section>
+
+      <section class="slide" data-section="IPPool" data-title="!all() 让 Secondary 只接受显式请求">
+        <div class="slide-header"><div><p class="eyebrow">Selector semantics</p><h2>!all() 让 Secondary 只接受显式请求</h2><div class="rule"></div></div></div>
+        <div class="selector-logic"><div class="selector-expression"><strong>all()</strong><span>匹配所有 Node</span></div><div class="selector-negation">!</div><div class="selector-result"><strong>!all()</strong><span>自动流程匹配零个 Node</span></div></div>
+        <div class="grid-2" style="margin-top:32px; gap:24px;"><div class="flat-block red"><h3>没有注解</h3><p class="body">Secondary 不进入候选池，因此不会创建 Secondary block。</p></div><div class="flat-block green"><h3>显式注解</h3><p class="body">工作负载指定池名，注解优先于 IPPool nodeSelector。</p></div></div>
+        <div class="slide-number">12</div>
+        <aside class="speaker-copy"><p>Calico selector 中 all() 匹配所有资源，前面加逻辑非就是匹配零个。YAML 里感叹号有特殊含义，所以课程把表达式放在引号中。</p><p>这里采用的是“默认不参与，显式才使用”的设计。Calico 维护者也说明，Pod/Namespace 注解会优先于 IPPool 的 nodeSelector。</p><p class="note-source">Calico 官方资源定义：<a href="https://docs.tigera.io/calico/latest/reference/resources/ippool">IPPool selector reference</a></p></aside>
+      </section>
+
+      <section class="slide" data-section="选池" data-title="Pod 创建时的 IPPool 选择顺序">
+        <div class="slide-header"><div><p class="eyebrow">CNI selection path</p><h2>Pod 创建时的 IPPool 选择顺序</h2><div class="rule"></div></div><button class="action-btn" id="replay-selection" type="button">↻ 重放选池</button></div>
+        <div class="pool-selection" id="pool-selection-animation"><div><strong>Pod sandbox</strong><span>CNI ADD</span></div><span class="pool-link"><b>metadata</b></span><div><strong>读取注解</strong><span>Pod / Namespace</span></div><span class="pool-link"><b>choose</b></span><div><strong>候选 IPPool</strong><span>explicit 或 automatic</span></div><div class="pool-branches"><div><span class="pool-branch-link"><b>auto</b></span><strong>Default</strong></div><div><span class="pool-branch-link"><b>request</b></span><strong>Secondary</strong></div></div></div>
+        <div class="flat-block yellow" style="margin-top:25px;"><p class="body">CNI 只在 Pod 网络创建时执行选池。运行中的 Pod 不会因为后来增加注解而原地更换 IP。</p></div>
+        <div class="slide-number">13</div>
+        <aside class="speaker-copy"><p>选池发生在 CNI ADD 阶段。Calico 先看 Pod 注解，再看 Namespace 注解；都没有时才按 IPPool 的自动选择规则处理。</p><p>因此课程修改的是 DaemonSet 的 Pod template。模板变化触发滚动重建，新 Pod 才会带着注解重新走 CNI。</p></aside>
+      </section>
+
+      <section class="slide" data-section="验证" data-title="集群中实际存在三个 IPPool">
+        <div class="slide-header"><div><p class="eyebrow">kubectl get ippools</p><h2>集群中实际存在三个 IPPool</h2><div class="rule"></div></div></div>
+        <pre class="terminal wide-terminal"><code>$ kubectl get ippools
+
+NAME                     CREATED AT
+default-ipv4-ippool      2025-10-06T20:11:19Z
+loadbalancer-ip-pool     2025-10-06T20:12:45Z
+secondary-ipv4-ippool    2025-10-06T20:11:19Z</code></pre>
+        <div class="pool-role-row"><div><strong>Default</strong><span>Workload/Tunnel</span></div><div><strong>LoadBalancer</strong><span>Service VIP</span></div><div><strong>Secondary</strong><span>Workload/Tunnel</span></div></div>
+        <div class="slide-number">14</div>
+        <aside class="speaker-copy"><p>课程命令会看到三个池。Default 和 Secondary 是本节的 Workload 池，LoadBalancer 池来自前一实验。</p><p>判断池用途不能只看名字，应该查看 allowedUses。LoadBalancer 池只服务 LoadBalancer 地址管理，不给普通 Pod 分配地址。</p></aside>
+      </section>
+
+      <section class="slide" data-section="验证" data-title="LoadBalancer 池不参与 Pod 地址分配">
+        <div class="slide-header"><div><p class="eyebrow">allowedUses separates responsibilities</p><h2>LoadBalancer 池不参与 Pod 地址分配</h2><div class="rule"></div></div></div>
+        <div class="grid-2"><pre class="terminal tall"><code>kind: IPPool
+metadata:
+  name: loadbalancer-ip-pool
+spec:
+  cidr: 172.16.0.240/28
+  blockSize: 28
+  assignmentMode: Automatic
+  allowedUses:
+  - LoadBalancer</code></pre><div class="stack-list"><div class="flat-block orange"><h3>Service VIP</h3><p class="body">给 LoadBalancer Service 分配外部地址。</p></div><div class="flat-block cyan"><h3>不属于 Pod CIDR</h3><p class="body">地址范围是 172.16.0.240/28。</p></div><div class="flat-block green"><h3>本节可忽略</h3><p class="body">观察 Workload block 时排除 load-balancer 条目。</p></div></div></div>
+        <div class="slide-number">15</div>
+        <aside class="speaker-copy"><p>LoadBalancer 池的 allowedUses 只有 LoadBalancer，和 Default/Secondary 的 Workload/Tunnel 不同。</p><p>课程输出中会出现 `load-balancer-172-16-0-240-28` block affinity。它属于 LB IPAM，不代表 Secondary Workload 池已经开始使用。</p></aside>
+      </section>
+
+      <section class="slide" data-section="变更前" data-title="变更前只有 Default Workload block">
+        <div class="slide-header"><div><p class="eyebrow">Initial block affinities</p><h2>变更前只有 Default Workload block</h2><div class="rule"></div></div></div>
+        <pre class="terminal wide-terminal"><code>$ kubectl get blockaffinities
+
+k01-control-plane-192-168-69-0-26
+k01-worker-192-168-42-192-26
+k01-worker2-192-168-88-192-26
+load-balancer-172-16-0-240-28</code></pre>
+        <div class="affinity-before"><div><strong>control-plane</strong><span>192.168.69.0/26</span></div><div><strong>worker</strong><span>192.168.42.192/26</span></div><div><strong>worker2</strong><span>192.168.88.192/26</span></div></div>
+        <div class="slide-number">16</div>
+        <aside class="speaker-copy"><p>三个 Workload block 都低于 192.168.128.0，所以全部来自 Default 池。Secondary 尚未出现任何 block。</p><p>Calico IPAM 按需创建 block。仅仅在 Installation 中声明 Secondary 并不会立即给所有节点预分配高半段地址。</p></aside>
+      </section>
+
+      <section class="slide" data-section="工作负载" data-title="两个 DaemonSet 提供逐节点对照">
+        <div class="slide-header"><div><p class="eyebrow">tools/multitool-1.yaml and multitool-2.yaml</p><h2>两个 DaemonSet 提供逐节点对照</h2><div class="rule"></div></div></div>
+        <div class="daemonset-compare"><article><h3>multitool-1</h3><p>每个节点一个 Pod</p><code>HTTP 80 / HTTPS 443</code><span>始终保留 Default 池</span></article><article><h3>multitool-2</h3><p>每个节点一个 Pod</p><code>HTTP 8080 / HTTPS 8443</code><span>稍后切换到 Secondary 池</span></article></div>
+        <div class="flat-block yellow" style="margin-top:30px;"><p class="body">两个 DaemonSet 都容忍 control-plane taint，因此三台节点各有一个实例，便于比较每个节点的 block。</p></div>
+        <div class="slide-number">17</div>
+        <aside class="speaker-copy"><p>两个 DaemonSet 的结构基本相同，区别是名称和端口。它们都会覆盖 control-plane、worker 和 worker2。</p><p>这种设计让我们可以同时观察同一节点上的两个地址池：multitool-1 继续使用 Default，multitool-2 重建后使用 Secondary。</p></aside>
+      </section>
+
+      <section class="slide" data-section="变更前" data-title="变更前所有 Pod 都来自 Default 池">
+        <div class="slide-header"><div><p class="eyebrow">kubectl get pods -o wide</p><h2>变更前所有 Pod 都来自 Default 池</h2><div class="rule"></div></div></div>
+        <table class="course-table pod-table"><thead><tr><th>工作负载</th><th>节点</th><th>课程示例 IP</th><th>IPPool</th></tr></thead><tbody><tr><td>multitool-1</td><td>worker</td><td>192.168.42.194</td><td>Default</td></tr><tr><td>multitool-1</td><td>control-plane</td><td>192.168.69.2</td><td>Default</td></tr><tr><td>multitool-1</td><td>worker2</td><td>192.168.88.200</td><td>Default</td></tr><tr><td>multitool-2</td><td>三台节点</td><td>192.168.42/69/88.x</td><td>Default</td></tr><tr><td>nginx</td><td>worker / worker2</td><td>192.168.42/88.x</td><td>Default</td></tr></tbody></table>
+        <div class="flat-block green" style="margin-top:24px;"><p class="body">判断池归属先看 CIDR，不要依赖 Pod 名称。所有地址都小于 192.168.128.0。</p></div>
+        <div class="slide-number">18</div>
+        <aside class="speaker-copy"><p>变更前 multitool-1、multitool-2 和 nginx 都从 Default 池分配。Pod 名称本身不会影响 IPAM。</p><p>现场值会不同，但判断方法不变：192.168.0.0 到 192.168.127.255 属于 Default，高半段才属于 Secondary。</p></aside>
+      </section>
+
+      <section class="slide" data-section="变更前" data-title="Secondary 池保持空闲的原因">
+        <div class="slide-header"><div><p class="eyebrow">Configured does not mean allocated</p><h2>Secondary 池保持空闲的原因</h2><div class="rule"></div></div></div>
+        <div class="idle-pool-flow"><div><strong>Secondary IPPool 存在</strong><span>192.168.128.0/17</span></div><span></span><div><strong>nodeSelector</strong><span>!all()</span></div><span></span><div><strong>没有显式请求</strong><span>候选池中被跳过</span></div><span></span><div class="idle"><strong>0 Workload blocks</strong><span>保持空闲</span></div></div>
+        <div class="flat-block red" style="margin-top:30px;"><p class="body"><code>kubectl get ippools</code> 只能证明池对象存在；<code>kubectl get blockaffinities</code> 才能证明节点是否已经获得该池的 block。</p></div>
+        <div class="slide-number">19</div>
+        <aside class="speaker-copy"><p>这一页区分配置状态和分配状态。IPPool 对象存在，只表示地址范围可用，不表示已经有地址交给节点或 Pod。</p><p>Secondary 的自动 selector 不匹配节点，又没有工作负载显式请求，所以 IPAM 没有理由创建 Secondary block。</p></aside>
+      </section>
+
+      <section class="slide" data-section="注解" data-title="ipv4pools 注解的值是 JSON 数组字符串">
+        <div class="slide-header"><div><p class="eyebrow">Exact annotation encoding</p><h2>ipv4pools 注解的值是 JSON 数组字符串</h2><div class="rule"></div></div></div>
+        <pre class="terminal annotation-code"><code>metadata:
+  annotations:
+    cni.projectcalico.org/ipv4pools: '["secondary-ipv4-ippool"]'</code></pre>
+        <div class="annotation-parts"><div><strong>Annotation key</strong><span>cni.projectcalico.org/ipv4pools</span></div><div><strong>YAML string</strong><span>'[ ... ]'</span></div><div><strong>JSON array</strong><span>["secondary-ipv4-ippool"]</span></div></div>
+        <div class="flat-block yellow" style="margin-top:26px;"><p class="body">池名必须与已经存在的 IPPool 资源匹配。请求不存在的池会让 Pod sandbox 网络创建失败。</p></div>
+        <div class="slide-number">20</div>
+        <aside class="speaker-copy"><p>这个值容易写错。外层是 YAML 字符串，字符串内容是 JSON 数组，即使只指定一个池也要保留方括号。</p><p>官方文档还说明，该功能要求使用 calico-ipam。host-local IPAM 不支持按 Pod 请求池。</p><p class="note-source">Calico 官方：<a href="https://docs.tigera.io/calico/latest/reference/configure-cni-plugins">Configure the Calico CNI plugins</a></p></aside>
+      </section>
+
+      <section class="slide" data-section="注解" data-title="课程通过 patch 修改 DaemonSet Pod 模板">
+        <div class="slide-header"><div><p class="eyebrow">Patch multitool-2</p><h2>课程通过 patch 修改 DaemonSet Pod 模板</h2><div class="rule"></div></div></div>
+        <pre class="terminal patch-command"><code>kubectl patch daemonset multitool-2 -p \
+'{"spec":{"template":{"metadata":{"annotations":{
+"cni.projectcalico.org/ipv4pools":"[\"secondary-ipv4-ippool\"]"
+}}}}}'</code></pre>
+        <div class="patch-target"><div><strong>DaemonSet</strong><span>multitool-2</span></div><span></span><div><strong>spec.template.metadata</strong><span>Pod template</span></div><span></span><div><strong>annotations</strong><span>新 Pod 继承</span></div></div>
+        <div class="slide-number">21</div>
+        <aside class="speaker-copy"><p>patch 的目标不是现有 Pod metadata，而是 DaemonSet 的 Pod 模板。Kubernetes 发现模板哈希变化后会滚动替换 Pod。</p><p>命令中的反斜杠只是在 shell 和 JSON 之间转义双引号。演示时可以先展示完整命令，再用 kubectl get ds multitool-2 -o yaml 确认模板注解。</p></aside>
+      </section>
+
+      <section class="slide" data-section="重建" data-title="模板变化触发 DaemonSet 滚动重建">
+        <div class="slide-header"><div><p class="eyebrow">Old IP cannot be changed in place</p><h2>模板变化触发 DaemonSet 滚动重建</h2><div class="rule"></div></div><button class="action-btn" id="replay-rollout" type="button">↻ 重放重建</button></div>
+        <div class="rollout-flow" id="rollout-animation"><div class="rollout-old"><strong>旧 multitool-2 Pod</strong><span>192.168.42.x · Default</span></div><span class="rollout-link delete"><b>delete</b></span><div class="rollout-template"><strong>新 Pod Template</strong><span>ipv4pools annotation</span></div><span class="rollout-link create"><b>create</b></span><div class="rollout-new"><strong>新 multitool-2 Pod</strong><span>192.168.170.x · Secondary</span></div></div>
+        <div class="flat-block red" style="margin-top:28px;"><p class="body">给运行中的 Pod 后补注解不会重新执行 CNI。必须重建 Pod 才能获得另一个池的地址。</p></div>
+        <div class="slide-number">22</div>
+        <aside class="speaker-copy"><p>Pod IP 在 sandbox 创建时分配，不能通过修改 metadata 原地迁移。DaemonSet patch 触发删除旧 Pod、创建新 Pod，新 Pod 才携带注解。</p><p>现场可以使用 `kubectl rollout status daemonset/multitool-2` 等待滚动完成，避免在新旧 Pod 并存时误判结果。</p></aside>
+      </section>
+
+      <section class="slide" data-section="分配" data-title="显式请求触发 Secondary block 创建">
+        <div class="slide-header"><div><p class="eyebrow">CNI to IPAM</p><h2>显式请求触发 Secondary block 创建</h2><div class="rule"></div></div><button class="action-btn" id="replay-allocation" type="button">↻ 重放分配</button></div>
+        <div class="allocation-path" id="allocation-animation"><div><strong>新 Pod</strong><span>node: worker</span></div><span class="allocation-link"><b>pool name</b></span><div><strong>Calico CNI</strong><span>解析 ipv4pools</span></div><span class="allocation-link"><b>request</b></span><div><strong>Calico IPAM</strong><span>检查本节点 block</span></div><span class="allocation-link"><b>allocate</b></span><div><strong>Secondary /26</strong><span>192.168.170.192/26</span></div><span class="allocation-link"><b>IP</b></span><div><strong>Pod</strong><span>192.168.170.192</span></div></div>
+        <div class="flat-block green" style="margin-top:28px;"><p class="body">节点没有 Secondary block 时，IPAM 先创建 Block Affinity，再从该 block 分配 Pod IP。</p></div>
+        <div class="slide-number">23</div>
+        <aside class="speaker-copy"><p>新 Pod 在 worker 上启动，CNI 把指定池名交给 Calico IPAM。IPAM 发现 worker 没有 Secondary block，于是先为节点建立一个 /26 affinity。</p><p>随后 Pod 从这个 block 获得地址。后续同节点、同池的 Pod 会优先复用已有 block，直到需要额外容量。</p></aside>
+      </section>
+
+      <section class="slide" data-section="变更后" data-title="重建后的 multitool-2 进入 Secondary 池">
+        <div class="slide-header"><div><p class="eyebrow">kubectl get pods -o wide</p><h2>重建后的 multitool-2 进入 Secondary 池</h2><div class="rule"></div></div></div>
+        <table class="course-table after-pods"><thead><tr><th>Pod</th><th>节点</th><th>课程示例 IP</th><th>地址池</th></tr></thead><tbody><tr><td>multitool-2-rxh2b</td><td>worker2</td><td>192.168.216.192</td><td class="secondary-text">Secondary</td></tr><tr><td>multitool-2-tc274</td><td>worker</td><td>192.168.170.192</td><td class="secondary-text">Secondary</td></tr><tr><td>multitool-2-xwzrw</td><td>control-plane</td><td>192.168.197.0</td><td class="secondary-text">Secondary</td></tr><tr><td>multitool-1 / nginx</td><td>原节点</td><td>192.168.42/69/88.x</td><td class="primary-text">Default</td></tr></tbody></table>
+        <div class="flat-block yellow" style="margin-top:28px;"><p class="body">Pod 名称与 IP 都发生变化，说明 DaemonSet 完成了重建，而不是对旧 Pod 原地修改。</p></div>
+        <div class="slide-number">24</div>
+        <aside class="speaker-copy"><p>课程输出中，三个 multitool-2 地址全部高于 192.168.128.0，证明它们来自 Secondary 池。</p><p>multitool-1 和 nginx 保留低半段地址，说明注解只影响 multitool-2 的 Pod template，不会改变其他工作负载。</p></aside>
+      </section>
+
+      <section class="slide" data-section="变更后" data-title="CIDR 边界可以快速判断 Pod 所属池">
+        <div class="slide-header"><div><p class="eyebrow">Classify by address range</p><h2>CIDR 边界可以快速判断 Pod 所属池</h2><div class="rule"></div></div></div>
+        <div class="address-ruler"><div class="ruler-primary"><span>192.168.0.0</span><strong>Default Pool</strong><span>192.168.127.255</span></div><div class="ruler-secondary"><span>192.168.128.0</span><strong>Secondary Pool</strong><span>192.168.255.255</span></div><i class="sample one">42.194</i><i class="sample two">170.192</i><i class="sample three">216.192</i></div>
+        <div class="grid-2" style="margin-top:30px; gap:24px;"><div class="flat-block cyan"><h3>低半段</h3><p class="body">第三个八位组为 0 到 127。</p></div><div class="flat-block orange"><h3>高半段</h3><p class="body">第三个八位组为 128 到 255。</p></div></div>
+        <div class="slide-number">25</div>
+        <aside class="speaker-copy"><p>现场演示不必逐个执行复杂查询。只看第三个八位组就能快速分类：0 到 127 是 Default，128 到 255 是 Secondary。</p><p>这只适用于本实验的两个 /17 切分。生产环境应以 `kubectl get ippools -o wide` 或 YAML 中的实际 CIDR 为准。</p></aside>
+      </section>
+
+      <section class="slide" data-section="变更后" data-title="变更后每个节点都有两个 Workload block">
+        <div class="slide-header"><div><p class="eyebrow">Block affinities after rollout</p><h2>变更后每个节点都有两个 Workload block</h2><div class="rule"></div></div></div>
+        <table class="course-table affinity-after"><thead><tr><th>节点</th><th>Default block</th><th>Secondary block</th></tr></thead><tbody><tr><td>control-plane</td><td>192.168.69.0/26</td><td>192.168.197.0/26</td></tr><tr><td>worker</td><td>192.168.42.192/26</td><td>192.168.170.192/26</td></tr><tr><td>worker2</td><td>192.168.88.192/26</td><td>192.168.216.192/26</td></tr></tbody></table>
+        <div class="flat-block green" style="margin-top:30px;"><p class="body">Secondary block 的创建时间晚于 Default block，与 DaemonSet patch 和 Pod 重建时间对应。</p></div>
+        <div class="slide-number">26</div>
+        <aside class="speaker-copy"><p>现在每个节点都出现一低一高两个 /26 block。高半段 block 正好覆盖课程中三个新 multitool-2 IP。</p><p>Block Affinity 由 Calico IPAM 自动管理，不需要也不应该手工创建。删除最后一个 Pod 后 block 是否立即回收，还取决于 IPAM 的空 block 回收过程。</p><p class="note-source">Calico 官方：<a href="https://docs.tigera.io/calico/latest/reference/resources/blockaffinity">Block affinity</a></p></aside>
+      </section>
+
+      <section class="slide" data-section="变更后" data-title="Secondary block 按节点按需出现">
+        <div class="slide-header"><div><p class="eyebrow">On-demand affinity creation</p><h2>Secondary block 按节点按需出现</h2><div class="rule"></div></div><button class="action-btn" id="replay-affinity" type="button">↻ 重放 Block</button></div>
+        <div class="affinity-animation" id="affinity-animation"><div class="affinity-pool"><strong>Secondary Pool</strong><span>192.168.128.0/17</span></div><div class="affinity-lanes"><div><span class="affinity-track"><b>/26</b></span><strong>control-plane</strong><small>192.168.197.0/26</small></div><div><span class="affinity-track"><b>/26</b></span><strong>worker</strong><small>192.168.170.192/26</small></div><div><span class="affinity-track"><b>/26</b></span><strong>worker2</strong><small>192.168.216.192/26</small></div></div></div>
+        <div class="flat-block yellow" style="margin-top:26px;"><p class="body">DaemonSet 在三台节点各创建一个 Pod，因此三台节点都需要 Secondary block。</p></div>
+        <div class="slide-number">27</div>
+        <aside class="speaker-copy"><p>DaemonSet 的覆盖范围决定了 block 出现在哪些节点。如果 workload 只调度到 worker，一个 Secondary block 就足够，不会自动给其他节点分配。</p><p>动画中的三条轨道分别属于三个节点，block 与节点一一对应，不是一个 /26 在多个节点之间共享。</p></aside>
+      </section>
+
+      <section class="slide" data-section="变更后" data-title="同一节点可以同时服务两个 IPPool">
+        <div class="slide-header"><div><p class="eyebrow">One node, two IPAM blocks</p><h2>同一节点可以同时服务两个 IPPool</h2><div class="rule"></div></div></div>
+        <div class="dual-block-nodes"><article><h3>control-plane</h3><div class="primary-block">69.0/26</div><div class="secondary-block">197.0/26</div></article><article><h3>worker</h3><div class="primary-block">42.192/26</div><div class="secondary-block">170.192/26</div></article><article><h3>worker2</h3><div class="primary-block">88.192/26</div><div class="secondary-block">216.192/26</div></article></div>
+        <div class="pool-legend"><span class="primary-key">Default 192.168.0.0/17</span><span class="secondary-key">Secondary 192.168.128.0/17</span></div>
+        <div class="slide-number">28</div>
+        <aside class="speaker-copy"><p>节点与 IPPool 不是一对一关系。每个节点可以持有多个 block，Pod 根据请求的池进入对应 block。</p><p>这也说明 Multiple IPPools 不要求把节点分成两组。本实验使用工作负载注解划分地址，所有节点仍能承载两个池的 Pod。</p></aside>
+      </section>
+
+      <section class="slide" data-section="通信" data-title="不同 IPPool 的 Pod 仍通过 Calico 路由互通">
+        <div class="slide-header"><div><p class="eyebrow">Address pool is not a security boundary</p><h2>不同 IPPool 的 Pod 仍通过 Calico 路由互通</h2><div class="rule"></div></div><button class="action-btn" id="replay-traffic" type="button">↻ 重放通信</button></div>
+        <div class="cross-pool-path" id="cross-pool-animation"><div class="primary-pod"><strong>multitool-1</strong><span>192.168.42.194</span></div><span class="cross-pool-link"><b>packet</b></span><div class="source-node"><strong>worker</strong><span>Calico route lookup</span></div><span class="cross-pool-link"><b>route</b></span><div class="target-node"><strong>worker2</strong><span>same node subnet</span></div><span class="cross-pool-link"><b>deliver</b></span><div class="secondary-pod"><strong>multitool-2</strong><span>192.168.216.192</span></div></div>
+        <div class="grid-2" style="margin-top:28px; gap:24px;"><div class="flat-block green"><h3>路由连续</h3><p class="body">两个池都属于 Calico 网络，Felix 为 block 安装路由。</p></div><div class="flat-block red"><h3>策略另行决定</h3><p class="body">需要隔离时配置 NetworkPolicy，而不是依赖地址池名称。</p></div></div>
+        <div class="slide-number">29</div>
+        <aside class="speaker-copy"><p>不同池不会阻断数据面。源节点根据目标 IP 匹配 worker2 的 Secondary block 路由，目标节点再交付 multitool-2。</p><p>本实验三个 Node IP 在同一子网，VXLANCrossSubnet 会保留直接路由。生产环境如果节点跨子网，两个池仍按各自 encapsulation 设置决定是否封装。</p></aside>
+      </section>
+
+      <section class="slide" data-section="扩展" data-title="Namespace 注解可以为一组 Pod 指定 IPPool">
+        <div class="slide-header"><div><p class="eyebrow">Optional extension</p><h2>Namespace 注解可以为一组 Pod 指定 IPPool</h2><div class="rule"></div></div></div>
+        <pre class="terminal annotation-code"><code>apiVersion: v1
+kind: Namespace
+metadata:
+  name: secondary-workloads
+  annotations:
+    cni.projectcalico.org/ipv4pools: '["secondary-ipv4-ippool"]'</code></pre>
+        <div class="namespace-effect"><div><strong>Namespace annotation</strong><span>默认作用于其中新建的 Pod</span></div><span></span><div><strong>Pod template 无注解</strong><span>继承 Namespace 的池列表</span></div><span></span><div><strong>Secondary IP</strong><span>创建时分配</span></div></div>
+        <div class="slide-number">30</div>
+        <aside class="speaker-copy"><p>课程使用 DaemonSet Pod template 注解。Calico 官方还支持在 Namespace 上指定池，适合整个命名空间统一使用一个地址范围。</p><p>Namespace 注解同样只影响之后创建的 Pod。已经运行的 Pod 不会自动重分配地址。</p></aside>
+      </section>
+
+      <section class="slide" data-section="扩展" data-title="Pod 注解优先于 Namespace 和自动选择">
+        <div class="slide-header"><div><p class="eyebrow">Selection precedence</p><h2>Pod 注解优先于 Namespace 和自动选择</h2><div class="rule"></div></div></div>
+        <div class="precedence-stack"><div class="level pod"><span>1</span><strong>Pod annotation</strong><small>最具体，直接指定池列表</small></div><div class="level namespace"><span>2</span><strong>Namespace annotation</strong><small>Pod 没有注解时使用</small></div><div class="level automatic"><span>3</span><strong>Automatic pool selection</strong><small>依据 IPPool nodeSelector</small></div></div>
+        <div class="flat-block yellow" style="margin-top:28px;"><p class="body">显式注解会覆盖池的 nodeSelector 自动选择行为。本实验正是利用这个优先级请求 <code>!all()</code> 的 Secondary 池。</p></div>
+        <div class="slide-number">31</div>
+        <aside class="speaker-copy"><p>优先级从具体到通用：Pod、Namespace、自动池。Pod 和 Namespace 都有注解时，以 Pod 为准。</p><p>这里的覆盖是选池优先级，不表示绕过池存在性、CIDR 合法性或 allowedUses。指定的 IPPool 必须存在并允许 Workload。</p></aside>
+      </section>
+
+      <section class="slide" data-section="排错" data-title="Multi-IPPool 常见配置错误">
+        <div class="slide-header"><div><p class="eyebrow">Configuration pitfalls</p><h2>Multi-IPPool 常见配置错误</h2><div class="rule"></div></div></div>
+        <div class="mistake-grid"><article><span>01</span><h3>池名拼错</h3><p>Pod sandbox 创建失败，事件中出现 IPAM 错误。</p></article><article><span>02</span><h3>注解格式错误</h3><p>忘记 JSON 数组或 shell 转义，CNI 无法解析。</p></article><article><span>03</span><h3>只改现有 Pod</h3><p>CNI 不会重跑，IP 保持不变。</p></article><article><span>04</span><h3>CIDR 重叠</h3><p>IPPool 校验失败或地址规划产生冲突。</p></article><article><span>05</span><h3>混淆 LB 池</h3><p>allowedUses 不包含 Workload，不能作为 Pod 池。</p></article><article><span>06</span><h3>误把池当隔离</h3><p>没有 NetworkPolicy 时，跨池通信仍可能成功。</p></article></div>
+        <div class="slide-number">32</div>
+        <aside class="speaker-copy"><p>排错时先看 Pod Events，很多选池错误在 sandbox 创建阶段就会给出明确原因。</p><p>再确认注解落在 spec.template.metadata.annotations，池名准确，池允许 Workload，并且 Pod 确实发生了重建。</p></aside>
+      </section>
+
+      <section class="slide" data-section="排错" data-title="按 IPAM 分配链路定位问题">
+        <div class="slide-header"><div><p class="eyebrow">Find the first failed stage</p><h2>按 IPAM 分配链路定位问题</h2><div class="rule"></div></div></div>
+        <table class="trouble-table multi-trouble"><thead><tr><th>现象</th><th>检查对象</th><th>命令</th><th>判断</th></tr></thead><tbody><tr><td>只看到一个 Workload 池</td><td>Installation / IPPool</td><td><code>kubectl get installation default -o yaml; kubectl get ippools</code></td><td>Secondary 是否创建成功</td></tr><tr><td>patch 后 Pod 未变化</td><td>DaemonSet 模板与 rollout</td><td><code>kubectl get ds multitool-2 -o yaml; kubectl rollout status ds/multitool-2</code></td><td>注解是否进入 Pod template</td></tr><tr><td>新 Pod Pending / ContainerCreating</td><td>Events 与 CNI 日志</td><td><code>kubectl describe pod POD; kubectl logs -n calico-system daemonset/calico-node -c calico-node --tail=100</code></td><td>池名、格式、IPAM 容量</td></tr><tr><td>Pod 仍拿 Default IP</td><td>实际 Pod 注解</td><td><code>kubectl get pod POD -o jsonpath='{.metadata.annotations}'</code></td><td>新 Pod 是否继承注解</td></tr><tr><td>IP 正确但通信失败</td><td>路由与 NetworkPolicy</td><td><code>ip route; kubectl get networkpolicy -A</code></td><td>IPAM 已成功，转向数据面</td></tr></tbody></table>
+        <div class="flat-block yellow" style="margin-top:22px;"><p class="body"><strong>顺序：</strong>池对象、Pod 模板、Pod 重建、Block Affinity、实际 IP，最后再查路由和策略。</p></div>
+        <div class="slide-number">33</div>
+        <aside class="speaker-copy"><p>这张表按控制链路排错。池不存在时不要先查路由；Pod 没重建时也不可能看到新地址。</p><p>一旦 Pod 已经获得 Secondary IP，IPAM 阶段就通过了。后续通信问题应转到路由、封装、BGP 或 NetworkPolicy。</p></aside>
+      </section>
+
+      <section class="slide" data-section="演示" data-title="十五分钟现场演示顺序">
+        <div class="slide-header"><div><p class="eyebrow">Before and after evidence</p><h2>十五分钟现场演示顺序</h2><div class="rule"></div></div></div>
+        <div class="demo-columns"><div class="demo-list"><div><span>01</span><code>containerlab inspect topology.clab.yaml</code><small>确认 cEOS 与 Kind。</small></div><div><span>02</span><code>export KUBECONFIG=$(pwd)/k01.kubeconfig</code><small>切换到 k01。</small></div><div><span>03</span><code>kubectl get ippools -o wide</code><small>区分三个池。</small></div><div><span>04</span><code>kubectl get blockaffinities</code><small>记录变更前 block。</small></div><div><span>05</span><code>kubectl get pods -o wide</code><small>证明全部来自 Default。</small></div></div><div class="demo-list"><div><span>06</span><code>kubectl patch daemonset multitool-2 ...</code><small>写入 Secondary 注解。</small></div><div><span>07</span><code>kubectl rollout status ds/multitool-2</code><small>等待 Pod 重建。</small></div><div><span>08</span><code>kubectl get pods -o wide</code><small>观察高半段 IP。</small></div><div><span>09</span><code>kubectl get blockaffinities</code><small>验证三条 Secondary /26。</small></div><div><span>10</span><code>kubectl exec POD -- ping TARGET_IP</code><small>验证跨池通信。</small></div></div></div>
+        <div class="flat-block red" style="margin-top:20px;"><p class="body"><strong>清理：</strong>运行 <code>./destroy.sh</code>，检查将删除的 topology、Kind cluster、容器、网络与 kubeconfig 后输入 yes。</p></div>
+        <div class="slide-number">34</div>
+        <aside class="speaker-copy"><p>现场演示最适合采用前后对比。patch 前保存一次 IPPool、blockaffinity 和 Pod IP 输出，patch 后重复相同命令。</p><p>最后从 multitool-1 ping multitool-2 的 Secondary IP，证明地址分组没有自动阻断通信。若部署了策略，则按策略结果解释。</p></aside>
+      </section>
+
+      <section class="slide" data-section="总结" data-title="Multiple IPPools 的完整证据链">
+        <div class="slide-header"><div><p class="eyebrow">Summary and sources</p><h2>Multiple IPPools 的完整证据链</h2><div class="rule"></div></div></div>
+        <div class="summary-row multi-summary"><article><span>01</span><h3>双池配置</h3><p>两个 /17 地址范围共享相同网络参数，selector 控制自动候选。</p></article><article><span>02</span><h3>显式选池</h3><p>Pod template 的 ipv4pools 注解让新 Pod 请求 Secondary。</p></article><article><span>03</span><h3>按需 Block</h3><p>IPAM 在实际有 Pod 请求时，才为对应节点创建 Secondary /26。</p></article></div>
+        <div class="source-list compact-sources"><article class="source-item"><strong>Lesson 09</strong><a href="https://k8snetworking.com/lessons/09-multi-ippool">k8snetworking.com/lessons/09-multi-ippool</a></article><article class="source-item"><strong>课程仓库</strong><a href="https://github.com/aadhilam/k8-networking-calico-containerlab/tree/master/containerlab/09-multi-ippool">github.com/aadhilam/.../09-multi-ippool</a></article><article class="source-item"><strong>Calico Multiple Pools</strong><a href="https://docs.tigera.io/calico/latest/networking/ipam/ippools">docs.tigera.io/.../ipam/ippools</a></article><article class="source-item"><strong>Calico CNI Annotations</strong><a href="https://docs.tigera.io/calico/latest/reference/configure-cni-plugins">docs.tigera.io/.../configure-cni-plugins</a></article></div>
+        <div class="slide-number">35</div>
+        <aside class="speaker-copy"><p>最后用三步总结。先创建两个不重叠的池，再通过 Pod 或 Namespace 注解显式选池，最后用 Pod IP 和 Block Affinity 证明分配结果。</p><p>Multiple IPPools 提供地址管理边界。路由、封装和安全策略仍然由各自的数据面配置决定。</p></aside>
+      </section>
+    </div>
+
+    <div class="progress-track" aria-hidden="true"><div id="progress-fill"></div></div>
+    <nav class="controls" aria-label="演示控制"><button class="tool-btn" id="prev" type="button" title="上一页" aria-label="上一页">‹</button><button class="tool-btn" id="next" type="button" title="下一页" aria-label="下一页">›</button><button class="tool-btn" id="notes-toggle" type="button" title="讲稿" aria-label="显示或隐藏讲稿" aria-pressed="false">N</button><button class="tool-btn" id="overview-toggle" type="button" title="总览" aria-label="显示或隐藏总览" aria-pressed="false">▦</button><button class="tool-btn" id="fullscreen" type="button" title="全屏" aria-label="切换全屏">⛶</button></nav>
+    <button class="notes-backdrop" id="notes-backdrop" type="button" aria-label="关闭讲稿" tabindex="-1"></button>
+    <aside class="notes-panel" id="notes-panel" aria-live="polite" aria-hidden="true"><div class="notes-header"><h2 id="notes-title">讲稿</h2><button class="notes-close" id="notes-close" type="button" title="关闭讲稿" aria-label="关闭讲稿">×</button></div><div id="notes-body"></div></aside>
+    <aside class="overview" id="overview" aria-label="幻灯片总览"></aside>
+  </main>
+  <script src="app.js?v=1"></script>
+</body>
+</html>
