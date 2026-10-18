@@ -1,0 +1,487 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="基于 Kubernetes Networking Labs Lesson 16 的 Calico Pod 静态 IP、IPReservation、Calico IPAM 与冲突处理中文动态演示课件">
+  <title>Calico Static Pod IP：把指定地址交给指定 Pod</title>
+  <link rel="stylesheet" href="styles.css?v=1">
+</head>
+<body>
+  <main class="deck-shell" aria-label="Calico Static Pod IP HTML 演示文稿">
+    <div id="deck-canvas">
+      <section class="slide cover active" data-section="Static Pod IP" data-title="把指定地址交给指定 Pod">
+        <div class="cover-layout static-cover-layout">
+          <div class="cover-copy">
+            <p class="eyebrow">Lesson 16 · Calico IPAM · IPReservation · CNI</p>
+            <h1>Calico Static Pod IP<br><span class="yellow-mark">指定地址，创建时申请</span></h1>
+            <p class="lead">先把地址段从自动分配中留出来，再让 Pod 通过 annotation 申请其中一个唯一地址。</p>
+            <div class="cover-meta"><span>192.168.100.8/29</span><span>ipAddrs</span><span>192.168.100.10</span></div>
+          </div>
+          <div class="static-cover is-playing" id="cover-flow" aria-label="Pod 从预留地址段申请固定 IP">
+            <article class="cover-pool"><span>Calico IPPool</span><strong>192.168.0.0/16</strong><div class="reserved-window"><b>.8</b><b>.9</b><b class="chosen">.10</b><b>.11</b><b>.12</b><b>.13</b><b>.14</b><b>.15</b></div><code>reserved from auto-allocation</code></article>
+            <div class="cover-claim"><span class="claim-track"><i>REQUEST .10</i></span><strong>unique allocation</strong></div>
+            <article class="cover-static-pod"><span>static-pod</span><strong>192.168.100.10</strong><code>cni.projectcalico.org/ipAddrs</code></article>
+            <div class="cover-proof"><b>annotation</b><b>IPAM allocation</b><b>route installed</b></div>
+          </div>
+        </div>
+        <aside class="speaker-copy"><p>大家好，这一节讲 Pod 静态 IP。默认情况下 Calico 从 IPPool 自动挑一个空闲地址；静态模式则让 Pod 在创建时明确申请 192.168.100.10。</p><p>完整做法不是只写 annotation。我们先用 IPReservation 阻止自动分配碰到这段地址，再由 Calico IPAM做唯一性检查和实际占用记录。</p><p class="note-source">主课程：<a href="https://k8snetworking.com/lessons/16-static-ip">https://k8snetworking.com/lessons/16-static-ip</a></p></aside>
+      </section>
+
+      <section class="slide" data-section="核心概念" data-title="动态分配与指定地址只差选择权">
+        <div class="slide-header"><div><p class="eyebrow">Who chooses the address</p><h2>动态分配与指定地址只差选择权</h2><div class="rule"></div></div></div>
+        <div class="dynamic-static"><article class="dynamic"><span>Dynamic</span><h3>Calico 选择</h3><code>next available IP</code><p>适合绝大多数无状态工作负载。</p><strong>无需 Pod annotation</strong></article><div class="versus">VS</div><article class="static"><span>Static</span><h3>用户请求</h3><code>192.168.100.10</code><p>Calico 仍负责校验、占用与释放。</p><strong>创建时携带 ipAddrs</strong></article></div>
+        <div class="callout"><strong>相同点：</strong>两种方式都使用 Calico IPAM，都必须落在可用 IPPool 中，也都由 CNI 在 Pod sandbox 创建阶段配置接口。</div>
+        <div class="slide-number">02</div>
+        <aside class="speaker-copy"><p>动态和静态并不是两套网络。它们都走 Calico CNI、IPAM 和同一份 Pod 路由。</p><p>差别只在谁选择地址。动态由 IPAM 算法选，静态由 annotation 提出具体地址，IPAM 再检查能否分配。</p></aside>
+      </section>
+
+      <section class="slide" data-section="适用场景" data-title="只有地址本身有外部契约时才考虑静态 IP">
+        <div class="slide-header"><div><p class="eyebrow">Use sparingly</p><h2>只有地址本身有外部契约时才考虑静态 IP</h2><div class="rule"></div></div></div>
+        <div class="use-case-grid"><article><span>ACL</span><h3>遗留系统白名单</h3><p>对方只能按单个源地址授权，短期无法改造。</p></article><article><span>DNS</span><h3>外部记录直指 Pod</h3><p>某些设备或集成要求固定目标 IP。</p></article><article><span>OBS</span><h3>明确实例识别</h3><p>日志、探针或抓包按固定地址关联设备。</p></article><article><span>STATE</span><h3>特殊有状态协议</h3><p>成员协议把地址当作持久身份的一部分。</p></article></div>
+        <div class="flat-block red"><p class="body"><strong>默认建议：</strong>普通应用优先使用 Service、Headless Service 或 StatefulSet DNS。把 Pod IP 暴露为长期契约会增加调度、扩缩和故障恢复成本。</p></div>
+        <div class="slide-number">03</div>
+        <aside class="speaker-copy"><p>静态 Pod IP 是兼容性工具，不是通用最佳实践。外部系统真的把 IP 当契约时才值得使用。</p><p>能用 Service 或 StatefulSet 稳定 DNS 解决的场景，通常不要把单个 Pod IP 暴露出去。</p></aside>
+      </section>
+
+      <section class="slide" data-section="身份层次" data-title="稳定 Service、稳定 DNS 与静态 Pod IP 不是一回事">
+        <div class="slide-header"><div><p class="eyebrow">Three different identities</p><h2>稳定 Service、稳定 DNS 与静态 Pod IP 不是一回事</h2><div class="rule"></div></div></div>
+        <table class="data-table identity-table"><thead><tr><th>机制</th><th>稳定对象</th><th>后端变化</th><th>主要用途</th></tr></thead><tbody><tr><td>ClusterIP Service</td><td>虚拟入口 IP / DNS</td><td>可任意替换 Pod</td><td>普通服务发现与负载均衡</td></tr><tr><td>StatefulSet + Headless</td><td>Pod DNS ordinal</td><td>Pod IP 可变化</td><td>稳定成员名称</td></tr><tr><td>Static Pod IP</td><td>请求的 Pod 地址</td><td>必须重新请求同一 IP</td><td>外部 IP 契约</td></tr></tbody></table>
+        <div class="callout"><strong>关键区别：</strong>静态 IP 不会自动让 Deployment 的所有替代副本继承同一个地址，也不会提供负载均衡或健康检查。</div>
+        <div class="slide-number">04</div>
+        <aside class="speaker-copy"><p>ClusterIP 稳定的是入口，StatefulSet 稳定的是名称，静态 IP 稳定的是一次明确请求的地址。</p><p>选择机制时先问外部依赖真正需要什么，不要把所有“稳定身份”混成同一问题。</p></aside>
+      </section>
+
+      <section class="slide" data-section="前提条件" data-title="静态申请必须同时满足五个条件">
+        <div class="slide-header"><div><p class="eyebrow">Admission checklist</p><h2>静态申请必须同时满足五个条件</h2><div class="rule"></div></div></div>
+        <div class="five-checks"><article><span>1</span><h3>Calico IPAM</h3><p>CNI 配置使用 <code>calico-ipam</code>。</p></article><article><span>2</span><h3>位于 Pod CIDR</h3><p>Kubernetes 识别它属于工作负载网络。</p></article><article><span>3</span><h3>位于 Calico IPPool</h3><p><code>ipAddrs</code> 不接受池外地址。</p></article><article><span>4</span><h3>当前未占用</h3><p>同一地址一次只能分配给一个 endpoint。</p></article><article><span>5</span><h3>创建时有注解</h3><p>CNI ADD 只在 sandbox 创建时读取。</p></article></div>
+        <div class="slide-number">05</div>
+        <aside class="speaker-copy"><p>这五个条件缺一不可。尤其要确认集群真的使用 Calico IPAM，而不是 host-local 或其他插件。</p><p>课程地址在 192.168.0.0/16 pool 内，且先从自动分配中预留，所以满足范围和唯一性设计。</p></aside>
+      </section>
+
+      <section class="slide" data-section="IPAM 前提" data-title="先证明集群使用 calico-ipam">
+        <div class="slide-header"><div><p class="eyebrow">Verify the allocator</p><h2>先证明集群使用 calico-ipam</h2><div class="rule"></div></div></div>
+        <div class="grid-2"><pre class="code terminal"><span class="prompt">$</span> kubectl get installation default \
+  -o go-template --template \
+  '{{.spec.cni.ipam.type}}'
+
+<span class="good">Calico</span></pre><pre class="code terminal"><span class="prompt">#</span> cat /etc/cni/net.d/10-calico.conflist
+
+"ipam": {
+  "type": <span class="good">"calico-ipam"</span>
+}</pre></div>
+        <div class="flat-block yellow"><p class="body">Operator 安装时字段可能由默认值补齐，Node 上最终 CNI conflist 是最直接的数据面证据。</p></div>
+        <div class="slide-number">06</div>
+        <aside class="speaker-copy"><p>官方文档给出两种检查方式：读取 Installation 的 IPAM 类型，或进入 Node 查看 CNI conflist。</p><p>如果使用 host-local，这个 ipAddrs 特性不可用。不要只因为网络插件叫 Calico 就假设 IPAM 一定也是 Calico。</p></aside>
+      </section>
+
+      <section class="slide" data-section="实验环境" data-title="Lesson 16 使用两节点 Kind 与单一 IPv4 Pool">
+        <div class="slide-header"><div><p class="eyebrow">containerlab/16-static-ip</p><h2>Lesson 16 使用两节点 Kind 与单一 IPv4 Pool</h2><div class="rule"></div></div></div>
+        <div class="lab-two-nodes"><article><span>control-plane</span><h3>k01-control-plane</h3><p>Kind control plane</p></article><div class="node-link"><i></i></div><article><span>worker</span><h3>k01-worker</h3><p>课程示例 Pod 所在节点</p></article></div>
+        <table class="data-table compact"><thead><tr><th>参数</th><th>课程值</th><th>作用</th></tr></thead><tbody><tr><td>Kind image</td><td>v1.28.0</td><td>两节点实验集群</td></tr><tr><td>Pod CIDR / IPPool</td><td>192.168.0.0/16</td><td>动态与静态 Pod 地址</td></tr><tr><td>Service CIDR</td><td>10.96.0.0/16</td><td>与本课静态 Pod IP 分离</td></tr><tr><td>Calico</td><td>3.30.0</td><td>CNI、IPAM 与路由</td></tr></tbody></table>
+        <div class="slide-number">07</div>
+        <aside class="speaker-copy"><p>实验是 control-plane 加一个 worker，Pod pool 为 192.168.0.0/16。192.168.100.10 位于这个 pool 内。</p><p>Service CIDR 是 10.96.0.0/16，与 Pod 地址完全不同，不要把静态 Pod IP 当 ClusterIP。</p></aside>
+      </section>
+
+      <section class="slide" data-section="Calico IPPool" data-title="静态地址仍来自默认 Calico IPPool">
+        <div class="slide-header"><div><p class="eyebrow">custom-resources.yaml</p><h2>静态地址仍来自默认 Calico IPPool</h2><div class="rule"></div></div></div>
+        <div class="grid-2"><pre class="code manifest-code"><span class="key">apiVersion:</span> operator.tigera.io/v1
+<span class="key">kind:</span> Installation
+<span class="key">metadata:</span>
+  <span class="key">name:</span> default
+<span class="key">spec:</span>
+  <span class="key">calicoNetwork:</span>
+    <span class="key">ipPools:</span>
+    - <span class="key">blockSize:</span> <span class="value">26</span>
+      <span class="key">cidr:</span> <span class="hot">192.168.0.0/16</span>
+      <span class="key">encapsulation:</span> VXLANCrossSubnet
+      <span class="key">natOutgoing:</span> Enabled</pre><div class="pool-containment"><span>IPPool</span><strong>192.168.0.0/16</strong><div><b>reserved slice</b><code>192.168.100.8/29</code></div><div><b>chosen IP</b><code>192.168.100.10</code></div></div></div>
+        <div class="slide-number">08</div>
+        <aside class="speaker-copy"><p>静态地址没有单独建 pool，而是在默认 /16 内划出一个 /29 reservation。</p><p>ipAddrs 请求必须落在某个 Calico IPPool 中。Reservation 只改变自动分配候选集。</p></aside>
+      </section>
+
+      <section class="slide" data-section="部署" data-title="deploy.sh 先预留地址，再创建动态对照 Pod">
+        <div class="slide-header"><div><p class="eyebrow">Initial deployment sequence</p><h2>deploy.sh 先预留地址，再创建动态对照 Pod</h2><div class="rule"></div></div></div>
+        <div class="runway"><article><span>01</span><h3>Kind topology</h3><code>control-plane + worker</code></article><i>›</i><article><span>02</span><h3>Calico 3.30</h3><code>default /16 pool</code></article><i>›</i><article><span>03</span><h3>等待 Available</h3><code>TigeraStatus</code></article><i>›</i><article><span>04</span><h3>IPReservation</h3><code>192.168.100.8/29</code></article><i>›</i><article><span>05</span><h3>dynamic-pod</h3><code>auto allocation</code></article></div>
+        <pre class="code command-code">cd containerlab/16-static-ip
+chmod +x deploy.sh
+./deploy.sh
+export KUBECONFIG=$(pwd)/k01.kubeconfig</pre>
+        <div class="slide-number">09</div>
+        <aside class="speaker-copy"><p>部署脚本只创建 reservation 和 dynamic-pod。静态 Pod 留到实验步骤手动创建。</p><p>这样我们先证明自动分配会避开 reserved range，再验证手工申请能进入 reserved range。</p></aside>
+      </section>
+
+      <section class="slide" data-section="工作流" data-title="静态 IP 实验有四个独立阶段">
+        <div class="slide-header"><div><p class="eyebrow">Reserve, request, verify, release</p><h2>静态 IP 实验有四个独立阶段</h2><div class="rule"></div></div><button class="action-btn" data-replay="#workflow" type="button" title="重放动画" aria-label="重放静态 IP 工作流">↻</button></div>
+        <div class="fixed-pipeline is-playing" id="workflow"><article><span>1</span><h3>Reserve</h3><p>exclude /29 from auto</p></article><div class="pipe"><i></i></div><article><span>2</span><h3>Request</h3><p>Pod asks for .10</p></article><div class="pipe"><i></i></div><article><span>3</span><h3>Allocate</h3><p>IPAM checks uniqueness</p></article><div class="pipe"><i></i></div><article><span>4</span><h3>Configure</h3><p>interface + route</p></article><div class="pipe"><i></i></div><article><span>5</span><h3>Release</h3><p>CNI DEL frees IP</p></article></div>
+        <div class="callout"><strong>两条独立规则：</strong>Reservation 保护地址不被自动拿走；IPAM allocation 保证手工申请也不能重复占用。</div>
+        <div class="slide-number">10</div>
+        <aside class="speaker-copy"><p>先 reserve，再 request。CNI ADD 调用 IPAM，检查地址范围与占用，成功后配置接口和路由。</p><p>Pod 删除触发 CNI DEL，释放地址。下次创建如果还想要同一个 IP，必须再次在注解中请求。</p></aside>
+      </section>
+
+      <section class="slide" data-section="IPReservation" data-title="Reservation 把地址移出自动分配候选集">
+        <div class="slide-header"><div><p class="eyebrow">Protect a small range</p><h2>Reservation 把地址移出自动分配候选集</h2><div class="rule"></div></div><button class="action-btn" data-replay="#reservation-flow" type="button" title="重放动画" aria-label="重放地址预留动画">↻</button></div>
+        <div class="reservation-flow is-playing" id="reservation-flow"><div class="pool-slots"><b>.6</b><b>.7</b><b class="reserved">.8</b><b class="reserved">.9</b><b class="reserved chosen">.10</b><b class="reserved">.11</b><b class="reserved">.12</b><b class="reserved">.13</b><b class="reserved">.14</b><b class="reserved">.15</b><b>.16</b><b>.17</b></div><div class="allocator-track"><span>automatic allocator</span><i>AUTO</i></div><div class="manual-track"><span>manual ipAddrs request</span><i>REQUEST .10</i></div></div>
+        <div class="grid-2 compact-gap"><div class="flat-block red"><h3>自动分配</h3><p class="body">跳过 `.8–.15`。</p></div><div class="flat-block green"><h3>手工申请</h3><p class="body">仍可选择未占用的 `.10`。</p></div></div>
+        <div class="slide-number">11</div>
+        <aside class="speaker-copy"><p>Reservation 的效果是自动 allocator 遇到 .8 到 .15 时跳过。它不是把地址永久锁死。</p><p>ipAddrs 属于显式手工请求，会覆盖 reservation 的自动分配排除规则，但仍要通过唯一性检查。</p></aside>
+      </section>
+
+      <section class="slide" data-section="IPReservation" data-title="课程用 /29 预留八个数值地址">
+        <div class="slide-header"><div><p class="eyebrow">tools/04-ip-reservation.yaml</p><h2>课程用 /29 预留八个数值地址</h2><div class="rule"></div></div></div>
+        <div class="grid-2"><pre class="code manifest-code"><span class="key">apiVersion:</span> crd.projectcalico.org/v1
+<span class="key">kind:</span> IPReservation
+<span class="key">metadata:</span>
+  <span class="key">name:</span> reserved-ips
+<span class="key">spec:</span>
+  <span class="key">reservedCIDRs:</span>
+  - <span class="hot">192.168.100.8/29</span></pre><div class="range-list"><span>192.168.100.</span><div><b>8</b><b>9</b><b class="chosen">10</b><b>11</b><b>12</b><b>13</b><b>14</b><b>15</b></div><p>/29 留 3 个 host bits，共 8 个数值地址。</p></div></div>
+        <div class="callout"><strong>API 说明：</strong>课程直接使用底层 CRD API <code>crd.projectcalico.org/v1</code>；当前官方示例通常使用 <code>projectcalico.org/v3</code>。本地按仓库版本执行。</div>
+        <div class="slide-number">12</div>
+        <aside class="speaker-copy"><p>/29 覆盖 .8 到 .15，课程选择 .10。这里说八个数值地址，不套用传统局域网主机位的 network/broadcast 说法。</p><p>仓库清单使用底层 CRD API。Calico API server 可提供 v3 视图，实验以实际可用 API group 为准。</p></aside>
+      </section>
+
+      <section class="slide" data-section="IPReservation" data-title="预留必须早于自动分配才有保护作用">
+        <div class="slide-header"><div><p class="eyebrow">Reservations are checked at allocation time</p><h2>预留必须早于自动分配才有保护作用</h2><div class="rule"></div></div></div>
+        <div class="timing-compare"><article class="good"><span>正确顺序</span><div><b>create reservation</b><i>›</i><b>create dynamic pods</b></div><p>allocator 从一开始就跳过 reserved range。</p></article><article class="bad"><span>错误假设</span><div><b>IP already allocated</b><i>›</i><b>create reservation</b></div><p>reservation 不会自动撤销已有 allocation。</p></article></div>
+        <div class="flat-block yellow"><p class="body">IPReservation 每次自动分配时被查询。它不是后台回收控制器，也不会主动迁移已经运行的 Pod。</p></div>
+        <div class="slide-number">13</div>
+        <aside class="speaker-copy"><p>Reservation 要在动态工作负载大量创建前应用。地址已经分配后再 reserve，不会让现有 Pod 释放它。</p><p>这也是 deploy.sh 先创建 reservation、再创建 dynamic-pod 的原因。</p></aside>
+      </section>
+
+      <section class="slide" data-section="Reservation 规模" data-title="IPReservation 适合保留小范围地址">
+        <div class="slide-header"><div><p class="eyebrow">Keep the reserved fraction small</p><h2>IPReservation 适合保留小范围地址</h2><div class="rule"></div></div></div>
+        <div class="reservation-scale"><article><span>本实验</span><strong>8 / 65,536</strong><p>在 /16 中预留一个 /29，搜索影响可以忽略。</p></article><article><span>大比例预留</span><strong>&gt; 10%</strong><p>官方文档提醒：allocator 搜索空闲 block 可能明显变慢。</p></article><article><span>资源数量</span><strong>少量对象</strong><p>把多个 CIDR 放进一两个 IPReservation，避免创建大量小对象。</p></article></div>
+        <div class="callout"><strong>大量手工地址时：</strong>考虑创建专用 IPPool，并用 <code>nodeSelector: "!all()"</code> 禁止自动分配整个池。</div>
+        <div class="slide-number">14</div>
+        <aside class="speaker-copy"><p>IPReservation 为少量地址设计。预留池中很大比例会让自动分配频繁跳过不可用区间。</p><p>如果业务需要成百上千个手工地址，专用手工 IPPool 比一大堆 reservation 更清晰。</p></aside>
+      </section>
+
+      <section class="slide" data-section="动态对照" data-title="dynamic-pod 没有任何静态地址注解">
+        <div class="slide-header"><div><p class="eyebrow">tools/01-dynamic-pod.yaml</p><h2>dynamic-pod 没有任何静态地址注解</h2><div class="rule"></div></div></div>
+        <div class="grid-2"><pre class="code manifest-code"><span class="key">apiVersion:</span> v1
+<span class="key">kind:</span> Pod
+<span class="key">metadata:</span>
+  <span class="key">name:</span> dynamic-pod
+  <span class="key">labels:</span>
+    <span class="key">app:</span> dynamic-pod
+<span class="key">spec:</span>
+  <span class="key">containers:</span>
+  - <span class="key">name:</span> busybox
+    <span class="key">image:</span> busybox:1.36
+    <span class="key">command:</span> [<span class="value">"sleep", "3600"</span>]</pre><div class="default-behavior"><span>No ipAddrs</span><strong>Calico IPAM chooses</strong><p>从 Node 可用 block 中选择未使用且未预留的地址。</p><code>result varies by lab</code></div></div>
+        <div class="slide-number">15</div>
+        <aside class="speaker-copy"><p>dynamic-pod 是纯 busybox，没有任何 IP annotation。它提供默认行为对照。</p><p>IPAM 根据 Node block 选择地址，具体结果每次实验可能不同，但不应落入 reservation。</p></aside>
+      </section>
+
+      <section class="slide" data-section="动态分配" data-title="自动分配会跳过预留区间">
+        <div class="slide-header"><div><p class="eyebrow">Default allocator path</p><h2>自动分配会跳过预留区间</h2><div class="rule"></div></div><button class="action-btn" data-replay="#dynamic-flow" type="button" title="重放动画" aria-label="重放动态 IP 分配">↻</button></div>
+        <div class="allocation-flow is-playing" id="dynamic-flow"><article><span>Pod sandbox</span><strong>dynamic-pod</strong><code>no address requested</code></article><div class="allocation-track"><i>CNI ADD</i></div><article class="ipam"><span>Calico IPAM</span><strong>find next free</strong><code>skip IPReservation</code></article><div class="allocation-track"><i>ALLOCATE</i></div><article><span>Result</span><strong>192.168.x.x</strong><code>outside .8/29</code></article></div>
+        <div class="slide-number">16</div>
+        <aside class="speaker-copy"><p>Kubelet 创建 sandbox 时调用 CNI ADD，Calico IPAM 查 block 和 reservation，选一个普通空闲地址。</p><p>Reservation 不要求动态 Pod 知道它的存在，保护逻辑完全在 IPAM 分配阶段。</p></aside>
+      </section>
+
+      <section class="slide" data-section="动态验证" data-title="动态 Pod 地址应位于 Pool 但不在预留 /29">
+        <div class="slide-header"><div><p class="eyebrow">Exercise 3</p><h2>动态 Pod 地址应位于 Pool 但不在预留 /29</h2><div class="rule"></div></div></div>
+        <pre class="code terminal large-output"><span class="prompt">$</span> kubectl get pod dynamic-pod -o wide
+
+NAME         READY  STATUS   IP              NODE
+dynamic-pod  1/1    Running  <span class="cool">192.168.x.x</span>   k01-worker</pre>
+        <div class="set-membership"><article class="yes"><span>within</span><strong>192.168.0.0/16</strong><p>满足 Calico IPPool。</p></article><article class="no"><span>not within</span><strong>192.168.100.8/29</strong><p>reservation 生效。</p></article></div>
+        <div class="callout"><strong>现场验证：</strong>不能只看地址“不等于 .10”。要确认它不属于整个 `.8–.15` 范围。</div>
+        <div class="slide-number">17</div>
+        <aside class="speaker-copy"><p>课程只给 192.168.x.x 示例。实际检查要判断它属于 /16，同时不属于 .8 到 .15。</p><p>动态 Pod 没进 reserved range，证明 reservation 对自动分配生效。</p></aside>
+      </section>
+
+      <section class="slide" data-section="静态清单" data-title="ipAddrs 是一个 JSON 数组字符串">
+        <div class="slide-header"><div><p class="eyebrow">tools/02-static-pod.yaml</p><h2>ipAddrs 是一个 JSON 数组字符串</h2><div class="rule"></div></div></div>
+        <div class="static-manifest"><pre class="code manifest-code"><span class="key">apiVersion:</span> v1
+<span class="key">kind:</span> Pod
+<span class="key">metadata:</span>
+  <span class="key">name:</span> static-pod
+  <span class="key">labels:</span>
+    <span class="key">app:</span> static-pod
+  <span class="key">annotations:</span>
+    <span class="hot">cni.projectcalico.org/ipAddrs:</span>
+      <span class="value">'["192.168.100.10"]'</span>
+<span class="key">spec:</span>
+  <span class="key">containers:</span>
+  - <span class="key">image:</span> busybox:1.36
+    <span class="key">command:</span> [<span class="value">"sleep", "3600"</span>]</pre><div class="syntax-parts"><article><span>YAML value</span><strong>string</strong></article><article><span>string content</span><strong>JSON array</strong></article><article><span>array item</span><strong>IP address</strong></article></div></div>
+        <div class="slide-number">18</div>
+        <aside class="speaker-copy"><p>annotation 的值不是 YAML list，而是包含 JSON array 的字符串。用单引号包住外层可以减少转义。</p><p>课程原始清单使用双引号外层和转义双引号，语义相同。格式错了会在 CNI 阶段解析失败。</p></aside>
+      </section>
+
+      <section class="slide" data-section="注解语法" data-title="格式、优先级与地址数量都有明确限制">
+        <div class="slide-header"><div><p class="eyebrow">Annotation contract</p><h2>格式、优先级与地址数量都有明确限制</h2><div class="rule"></div></div></div>
+        <table class="data-table contract-table"><thead><tr><th>规则</th><th>含义</th><th>常见错误</th></tr></thead><tbody><tr><td>JSON array string</td><td><code>'["192.168.100.10"]'</code></td><td>写成普通逗号字符串</td></tr><tr><td>每地址族最多一个</td><td>一个 IPv4，或一个 IPv6，或各一个</td><td>请求两个 IPv4</td></tr><tr><td>ipAddrs 优先</td><td>与 ipv4pools/ipv6pools 同时存在时，具体地址优先</td><td>以为 pool annotation 会覆盖</td></tr><tr><td>创建时读取</td><td>Pod sandbox 创建前必须存在</td><td>运行后再 annotate</td></tr></tbody></table>
+        <div class="slide-number">19</div>
+        <aside class="speaker-copy"><p>当前官方文档限制每个 Pod 每地址族最多一个具体地址。双栈可以同时申请一个 v4 和一个 v6。</p><p>具体 ipAddrs 比 pool selector 更精确，因此同时配置时它优先。</p></aside>
+      </section>
+
+      <section class="slide" data-section="创建时序" data-title="CNI ADD 在容器启动前完成地址申请">
+        <div class="slide-header"><div><p class="eyebrow">Kubelet to IPAM</p><h2>CNI ADD 在容器启动前完成地址申请</h2><div class="rule"></div></div><button class="action-btn" data-replay="#cni-flow" type="button" title="重放动画" aria-label="重放 CNI 静态 IP 分配">↻</button></div>
+        <div class="fixed-pipeline is-playing" id="cni-flow"><article><span>1</span><h3>API Pod</h3><p>annotation stored</p></article><div class="pipe"><i></i></div><article><span>2</span><h3>Kubelet</h3><p>create sandbox</p></article><div class="pipe"><i></i></div><article><span>3</span><h3>Calico CNI</h3><p>read ipAddrs</p></article><div class="pipe"><i></i></div><article><span>4</span><h3>Calico IPAM</h3><p>validate + allocate</p></article><div class="pipe"><i></i></div><article><span>5</span><h3>Pod network</h3><p>eth0 + route ready</p></article></div>
+        <div class="callout"><strong>失败位置：</strong>地址冲突或池外地址会让 CNI ADD 失败，容器尚未真正启动，因此 Pod 常停在 <code>ContainerCreating</code>。</div>
+        <div class="slide-number">20</div>
+        <aside class="speaker-copy"><p>Pod 对象先写进 API，kubelet 创建 sandbox 时调用 CNI。Calico CNI 读取 annotation，再请求 IPAM。</p><p>只有 IPAM 成功并配置网络后，容器才启动。因此重复 IP 不是应用启动失败，而是 sandbox 网络创建失败。</p></aside>
+      </section>
+
+      <section class="slide" data-section="静态部署" data-title="创建后等待 Ready，再读取实际 Pod IP">
+        <div class="slide-header"><div><p class="eyebrow">Exercise 4</p><h2>创建后等待 Ready，再读取实际 Pod IP</h2><div class="rule"></div></div></div>
+        <div class="deploy-static"><pre class="code terminal"><span class="prompt">$</span> kubectl apply -f tools/02-static-pod.yaml
+pod/static-pod created
+
+<span class="prompt">$</span> kubectl wait --for=condition=ready \
+    pod/static-pod --timeout=60s
+pod/static-pod condition met
+
+<span class="prompt">$</span> kubectl get pod static-pod -o wide
+static-pod  1/1  Running  <span class="good">192.168.100.10</span>  k01-worker</pre><div class="deploy-evidence"><article><span>API</span><strong>Pod created</strong></article><article><span>CNI</span><strong>IPAM succeeded</strong></article><article><span>Runtime</span><strong>container Ready</strong></article><article><span>Status</span><strong>podIP = .10</strong></article></div></div>
+        <div class="slide-number">21</div>
+        <aside class="speaker-copy"><p>Ready 说明不仅 API 创建成功，CNI 和容器启动也完成。kubectl get -o wide 显示请求的 .10。</p><p>如果只看到 created 就停止，可能漏掉后续 CNI 错误。</p></aside>
+      </section>
+
+      <section class="slide" data-section="控制面证据" data-title="Pod annotation 证明请求内容没有被改写">
+        <div class="slide-header"><div><p class="eyebrow">Exercise 5</p><h2>Pod annotation 证明请求内容没有被改写</h2><div class="rule"></div></div></div>
+        <pre class="code terminal large-output"><span class="prompt">$</span> kubectl get pod static-pod \
+  -o jsonpath='{.metadata.annotations}' | jq .
+
+{
+  <span class="hot">"cni.projectcalico.org/ipAddrs"</span>: 
+  <span class="good">"[\"192.168.100.10\"]"</span>
+}</pre>
+        <div class="grid-3 compact-gap"><div class="flat-block blue"><h3>请求</h3><p class="small">metadata annotation。</p></div><div class="flat-block green"><h3>结果</h3><p class="small">status.podIP = .10。</p></div><div class="flat-block orange"><h3>占用</h3><p class="small">IPAM owner handle。</p></div></div>
+        <div class="slide-number">22</div>
+        <aside class="speaker-copy"><p>annotation 证明控制面保存的是 .10 请求。Pod status 证明 kubelet/CNI 最终使用 .10。</p><p>还可以进一步看 WorkloadEndpoint 和 IPAM owner，形成完整证据链。</p></aside>
+      </section>
+
+      <section class="slide" data-section="WorkloadEndpoint" data-title="WorkloadEndpoint 把 Pod 与接口地址关联起来">
+        <div class="slide-header"><div><p class="eyebrow">Calico workload state</p><h2>WorkloadEndpoint 把 Pod 与接口地址关联起来</h2><div class="rule"></div></div></div>
+        <div class="wep-proof"><article><span>Kubernetes Pod</span><strong>default/static-pod</strong><code>UID + node</code></article><i>›</i><article><span>WorkloadEndpoint</span><strong>interface cali...</strong><code>networks: 192.168.100.10/32</code></article><i>›</i><article><span>Node route</span><strong>192.168.100.10 dev cali...</strong><code>scope link</code></article></div>
+        <pre class="code command-code">calicoctl get workloadendpoints -o wide
+calicoctl get workloadendpoint &lt;name&gt; -o yaml</pre>
+        <div class="slide-number">23</div>
+        <aside class="speaker-copy"><p>WorkloadEndpoint 是 Calico 数据面的工作负载对象，包含 Node、interfaceName 和 networks。</p><p>它把 Kubernetes Pod 身份与 host 侧 cali 接口、/32 路由关联起来。</p></aside>
+      </section>
+
+      <section class="slide" data-section="IPAM 证据" data-title="calicoctl ipam show 能看到当前 Owner">
+        <div class="slide-header"><div><p class="eyebrow">Allocation ownership</p><h2>calicoctl ipam show 能看到当前 Owner</h2><div class="rule"></div></div></div>
+        <div class="ipam-show"><pre class="code terminal"><span class="prompt">$</span> calicoctl ipam show --ip=192.168.100.10
+
+IP 192.168.100.10 is in use
+
+Handle ID: k8s-pod-network.<span class="cool">...</span>
+
+Active Owner Attributes:
+  pod: <span class="good">static-pod</span>
+  namespace: default
+  node: k01-worker</pre><div class="owner-fields"><article><span>IP state</span><strong>in use</strong></article><article><span>handle</span><strong>allocation owner</strong></article><article><span>attributes</span><strong>pod / namespace / node</strong></article></div></div>
+        <div class="slide-number">24</div>
+        <aside class="speaker-copy"><p>ipam show --ip 是冲突排查最直接的命令。它告诉你地址是否占用，以及当前 owner 属性。</p><p>Handle ID 是 IPAM 释放和一致性管理的内部关联，不要把它当作永久 Pod 身份。</p></aside>
+      </section>
+
+      <section class="slide" data-section="Block 证据" data-title="指定地址仍然落在某个 Node IPAM Block 中">
+        <div class="slide-header"><div><p class="eyebrow">Block affinity still matters</p><h2>指定地址仍然落在某个 Node IPAM Block 中</h2><div class="rule"></div></div></div>
+        <pre class="code terminal wide-terminal"><span class="prompt">$</span> calicoctl ipam show --show-blocks
+
+GROUPING  CIDR                 IPS TOTAL  IPS IN USE  IPS FREE
+IP Pool   192.168.0.0/16       65536      ...         ...
+Block     <span class="hot">192.168.100.0/26</span>     64         ...         ...</pre>
+        <div class="block-containment"><span>192.168.0.0/16 Pool</span><div><b>192.168.100.0/26 block</b><code>contains 192.168.100.10</code></div><strong>affinity / borrowing rules still apply</strong></div>
+        <div class="slide-number">25</div>
+        <aside class="speaker-copy"><p>指定 IP 仍属于一个 /26 block。IPAM 可能需要为当前 Node 申请这个 block，或者按配置借用地址。</p><p>静态申请不会绕过 block affinity、pool 和 IPAM bookkeeping。</p></aside>
+      </section>
+
+      <section class="slide" data-section="连通性" data-title="动态 Pod 可以直接 Ping 静态地址">
+        <div class="slide-header"><div><p class="eyebrow">Exercise 6</p><h2>动态 Pod 可以直接 Ping 静态地址</h2><div class="rule"></div></div></div>
+        <pre class="code terminal large-output"><span class="prompt">$</span> kubectl exec -it dynamic-pod -- \
+    ping -c 3 <span class="hot">192.168.100.10</span>
+
+64 bytes from 192.168.100.10: seq=0 ttl=63 time=0.123 ms
+64 bytes from 192.168.100.10: seq=1 ttl=63 time=0.089 ms
+64 bytes from 192.168.100.10: seq=2 ttl=63 time=0.091 ms
+
+3 packets transmitted, 3 packets received, 0% packet loss</pre>
+        <div class="result-row"><article><span>source</span><strong>dynamic-pod</strong></article><article><span>target</span><strong>192.168.100.10</strong></article><article><span>route</span><strong>Calico Pod network</strong></article><article><span>loss</span><strong>0%</strong></article></div>
+        <div class="slide-number">26</div>
+        <aside class="speaker-copy"><p>从动态 Pod ping 静态 Pod，三次成功。它证明 .10 已经成为正常 Pod 网络 endpoint，而不只是 API 状态字段。</p><p>TTL 取决于同节点还是跨节点路径，现场不必和示例完全一致。</p></aside>
+      </section>
+
+      <section class="slide" data-section="包路径" data-title="指定地址不会改变普通 Pod 数据路径">
+        <div class="slide-header"><div><p class="eyebrow">Same routing after allocation</p><h2>指定地址不会改变普通 Pod 数据路径</h2><div class="rule"></div></div><button class="action-btn" data-replay="#packet-flow" type="button" title="重放动画" aria-label="重放静态 Pod IP 路径">↻</button></div>
+        <div class="packet-flow is-playing" id="packet-flow"><article><span>dynamic-pod</span><strong>192.168.x.x</strong></article><div class="packet-track"><i>ICMP</i></div><article class="node"><span>Node routing</span><strong>/32 endpoint route</strong></article><div class="packet-track"><i>forward</i></div><article><span>static-pod</span><strong>192.168.100.10</strong></article></div>
+        <div class="grid-3 compact-gap"><div class="flat-block blue"><h3>同 Node</h3><p class="small">host route + cali veth。</p></div><div class="flat-block green"><h3>跨 Node</h3><p class="small">Calico route / VXLAN 按 pool 配置。</p></div><div class="flat-block yellow"><h3>无特殊代理</h3><p class="small">没有为静态地址增加独立转发器。</p></div></div>
+        <div class="slide-number">27</div>
+        <aside class="speaker-copy"><p>IPAM 选定地址后，数据面和普通 Pod 完全一样。Node 安装 endpoint route，包送到对应 cali veth。</p><p>静态 IP 不是 NAT，也不是 floating VIP。它就是 Pod 接口的主地址。</p></aside>
+      </section>
+
+      <section class="slide" data-section="冲突清单" data-title="duplicate-pod 故意请求同一个地址">
+        <div class="slide-header"><div><p class="eyebrow">tools/03-duplicate-ip-pod.yaml</p><h2>duplicate-pod 故意请求同一个地址</h2><div class="rule"></div></div></div>
+        <div class="yaml-compare"><article><h3>static-pod</h3><pre class="code"><span class="key">metadata:</span>
+  <span class="key">name:</span> static-pod
+  <span class="key">annotations:</span>
+    <span class="hot">cni.projectcalico.org/ipAddrs:</span>
+      <span class="value">'["192.168.100.10"]'</span>
+
+<span class="good"># already Running</span></pre></article><article><h3>duplicate-pod</h3><pre class="code"><span class="key">metadata:</span>
+  <span class="key">name:</span> duplicate-pod
+  <span class="key">annotations:</span>
+    <span class="hot">cni.projectcalico.org/ipAddrs:</span>
+      <span class="value">'["192.168.100.10"]'</span>
+
+<span class="error"># expected to fail CNI ADD</span></pre></article></div>
+        <div class="callout"><strong>冲突粒度：</strong>唯一性由 IPAM allocation 保证，不因为 Pod 名、Node 或 namespace 不同而允许重复。</div>
+        <div class="slide-number">28</div>
+        <aside class="speaker-copy"><p>两个清单唯一关键差异是 Pod 名，ipAddrs 完全相同。第二次申请必须失败。</p><p>IP 地址在整个 Calico IPAM 范围内唯一，不按 namespace 隔离。</p></aside>
+      </section>
+
+      <section class="slide" data-section="冲突处理" data-title="重复申请在 IPAM 唯一性检查处被拒绝">
+        <div class="slide-header"><div><p class="eyebrow">Exercise 7</p><h2>重复申请在 IPAM 唯一性检查处被拒绝</h2><div class="rule"></div></div><button class="action-btn" data-replay="#conflict-flow" type="button" title="重放动画" aria-label="重放重复 IP 冲突">↻</button></div>
+        <div class="conflict-flow is-playing" id="conflict-flow"><article><span>duplicate-pod</span><strong>REQUEST .10</strong></article><div class="conflict-track"><i>CNI ADD</i></div><article class="ipam"><span>Calico IPAM</span><strong>.10 owner lookup</strong><code>static-pod</code></article><div class="conflict-track denied"><i>DENY</i></div><article class="failed"><span>Kubelet</span><strong>ContainerCreating</strong><code>FailedCreatePodSandBox</code></article></div>
+        <div class="flat-block red"><p class="body">Pod 对象已经存在，但 sandbox 网络没有创建成功，容器不会得到一个“备用动态 IP”。</p></div>
+        <div class="slide-number">29</div>
+        <aside class="speaker-copy"><p>第二个 CNI ADD 查询 .10，发现 owner 是 static-pod，于是拒绝分配。</p><p>Calico不会静默换一个动态地址，因为 annotation 表达的是明确要求。Kubelet 反复重试时 Pod 保持 ContainerCreating。</p></aside>
+      </section>
+
+      <section class="slide" data-section="事件证据" data-title="Pod Event 才能解释 ContainerCreating 原因">
+        <div class="slide-header"><div><p class="eyebrow">Read the failure at the right layer</p><h2>Pod Event 才能解释 ContainerCreating 原因</h2><div class="rule"></div></div></div>
+        <pre class="code terminal large-output"><span class="prompt">$</span> kubectl get pod duplicate-pod
+duplicate-pod  0/1  <span class="hot">ContainerCreating</span>  0  30s
+
+<span class="prompt">$</span> kubectl describe pod duplicate-pod | tail -20
+Warning  FailedCreatePodSandBox  kubelet
+  failed to setup network for sandbox ...
+  <span class="error">IP address 192.168.100.10 is already assigned</span></pre>
+        <div class="grid-3 compact-gap"><div class="flat-block blue"><h3>Pod phase</h3><p class="small">只告诉你尚未创建完成。</p></div><div class="flat-block orange"><h3>Event</h3><p class="small">定位 CNI sandbox failure。</p></div><div class="flat-block green"><h3>IPAM show</h3><p class="small">确认当前 owner。</p></div></div>
+        <div class="slide-number">30</div>
+        <aside class="speaker-copy"><p>ContainerCreating 是表象，describe Event 才会显示 IP already assigned。再用 ipam show 查 owner。</p><p>排错不要反复删除镜像或重启 runtime，因为失败发生在 CNI IPAM 层。</p></aside>
+      </section>
+
+      <section class="slide" data-section="冲突清理" data-title="删除失败 Pod 不会影响当前 Owner">
+        <div class="slide-header"><div><p class="eyebrow">Clean up the requester, not the owner</p><h2>删除失败 Pod 不会影响当前 Owner</h2><div class="rule"></div></div></div>
+        <div class="cleanup-conflict"><article class="owner"><span>static-pod</span><strong>owns .10</strong><code>Running</code></article><article class="requester"><span>duplicate-pod</span><strong>never acquired .10</strong><code>ContainerCreating</code></article><div class="delete-action"><code>kubectl delete pod duplicate-pod</code><strong>safe cleanup</strong></div></div>
+        <div class="callout"><strong>不要手工 release：</strong>只要 static-pod 仍在使用 .10，就不能运行 <code>calicoctl ipam release --ip=...</code>。该命令不会从活动接口移除地址，误用会造成重复分配风险。</div>
+        <div class="slide-number">31</div>
+        <aside class="speaker-copy"><p>duplicate-pod 从未成功占用地址，删除它只是清理失败对象，不影响 static-pod。</p><p>不要为了“解冲突”手工 release 活动 Pod 的 IP。官方明确提醒 release 不会修改现有 endpoint。</p></aside>
+      </section>
+
+      <section class="slide" data-section="释放与重建" data-title="删除成功 Pod 后 CNI DEL 释放地址">
+        <div class="slide-header"><div><p class="eyebrow">Deletion lifecycle</p><h2>删除成功 Pod 后 CNI DEL 释放地址</h2><div class="rule"></div></div><button class="action-btn" data-replay="#release-flow" type="button" title="重放动画" aria-label="重放静态 IP 释放">↻</button></div>
+        <div class="release-flow is-playing" id="release-flow"><article><span>Running</span><strong>static-pod</strong><code>.10 allocated</code></article><div class="release-track"><i>DELETE</i></div><article class="cni"><span>Kubelet / CNI</span><strong>CNI DEL</strong><code>remove endpoint + route</code></article><div class="release-track"><i>RELEASE</i></div><article class="free"><span>Calico IPAM</span><strong>.10 free</strong><code>still reserved from auto</code></article></div>
+        <pre class="code command-code">kubectl delete pod static-pod
+kubectl wait --for=delete pod/static-pod --timeout=60s
+calicoctl ipam show --ip=192.168.100.10</pre>
+        <div class="slide-number">32</div>
+        <aside class="speaker-copy"><p>Pod 删除后 kubelet 调用 CNI DEL，Calico 删除 WorkloadEndpoint、路由并释放 IPAM allocation。</p><p>.10 重新 free，但 reservation 仍在，所以自动 Pod 不会拿走它。</p></aside>
+      </section>
+
+      <section class="slide" data-section="释放与重建" data-title="相同清单重建后再次申请同一个 IP">
+        <div class="slide-header"><div><p class="eyebrow">Exercise 8</p><h2>相同清单重建后再次申请同一个 IP</h2><div class="rule"></div></div><button class="action-btn" data-replay="#recreate-flow" type="button" title="重放动画" aria-label="重放静态 IP 重建">↻</button></div>
+        <div class="recreate-flow is-playing" id="recreate-flow"><article><span>old Pod</span><strong>.10 released</strong></article><div class="recreate-track"><i>apply YAML</i></div><article class="annotation"><span>new Pod object</span><strong>ipAddrs: .10</strong></article><div class="recreate-track"><i>IPAM</i></div><article class="result"><span>new sandbox</span><strong>192.168.100.10</strong></article></div>
+        <pre class="code command-code">kubectl apply -f tools/02-static-pod.yaml
+kubectl wait --for=condition=ready pod/static-pod --timeout=60s
+kubectl get pod static-pod -o wide</pre>
+        <div class="slide-number">33</div>
+        <aside class="speaker-copy"><p>重建的 Pod 是新对象，CNI 再次读取 annotation，发现 .10 已释放，于是重新分配。</p><p>结果地址相同来自相同请求，不是 Calico 按 Pod 名记住了旧地址。</p></aside>
+      </section>
+
+      <section class="slide" data-section="持久性边界" data-title="静态 IP 是可重复申请，不是永久租约">
+        <div class="slide-header"><div><p class="eyebrow">What persists and what does not</p><h2>静态 IP 是可重复申请，不是永久租约</h2><div class="rule"></div></div></div>
+        <div class="persistence-split"><article class="persists"><span>保持</span><h3>YAML 中的 IP 请求</h3><p>控制器每次创建 Pod template 都携带相同 annotation。</p><code>desired IP = .10</code></article><article class="changes"><span>变化</span><h3>Pod UID 与 IPAM handle</h3><p>每次删除重建产生新对象和新的 allocation owner。</p><code>new Pod, new handle</code></article></div>
+        <div class="flat-block red"><p class="body">删除到重建之间，地址处于 free 状态。Reservation 防止自动分配抢走它，但另一个显式静态请求仍可能申请它。</p></div>
+        <div class="slide-number">34</div>
+        <aside class="speaker-copy"><p>“静态 IP 持久”容易让人误以为地址永远绑定 Pod 名。实际持久的是部署清单中的请求。</p><p>Reservation 只挡自动分配。另一个有权限写 ipAddrs 的用户仍可在窗口期申请 .10，所以需要准入控制和变更流程。</p></aside>
+      </section>
+
+      <section class="slide" data-section="创建时语义" data-title="运行后补 annotation 不会重配 Pod 网络">
+        <div class="slide-header"><div><p class="eyebrow">CNI is not rerun for metadata edits</p><h2>运行后补 annotation 不会重配 Pod 网络</h2><div class="rule"></div></div></div>
+        <div class="late-annotation"><article><span>1</span><h3>Pod Running</h3><code>podIP = 192.168.x.x</code></article><i>›</i><article><span>2</span><h3>kubectl annotate</h3><code>ipAddrs='[".10"]'</code></article><i>›</i><article class="nochange"><span>3</span><h3>No CNI ADD</h3><code>podIP unchanged</code></article></div>
+        <div class="callout"><strong>正确操作：</strong>把 annotation 写进 Pod template，然后删除旧 Pod，让控制器创建新的 sandbox。</div>
+        <div class="slide-number">35</div>
+        <aside class="speaker-copy"><p>更新 metadata 不会让 kubelet重建网络 namespace，也不会再次调用 CNI ADD。</p><p>要改变 Pod IP 必须创建新 Pod。对于 Deployment/StatefulSet，要改 spec.template.metadata.annotations。</p></aside>
+      </section>
+
+      <section class="slide" data-section="错误场景" data-title="请求 Pool 外地址会在 CNI 阶段失败">
+        <div class="slide-header"><div><p class="eyebrow">The address must belong to an IPPool</p><h2>请求 Pool 外地址会在 CNI 阶段失败</h2><div class="rule"></div></div></div>
+        <div class="outside-pool"><article class="pool"><span>Configured Pool</span><strong>192.168.0.0/16</strong><div class="pool-area"><b>192.168.100.10</b></div></article><article class="outside"><span>Requested</span><strong>10.50.0.10</strong><p>outside all Calico IPPools</p><b>REJECT</b></article></div>
+        <div class="grid-2 compact-gap"><div class="flat-block red"><h3><code>ipAddrs</code></h3><p class="body">要求地址在 Calico IPPool 内。</p></div><div class="flat-block yellow"><h3><code>ipAddrsNoIpam</code></h3><p class="body">另一高风险特性，可绕过 IPAM，但路由和冲突需自行负责。</p></div></div>
+        <div class="slide-number">36</div>
+        <aside class="speaker-copy"><p>普通 ipAddrs 请求池外地址会失败。它的价值正是仍由 Calico IPAM 管理。</p><p>不要为了绕过错误随便启用 ipAddrsNoIpam。那会把冲突、路由甚至 IP spoofing 风险交给用户。</p></aside>
+      </section>
+
+      <section class="slide" data-section="预留方案" data-title="少量地址用 Reservation，大段地址用专用 Pool">
+        <div class="slide-header"><div><p class="eyebrow">Choose the reservation boundary</p><h2>少量地址用 Reservation，大段地址用专用 Pool</h2><div class="rule"></div></div></div>
+        <table class="data-table option-table"><thead><tr><th>方案</th><th>配置</th><th>适合规模</th><th>特点</th></tr></thead><tbody><tr><td>IPReservation</td><td>在现有 pool 中列 reservedCIDRs</td><td>少量 IP / 小 CIDR</td><td>动态 allocator 跳过，手工仍可用</td></tr><tr><td>Manual-only IPPool</td><td><code>nodeSelector: "!all()"</code></td><td>完整地址段</td><td>整个 pool 不自动分配</td></tr><tr><td>Topology pool</td><td>按 Node/区域 selector 分池</td><td>按拓扑管理</td><td>限制哪些 Node 可使用</td></tr></tbody></table>
+        <div class="callout"><strong>共同要求：</strong>静态请求仍必须落在配置 IPPool 内，且当前没有其他 endpoint 占用。</div>
+        <div class="slide-number">37</div>
+        <aside class="speaker-copy"><p>少量地址嵌在大 pool 中，Reservation 最方便。整段都用于手工分配时，用 !all() 的专用 pool 更清晰。</p><p>如果还要按 rack、namespace 或 Node 管理，则结合多 IPPool 和 selector。</p></aside>
+      </section>
+
+      <section class="slide" data-section="双栈扩展" data-title="双栈 Pod 可以同时请求一个 IPv4 与一个 IPv6">
+        <div class="slide-header"><div><p class="eyebrow">One address per family</p><h2>双栈 Pod 可以同时请求一个 IPv4 与一个 IPv6</h2><div class="rule"></div></div></div>
+        <div class="dual-request"><pre class="code manifest-code"><span class="key">metadata:</span>
+  <span class="key">annotations:</span>
+    <span class="hot">cni.projectcalico.org/ipAddrs:</span>
+      <span class="value">'["192.168.100.10", "fd00:10:244::10"]'</span></pre><div class="dual-results"><article><span>IPv4</span><strong>192.168.100.10</strong><p>必须位于 IPv4 IPPool。</p></article><article><span>IPv6</span><strong>fd00:10:244::10</strong><p>必须位于 IPv6 IPPool。</p></article></div></div>
+        <div class="flat-block yellow"><p class="body">当前限制是每地址族一个具体地址。课程环境是 IPv4-only，因此主实验只申请一个 IPv4。</p></div>
+        <div class="slide-number">38</div>
+        <aside class="speaker-copy"><p>在双栈集群中数组可以包含一个 IPv4 和一个 IPv6。两者分别由对应 IPPool 校验。</p><p>不能用这个 annotation 给同一 Pod 请求两个 IPv4。多接口或多地址需求要看 Multus 等其他方案。</p></aside>
+      </section>
+
+      <section class="slide" data-section="No-IPAM 风险" data-title="ipAddrsNoIpam 会绕过冲突与分配管理">
+        <div class="slide-header"><div><p class="eyebrow">A different, disabled-by-default feature</p><h2>ipAddrsNoIpam 会绕过冲突与分配管理</h2><div class="rule"></div></div></div>
+        <div class="noipam-compare"><article class="managed"><span>ipAddrs</span><h3>Calico IPAM 管理</h3><p>检查 pool、冲突、allocation、释放与 owner。</p><strong>本课程使用</strong></article><article class="unmanaged"><span>ipAddrsNoIpam</span><h3>绕过 IPAM</h3><p>冲突和路由交给其他系统，默认关闭，还可能扩大 IP spoofing 风险。</p><strong>本课程不使用</strong></article></div>
+        <div class="callout"><strong>路由限制：</strong>官方说明在 VXLAN 模式下，Calico 不会为 No-IPAM 地址自动发布路由；使用者必须另行保证可达性。</div>
+        <div class="slide-number">39</div>
+        <aside class="speaker-copy"><p>ipAddrsNoIpam 名字很像，但语义完全不同。它不在 IPAM 建 allocation，因此 Calico不能替你防重复。</p><p>除非有外部 IPAM、路由系统和准入控制，否则不要开启。</p></aside>
+      </section>
+
+      <section class="slide" data-section="控制器用法" data-title="在 Pod template 中配置，避免手工创建孤立 Pod">
+        <div class="slide-header"><div><p class="eyebrow">Controllers recreate from templates</p><h2>在 Pod template 中配置，避免手工创建孤立 Pod</h2><div class="rule"></div></div></div>
+        <div class="template-path"><article><span>Deployment / StatefulSet</span><strong>spec.template.metadata.annotations</strong></article><i>›</i><article><span>Controller</span><strong>creates replacement Pod</strong></article><i>›</i><article><span>CNI</span><strong>requests same IP</strong></article></div>
+        <div class="flat-block red"><p class="body"><strong>副本限制：</strong>同一个 template 中写单个静态 IP 时，replicas 必须为 1。扩到 2 个副本会让第二个 Pod 与第一个冲突。</p></div>
+        <div class="slide-number">40</div>
+        <aside class="speaker-copy"><p>生产通常由控制器重建 Pod，所以 annotation 要放 template。手工 Pod 删除后不会自动回来。</p><p>单个静态地址只能给一个副本。Deployment replicas 大于 1 时，所有副本请求同一地址会冲突。</p></aside>
+      </section>
+
+      <section class="slide" data-section="生产风险" data-title="静态 Pod IP 把调度问题变成地址协调问题">
+        <div class="slide-header"><div><p class="eyebrow">Operational costs</p><h2>静态 Pod IP 把调度问题变成地址协调问题</h2><div class="rule"></div></div></div>
+        <div class="risk-grid"><article><span>01</span><h3>并发重建</h3><p>旧 Pod 尚未释放时，新 Pod 请求同一 IP 会失败。</p></article><article><span>02</span><h3>扩缩容</h3><p>一个 template 不能让多个副本共享同一静态地址。</p></article><article><span>03</span><h3>权限</h3><p>有权写 ipAddrs 的租户可抢占预留地址。</p></article><article><span>04</span><h3>外部依赖</h3><p>IP 白名单、DNS 与监控都要同步生命周期。</p></article></div>
+        <div class="flat-block yellow"><p class="body">为关键静态地址建立唯一 owner、准入校验、变更审批和冲突告警。Reservation 本身不表达“谁有权申请”。</p></div>
+        <div class="slide-number">41</div>
+        <aside class="speaker-copy"><p>静态 IP 减少地址变化，却增加生命周期协调。rolling update 若先启动新 Pod，再删除旧 Pod，就会冲突。</p><p>还要控制谁能写 annotation。Reservation 防自动分配，不是授权系统。</p></aside>
+      </section>
+
+      <section class="slide" data-section="排障" data-title="沿 Annotation、IPAM、WEP 与 Route 查第一个断点">
+        <div class="slide-header"><div><p class="eyebrow">Troubleshooting ladder</p><h2>沿 Annotation、IPAM、WEP 与 Route 查第一个断点</h2><div class="rule"></div></div></div>
+        <div class="trouble-grid"><article><span>1</span><h3>Annotation</h3><code>kubectl get pod -o yaml</code><p>JSON array 格式与地址是否正确。</p></article><article><span>2</span><h3>Pool / Reservation</h3><code>kubectl get ippool,ipreservation</code><p>地址范围与预留时序。</p></article><article><span>3</span><h3>Pod Events</h3><code>kubectl describe pod</code><p>CNI ADD 的真实错误。</p></article><article><span>4</span><h3>IPAM Owner</h3><code>calicoctl ipam show --ip</code><p>地址当前归属谁。</p></article><article><span>5</span><h3>WorkloadEndpoint</h3><code>calicoctl get wep -o wide</code><p>接口与 /32 是否生成。</p></article><article><span>6</span><h3>Route / Connectivity</h3><code>ip route / ping / tcpdump</code><p>数据面是否可达。</p></article></div>
+        <div class="slide-number">42</div>
+        <aside class="speaker-copy"><p>排障从 Pod annotation 和 pool 范围开始。ContainerCreating 先看 Event，再查 IPAM owner。</p><p>分配成功但不通，再看 WorkloadEndpoint、Node route、NetworkPolicy 和应用进程。</p></aside>
+      </section>
+
+      <section class="slide" data-section="现场演示" data-title="十五分钟静态 IP 演示顺序">
+        <div class="slide-header"><div><p class="eyebrow">From reservation to conflict handling</p><h2>十五分钟静态 IP 演示顺序</h2><div class="rule"></div></div></div>
+        <div class="demo-columns"><ol><li><code>kubectl get ippools</code><span>确认 192.168.0.0/16</span></li><li><code>kubectl get ipreservation reserved-ips -o yaml</code><span>确认 .8/29</span></li><li><code>kubectl get pod dynamic-pod -o wide</code><span>证明动态地址避开预留段</span></li><li><code>kubectl apply -f 02-static-pod.yaml</code><span>创建静态 Pod</span></li><li><code>kubectl get pod static-pod -o wide</code><span>确认 .10</span></li></ol><ol start="6"><li><code>calicoctl ipam show --ip=192.168.100.10</code><span>查看 owner</span></li><li><code>ping -c 3 192.168.100.10</code><span>验证数据面</span></li><li><code>kubectl apply -f 03-duplicate-ip-pod.yaml</code><span>触发冲突并读 Event</span></li><li><code>delete + apply 02-static-pod.yaml</code><span>验证释放与重申领</span></li><li><code>./destroy.sh</code><span>清理 topology</span></li></ol></div>
+        <div class="callout"><strong>演讲技巧：</strong>每一步先说它验证的是自动分配、显式请求、唯一性还是释放，避免只念 kubectl 输出。</div>
+        <div class="slide-number">43</div>
+        <aside class="speaker-copy"><p>演示顺序先证明 reservation，再做静态分配、IPAM owner、连通性、冲突和重建。</p><p>冲突演示后先删 duplicate-pod。删除 static-pod 时等它完全消失，再重建，避免旧 allocation 尚未释放。</p></aside>
+      </section>
+
+      <section class="slide" data-section="总结与来源" data-title="静态 Pod IP 的完整证据链">
+        <div class="slide-header"><div><p class="eyebrow">Summary and sources</p><h2>静态 Pod IP 的完整证据链</h2><div class="rule"></div></div></div>
+        <div class="summary-row"><article><span>01</span><h3>保护</h3><p>IPReservation 把少量地址从自动分配候选中排除。</p></article><article><span>02</span><h3>申请</h3><p>Pod 创建时的 ipAddrs 明确请求 Pool 内唯一地址。</p></article><article><span>03</span><h3>证明</h3><p>Pod status、WEP、IPAM owner 与连通性共同验证结果。</p></article><article><span>04</span><h3>生命周期</h3><p>删除会释放 allocation，重建必须再次请求同一地址。</p></article></div>
+        <div class="sources"><article><strong>Lesson 16</strong><a href="https://k8snetworking.com/lessons/16-static-ip">k8snetworking.com/lessons/16-static-ip</a></article><article><strong>课程仓库</strong><a href="https://github.com/aadhilam/k8-networking-calico-containerlab/tree/master/containerlab/16-static-ip">github.com/aadhilam/.../16-static-ip</a></article><article><strong>Specific Pod IP</strong><a href="https://docs.tigera.io/calico/latest/networking/ipam/use-specific-ip">docs.tigera.io/.../use-specific-ip</a></article><article><strong>IPReservation</strong><a href="https://docs.tigera.io/calico/latest/reference/resources/ipreservation">docs.tigera.io/.../ipreservation</a></article></div>
+        <div class="slide-number">44</div>
+        <aside class="speaker-copy"><p>最后记住四层：Reservation 保护自动分配，annotation 提出请求，IPAM 保证唯一性，CNI 负责配置和释放。</p><p>静态 IP 适合少量有明确外部契约的工作负载。大多数应用仍应优先依赖 Service 和稳定 DNS。</p></aside>
+      </section>
+    </div>
+    <div class="progress-track" aria-hidden="true"><div id="progress-fill"></div></div>
+    <nav class="controls" aria-label="演示控制"><button class="tool-btn" id="prev" type="button" title="上一页" aria-label="上一页">‹</button><button class="tool-btn" id="next" type="button" title="下一页" aria-label="下一页">›</button><button class="tool-btn" id="notes-toggle" type="button" title="讲稿" aria-label="显示或隐藏讲稿" aria-pressed="false">N</button><button class="tool-btn" id="overview-toggle" type="button" title="总览" aria-label="显示或隐藏总览" aria-pressed="false">▦</button><button class="tool-btn" id="fullscreen" type="button" title="全屏" aria-label="切换全屏">⛶</button></nav>
+    <button class="notes-backdrop" id="notes-backdrop" type="button" aria-label="关闭讲稿" tabindex="-1"></button>
+    <aside class="notes-panel" id="notes-panel" aria-live="polite" aria-hidden="true"><div class="notes-header"><h2 id="notes-title">讲稿</h2><button class="notes-close" id="notes-close" type="button" title="关闭讲稿" aria-label="关闭讲稿">×</button></div><div id="notes-body"></div></aside>
+    <aside class="overview" id="overview" aria-label="幻灯片总览"></aside>
+  </main>
+  <script src="app.js?v=1"></script>
+</body>
+</html>

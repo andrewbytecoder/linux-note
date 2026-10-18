@@ -1,0 +1,515 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="基于 Kubernetes Networking Labs Lesson 15 的 Calico 选择性 BGP Peering、节点标签、LoadBalancer 广告与 ECMP 中文动态演示课件">
+  <title>Selective BGP Peering：只让指定 Node 对接 ToR</title>
+  <link rel="stylesheet" href="styles.css?v=1">
+</head>
+<body>
+  <main class="deck-shell" aria-label="Calico Selective BGP Peering HTML 演示文稿">
+    <div id="deck-canvas">
+      <section class="slide cover active" data-section="Selective BGP Peering" data-title="只让指定 Node 对接 ToR">
+        <div class="cover-layout selective-cover-layout">
+          <div class="cover-copy">
+            <p class="eyebrow">Lesson 15 · BGPPeer · nodeSelector · ECMP</p>
+            <h1>Selective BGP Peering<br><span class="yellow-mark">只让指定 Node 对接 ToR</span></h1>
+            <p class="lead">五台 Node 全部接入 VLAN，只有两台 speaker 建立 eBGP，外部网络仍能访问任意节点上的 Service 后端。</p>
+            <div class="cover-meta"><span>bgp-peer=true</span><span>AS 65010 ↔ 65001</span><span>172.16.0.240/28</span></div>
+          </div>
+          <div class="selective-cover is-playing" id="cover-flow" aria-label="cEOS 只与两个 BGP speaker 建立会话">
+            <article class="cover-tor"><span>cEOS ToR</span><strong>AS 65001</strong><code>10.10.10.1</code></article>
+            <div class="cover-sessions"><div class="session-line s1"><i>BGP</i></div><div class="session-line s2"><i>BGP</i></div></div>
+            <div class="cover-workers"><article class="speaker"><b>worker</b><code>.11</code><span>speaker</span></article><article class="speaker"><b>worker2</b><code>.12</code><span>speaker</span></article><article><b>control</b><code>.10</code><span>no peer</span></article><article><b>worker3</b><code>.13</code><span>no peer</span></article><article><b>worker4</b><code>.14</code><span>no peer</span></article></div>
+            <div class="cover-prefix"><strong>Advertised</strong><span>172.16.0.240/28</span><b>2 sessions, not 5</b></div>
+          </div>
+        </div>
+        <aside class="speaker-copy"><p>大家好，这一节讲选择性 BGP Peering。五台 Kubernetes Node 都物理连接 ToR，但只有 worker 和 worker2 建立 BGP 会话。</p><p>外部网络从这两台 speaker 学到 LoadBalancer 地址段。流量进入任意 speaker 后，再通过 Service 数据面和集群内部 Pod 网络到达真正后端。</p><p class="note-source">主课程：<a href="https://k8snetworking.com/lessons/15-selective-bgp-peering">https://k8snetworking.com/lessons/15-selective-bgp-peering</a></p></aside>
+      </section>
+
+      <section class="slide" data-section="扩展问题" data-title="每台 Node 都对接 ToR 会快速消耗会话容量">
+        <div class="slide-header"><div><p class="eyebrow">One external session per node</p><h2>每台 Node 都对接 ToR 会快速消耗会话容量</h2><div class="rule"></div></div></div>
+        <div class="all-peer-problem"><article class="tor"><span>ToR</span><strong>finite peer capacity</strong></article><div class="session-stack"><span>session 1</span><span>session 2</span><span>session 3</span><span>session 4</span><span>...</span><span>session N</span></div><div class="node-stack"><article>node-1</article><article>node-2</article><article>node-3</article><article>node-4</article><article>...</article><article>node-N</article></div></div>
+        <div class="quad-row"><article><b>会话资源</b><span>ToR 需要维护每台 Node 的状态</span></article><article><b>Route update</b><span>邻居越多，更新与 keepalive 越多</span></article><article><b>运维面</b><span>告警、变更和排障对象线性增加</span></article><article><b>硬件上限</b><span>平台可支持的 peers 数有限</span></article></div>
+        <div class="slide-number">02</div>
+        <aside class="speaker-copy"><p>如果集群 500 台 Node 全部直连 ToR，就要维护 500 个外部 BGP session。ToR 的 CPU、内存和 peer 配额都会承压。</p><p>课程提到常见设备可能只有几十到一百多个 peer 容量，具体数字取决于型号和软件版本，生产设计要查设备规格。</p></aside>
+      </section>
+
+      <section class="slide" data-section="会话规模" data-title="外部会话线性增长，内部 full mesh 更快增长">
+        <div class="slide-header"><div><p class="eyebrow">Separate two scaling problems</p><h2>外部会话线性增长，内部 full mesh 更快增长</h2><div class="rule"></div></div></div>
+        <div class="math-compare"><article><span>Node ↔ ToR</span><strong>N</strong><p>每台 Node 一条外部会话。</p><code>500 nodes = 500 ToR peers</code></article><article><span>Node-to-node full mesh</span><strong>N(N−1)/2</strong><p>每对 Node 一条内部 iBGP 会话。</p><code>500 nodes = 124,750 sessions</code></article><article><span>本实验</span><strong>2</strong><p>外部只选择两台 speaker，内部 mesh 已关闭。</p><code>5 nodes → 2 ToR peers</code></article></div>
+        <div class="callout"><strong>不要混淆：</strong>本课的 <code>nodeSelector</code> 解决外部 ToR peering；Route Reflector 主要解决大型集群的内部 iBGP 拓扑。</div>
+        <div class="slide-number">03</div>
+        <aside class="speaker-copy"><p>这里有两个不同的扩展问题。所有 Node 对接 ToR 是 N 条外部会话，Node 内部 full mesh 是 N 平方级。</p><p>课程同时关闭 node-to-node mesh，但核心演示是 nodeSelector 控制哪些 Node 对接外部 cEOS。</p></aside>
+      </section>
+
+      <section class="slide" data-section="解决方案" data-title="BGP Speaker 是集群的外部路由入口">
+        <div class="slide-header"><div><p class="eyebrow">Designated external speakers</p><h2>BGP Speaker 是集群的外部路由入口</h2><div class="rule"></div></div></div>
+        <div class="speaker-role"><div class="speaker-pair"><article><span>worker</span><strong>speaker A</strong><code>bgp-peer=true</code></article><article><span>worker2</span><strong>speaker B</strong><code>bgp-peer=true</code></article></div><div class="speaker-duties"><article><b>建立 eBGP</b><span>对接 AS 65001</span></article><article><b>发布 LB CIDR</b><span>172.16.0.240/28</span></article><article><b>接收入站包</b><span>ECMP 选择入口</span></article><article><b>转发到后端</b><span>后端可在任意 Node</span></article></div></div>
+        <div class="flat-block green"><p class="body">Speaker 不是专用网关进程。它仍是普通 Kubernetes Node，只是额外承担与外部网络建立 BGP 的角色。</p></div>
+        <div class="slide-number">04</div>
+        <aside class="speaker-copy"><p>Speaker 节点和其他 Node 一样运行 kubelet、Calico 和 kube-proxy，只是标签让它们额外建立外部 BGP。</p><p>它们发布 Service 地址段并接收入站流量。Pod 不需要固定在 speaker 上。</p></aside>
+      </section>
+
+      <section class="slide" data-section="流量模型" data-title="外部流量先到 Speaker，再到任意后端 Pod">
+        <div class="slide-header"><div><p class="eyebrow">Ingress through selected BGP nodes</p><h2>外部流量先到 Speaker，再到任意后端 Pod</h2><div class="rule"></div></div><button class="action-btn" data-replay="#traffic-model" type="button" title="重放动画" aria-label="重放选择性 BGP 流量">↻</button></div>
+        <div class="traffic-model is-playing" id="traffic-model"><article><span>external / cEOS</span><strong>172.16.0.241:80</strong></article><div class="traffic-track"><i>ECMP</i></div><article class="speaker"><span>speaker node</span><strong>worker / worker2</strong></article><div class="traffic-track"><i>DNAT</i></div><article><span>Service backend</span><strong>nginx Pod</strong><code>worker4 is allowed</code></article></div>
+        <div class="process-strip"><span>ToR route lookup</span><span>speaker receives packet</span><span>kube-proxy selects Endpoint</span><span>Calico pod network forwards</span></div>
+        <div class="slide-number">05</div>
+        <aside class="speaker-copy"><p>外部包的目标是 LoadBalancer IP。cEOS 通过 ECMP 选择一个 speaker next hop。</p><p>Speaker 上的 Service 数据面把连接 DNAT 到后端 Pod。后端可以位于 worker3 或 worker4，并不要求 BGP label。</p></aside>
+      </section>
+
+      <section class="slide" data-section="实验拓扑" data-title="一个 ToR、五台 Node、两台 Speaker">
+        <div class="slide-header"><div><p class="eyebrow">ContainerLab topology</p><h2>一个 ToR、五台 Node、两台 Speaker</h2><div class="rule"></div></div><button class="action-btn" data-replay="#lab-topology" type="button" title="重放动画" aria-label="重放实验拓扑动画">↻</button></div>
+        <div class="bgp-topology is-playing" id="lab-topology"><article class="bgp-tor"><span>cEOS Vlan10</span><strong>10.10.10.1</strong><code>AS 65001</code></article><div class="bgp-session-bus"><div class="bgp-session-lane a"><i>BGP</i></div><div class="bgp-session-lane b"><i>BGP</i></div></div><div class="bgp-nodes"><article class="speaker"><b>worker</b><code>10.10.10.11</code><span>AS 65010</span></article><article class="speaker"><b>worker2</b><code>10.10.10.12</code><span>AS 65010</span></article><article><b>control</b><code>10.10.10.10</code><span>no external peer</span></article><article><b>worker3</b><code>10.10.10.13</code><span>no external peer</span></article><article><b>worker4</b><code>10.10.10.14</code><span>no external peer</span></article></div></div>
+        <div class="slide-number">06</div>
+        <aside class="speaker-copy"><p>五台 Node 都通过 eth1 接入 cEOS VLAN 10，但只有 .11 和 .12 建立 BGP。物理可达性是所有节点都有，BGP 邻接只有两台。</p><p>所有 Calico Node 使用 AS 65010，cEOS 使用 AS 65001，因此是 eBGP。</p></aside>
+      </section>
+
+      <section class="slide" data-section="课程原图" data-title="课程原图：选择性 Peering 与 LB 前缀">
+        <div class="slide-header compact-header"><div><p class="eyebrow">Original lesson topology</p><h2>课程原图：选择性 Peering 与 LB 前缀</h2><div class="rule"></div></div></div>
+        <img class="course-image bgp-course-image" src="assets/course-selective-bgp.png" alt="课程原图，cEOS 仅与两台 worker 建立 BGP 并学习 LoadBalancer 地址段">
+        <div class="image-note"><strong>现场值优先：</strong>原图示例 Service IP 为 <code>172.16.0.240</code>，课程命令输出示例为 <code>172.16.0.241</code>。两者都属于 `/28`，测试前必须读取实际 <code>status.loadBalancer</code>。</div>
+        <div class="slide-number">07</div>
+        <aside class="speaker-copy"><p>课程原图把 VLAN、五台 Node、两条 BGP session、LB IPPool 和 cEOS 路由表放在一起。</p><p>图中的 LoadBalancer IP 是 .240，正文示例是 .241。分配值可能变化，永远用 kubectl 读取现场地址。</p><p class="note-source">图片来源：<a href="https://raw.githubusercontent.com/aadhilam/k8-networking-calico-containerlab/master/images/selective-bgp.png">课程 selective-bgp.png</a></p></aside>
+      </section>
+
+      <section class="slide" data-section="Kind 配置" data-title="节点标签在 Kind 创建时预先写入">
+        <div class="slide-header"><div><p class="eyebrow">k01-no-cni.yaml</p><h2>节点标签在 Kind 创建时预先写入</h2><div class="rule"></div></div></div>
+        <div class="grid-2"><pre class="code manifest-code"><span class="comment"># BGP speaker 1</span>
+- <span class="key">role:</span> worker
+  <span class="key">labels:</span>
+    <span class="hot">bgp-peer:</span> <span class="value">"true"</span>
+  <span class="key">kubeadmConfigPatches:</span>
+  - |
+    <span class="key">nodeRegistration:</span>
+      <span class="key">kubeletExtraArgs:</span>
+        <span class="key">node-ip:</span> <span class="value">"10.10.10.11"</span></pre><pre class="code manifest-code"><span class="comment"># BGP speaker 2</span>
+- <span class="key">role:</span> worker
+  <span class="key">labels:</span>
+    <span class="hot">bgp-peer:</span> <span class="value">"true"</span>
+  <span class="key">kubeletExtraArgs:</span>
+    <span class="key">node-ip:</span> <span class="value">"10.10.10.12"</span>
+
+<span class="comment"># worker3 / worker4 have no bgp-peer label</span></pre></div>
+        <div class="flat-block yellow"><p class="body">标签属于 Kubernetes Node metadata；Calico selector 根据标签持续计算应建立哪些 BGP session。</p></div>
+        <div class="slide-number">08</div>
+        <aside class="speaker-copy"><p>Kind 清单在 worker 和 worker2 上预置 bgp-peer=true。其他三台 Node 没有这个标签。</p><p>标签不是一次性生成配置。Calico持续 watch Node metadata，后续加减标签会动态建立或拆除 session。</p></aside>
+      </section>
+
+      <section class="slide" data-section="物理与控制面" data-title="接入同一 VLAN 不等于建立 BGP 邻接">
+        <div class="slide-header"><div><p class="eyebrow">Layer 2 reachability versus routing adjacency</p><h2>接入同一 VLAN 不等于建立 BGP 邻接</h2><div class="rule"></div></div></div>
+        <div class="layer-split"><article class="physical"><span>物理 / L2</span><h3>5 条 cEOS access links</h3><p>control-plane、worker1–4 都有 eth1 和 10.10.10.x 地址。</p><strong>所有 Node 可达 ToR</strong></article><article class="control"><span>BGP control plane</span><h3>2 条 TCP/179 sessions</h3><p>只有 selector 命中的 worker 与 worker2 发起 eBGP。</p><strong>只有 Speaker 交换路由</strong></article></div>
+        <div class="callout"><strong>安全边界：</strong>cEOS 的 listen range 接受整个 `/24`，选择性由 Calico 发起侧控制。生产还应使用 ACL、GTSM 或 BGP password 限制邻接。</div>
+        <div class="slide-number">09</div>
+        <aside class="speaker-copy"><p>所有 Node 在 VLAN 10 上都能 ping 到 ToR，但 BGP session 只来自两台 speaker。L2 连接和路由邻接是两个层次。</p><p>课程 cEOS 动态 peer range 接受整个子网。生产网络通常还会在 ToR 侧增加访问控制。</p></aside>
+      </section>
+
+      <section class="slide" data-section="Calico IPPool" data-title="默认 Pod IPPool 不向外部导出">
+        <div class="slide-header"><div><p class="eyebrow">custom-resources.yaml</p><h2>默认 Pod IPPool 不向外部导出</h2><div class="rule"></div></div></div>
+        <div class="pool-export"><pre class="code manifest-code"><span class="key">ipPools:</span>
+- <span class="key">name:</span> default-ipv4-ippool
+  <span class="key">blockSize:</span> <span class="value">26</span>
+  <span class="key">cidr:</span> <span class="value">192.168.0.0/16</span>
+  <span class="key">encapsulation:</span> VXLANCrossSubnet
+  <span class="key">natOutgoing:</span> Enabled
+  <span class="hot">disableBGPExport:</span> <span class="value">true</span></pre><div class="export-result"><article><span>Pod routes</span><strong>not exported to ToR</strong><code>192.168.0.0/16</code></article><article><span>Service routes</span><strong>advertised separately</strong><code>172.16.0.240/28</code></article></div></div>
+        <div class="slide-number">10</div>
+        <aside class="speaker-copy"><p>默认 Pod pool 明确 disableBGPExport true，所以 cEOS 不会学习每个 Node 的 Pod block。</p><p>本实验只对外发布 LoadBalancer 地址段，减少外部路由表内容，也避免让 underlay 直接依赖 Pod 地址。</p></aside>
+      </section>
+
+      <section class="slide" data-section="BGPConfiguration" data-title="初始配置关闭 Node mesh，尚不发布 LB 地址">
+        <div class="slide-header"><div><p class="eyebrow">bgpconfiguration-no-lb.yaml</p><h2>初始配置关闭 Node mesh，尚不发布 LB 地址</h2><div class="rule"></div></div></div>
+        <div class="config-state"><pre class="code manifest-code"><span class="key">apiVersion:</span> projectcalico.org/v3
+<span class="key">kind:</span> BGPConfiguration
+<span class="key">metadata:</span>
+  <span class="key">name:</span> default
+<span class="key">spec:</span>
+  <span class="key">logSeverityScreen:</span> Info
+  <span class="key">asNumber:</span> <span class="value">65010</span>
+  <span class="hot">nodeToNodeMeshEnabled:</span> <span class="value">false</span></pre><div class="config-effects"><article><span>AS</span><strong>65010</strong><p>Calico Node 对外使用的默认 local AS。</p></article><article><span>mesh</span><strong>disabled</strong><p>不创建默认内部全互联 iBGP。</p></article><article><span>LB advertisement</span><strong>empty</strong><p>此时还没配置 serviceLoadBalancerIPs。</p></article></div></div>
+        <div class="slide-number">11</div>
+        <aside class="speaker-copy"><p>初始 BGPConfiguration 设置 AS 65010，并关闭 node-to-node mesh。此时外部 BGPPeer 会建立，但还没有 LB prefix 可发布。</p><p>后面应用 bgpconfiguration-lb.yaml，才把 serviceLoadBalancerIPs 加进去。</p></aside>
+      </section>
+
+      <section class="slide" data-section="内部网络" data-title="关闭 BGP Mesh 不会关闭 Calico Pod 数据面">
+        <div class="slide-header"><div><p class="eyebrow">Routing control and workload forwarding are separate</p><h2>关闭 BGP Mesh 不会关闭 Calico Pod 数据面</h2><div class="rule"></div></div></div>
+        <div class="internal-path"><article><span>worker4</span><strong>nginx Pod</strong><code>192.168.x.x</code></article><div class="internal-track"><i>pod traffic</i></div><article><span>speaker worker</span><strong>kube-proxy + Calico</strong><code>Service ingress</code></article></div>
+        <div class="grid-3 compact-gap"><div class="flat-block red"><h3>已关闭</h3><p class="small">默认 Node-to-Node BGP full mesh。</p></div><div class="flat-block green"><h3>仍保留</h3><p class="small">VXLAN/Calico 路由与 WorkloadEndpoint。</p></div><div class="flat-block blue"><h3>因此</h3><p class="small">非 speaker Node 上的 Pod 仍可达。</p></div></div>
+        <div class="slide-number">12</div>
+        <aside class="speaker-copy"><p>关闭 node mesh 只改变 BGP control plane，不会停止 CNI、VXLAN 或本机路由。</p><p>课程 Pod pool 是 VXLANCrossSubnet，同一 VLAN 的具体数据路径由 Calico 现有路由和 VXLAN 状态决定。核心结论是非 speaker Pod 仍可通过集群内部网络到达。</p></aside>
+      </section>
+
+      <section class="slide" data-section="BGPPeer" data-title="nodeSelector 是选择性 Peering 的核心">
+        <div class="slide-header"><div><p class="eyebrow">bgppeer.yaml</p><h2>nodeSelector 是选择性 Peering 的核心</h2><div class="rule"></div></div></div>
+        <div class="selector-manifest"><pre class="code manifest-code"><span class="key">apiVersion:</span> projectcalico.org/v3
+<span class="key">kind:</span> BGPPeer
+<span class="key">metadata:</span>
+  <span class="key">name:</span> bgppeer-arista
+<span class="key">spec:</span>
+  <span class="key">peerIP:</span> <span class="value">10.10.10.1</span>
+  <span class="key">asNumber:</span> <span class="value">65001</span>
+  <span class="hot">nodeSelector:</span> <span class="value">bgp-peer == "true"</span></pre><div class="selector-eval"><article class="match"><span>worker</span><code>bgp-peer=true</code><b>MATCH</b></article><article class="match"><span>worker2</span><code>bgp-peer=true</code><b>MATCH</b></article><article><span>control / worker3 / worker4</span><code>label absent</code><b>NO MATCH</b></article></div></div>
+        <div class="slide-number">13</div>
+        <aside class="speaker-copy"><p>peerIP 和 asNumber 定义远端 cEOS，nodeSelector 定义哪些本地 Calico Node 应建立会话。</p><p>selector 每命中一台 Node，就生成一条到 10.10.10.1 AS65001 的 peering。</p></aside>
+      </section>
+
+      <section class="slide" data-section="Selector 语义" data-title="省略 nodeSelector 会变成全局 Peer">
+        <div class="slide-header"><div><p class="eyebrow">Peer scope changes with one field</p><h2>省略 nodeSelector 会变成全局 Peer</h2><div class="rule"></div></div></div>
+        <div class="scope-compare"><article class="global"><span>Global peer</span><h3>省略 node 与 nodeSelector</h3><p>集群中所有 Calico Node 都尝试与 peerIP 建立会话。</p><code>5 nodes → 5 sessions</code></article><article class="link"><span>Node selector peer</span><h3>nodeSelector: bgp-peer == "true"</h3><p>只有带匹配标签的 Node 建立会话。</p><code>5 nodes → 2 sessions</code></article></div>
+        <div class="flat-block yellow"><p class="body"><code>nodeSelector</code> 与单个 <code>node</code> 字段是两种互斥作用域；<code>peerSelector</code> 则用于选择远端 Calico Node，不用于本课的固定 ToR IP。</p></div>
+        <div class="slide-number">14</div>
+        <aside class="speaker-copy"><p>BGPPeer 没有 node/nodeSelector 时是 global scope，所有 Node 都会尝试连接。加 nodeSelector 后变为节点选择范围。</p><p>peerSelector 是另一种模式，用标签选远端 Calico Node；本课远端是固定 cEOS，所以使用 peerIP。</p></aside>
+      </section>
+
+      <section class="slide" data-section="ToR 配置" data-title="cEOS 用 listen range 接受动态 Calico 邻居">
+        <div class="slide-header"><div><p class="eyebrow">ceos01 startup configuration</p><h2>cEOS 用 listen range 接受动态 Calico 邻居</h2><div class="rule"></div></div></div>
+        <div class="grid-2"><pre class="code manifest-code"><span class="key">router bgp</span> <span class="value">65001</span>
+  router-id 10.10.10.1
+  bgp listen range <span class="value">10.10.10.0/24</span> \
+    peer-group CALICO-K8S remote-as <span class="value">65010</span>
+  neighbor CALICO-K8S peer group
+  neighbor CALICO-K8S remote-as 65010
+
+  <span class="key">address-family ipv4</span>
+    neighbor CALICO-K8S activate
+    network 10.10.10.0/24</pre><div class="tor-explain"><article><span>listen range</span><p>允许 `/24` 内符合 remote-as 的动态邻居。</p></article><article><span>peer-group</span><p>共享 BGP 参数，减少重复配置。</p></article><article><span>selector</span><p>实际只有两台 Calico Node 发起连接。</p></article><article><span>TCP 179</span><p>Node 到 cEOS 必须双向可达。</p></article></div></div>
+        <div class="slide-number">15</div>
+        <aside class="speaker-copy"><p>cEOS 用动态 listen range 接受 10.10.10.0/24、remote AS65010 的邻居。它不逐个写 worker 地址。</p><p>选择性来自 Calico 发起侧。生产可结合 ToR ACL、GTSM 和 BGP password 进一步限制。</p></aside>
+      </section>
+
+      <section class="slide" data-section="部署" data-title="deploy.sh 先建立 Peer，不发布 LB 前缀">
+        <div class="slide-header"><div><p class="eyebrow">Initial deployment sequence</p><h2>deploy.sh 先建立 Peer，不发布 LB 前缀</h2><div class="rule"></div></div></div>
+        <div class="runway"><article><span>01</span><h3>cEOS + Kind</h3><code>5-node k01</code></article><i>›</i><article><span>02</span><h3>Calico 3.30</h3><code>IPPool + API server</code></article><i>›</i><article><span>03</span><h3>BGP no-LB</h3><code>mesh false / AS65010</code></article><i>›</i><article><span>04</span><h3>Selective Peer</h3><code>nodeSelector</code></article><i>›</i><article><span>05</span><h3>Nginx tools</h3><code>Deployment + ClusterIP</code></article></div>
+        <pre class="code command-code">cd containerlab/15-selective-bgp-peering
+chmod +x deploy.sh
+./deploy.sh
+export KUBECONFIG=$(pwd)/k01.kubeconfig</pre>
+        <div class="slide-number">16</div>
+        <aside class="speaker-copy"><p>部署脚本创建五节点集群，安装 Calico，然后应用 no-LB BGPConfiguration 和 BGPPeer。最后部署普通 Nginx Deployment。</p><p>LoadBalancer IPPool、LB Service 和 LB advertisement 留给实验步骤手动完成。</p></aside>
+      </section>
+
+      <section class="slide" data-section="环境验证" data-title="五台 Kubernetes Node 全部 Ready">
+        <div class="slide-header"><div><p class="eyebrow">Exercise 1</p><h2>五台 Kubernetes Node 全部 Ready</h2><div class="rule"></div></div></div>
+        <pre class="code terminal wide-terminal"><span class="prompt">$</span> containerlab inspect topology.clab.yaml
+<span class="prompt">$</span> export KUBECONFIG=$(pwd)/k01.kubeconfig
+<span class="prompt">$</span> kubectl get nodes
+
+k01-control-plane  Ready  control-plane  v1.32.2
+k01-worker         Ready  &lt;none&gt;         v1.32.2
+k01-worker2        Ready  &lt;none&gt;         v1.32.2
+k01-worker3        Ready  &lt;none&gt;         v1.32.2
+k01-worker4        Ready  &lt;none&gt;         v1.32.2</pre>
+        <div class="flat-block yellow"><p class="body">课程页面示例版本是 v1.32.2，而仓库 Kind 清单没有固定 image tag。现场 Kubernetes 版本取决于 ContainerLab/Kind 默认镜像。</p></div>
+        <div class="slide-number">17</div>
+        <aside class="speaker-copy"><p>先确认 cEOS 和 Kind 容器 running，再确认五台 Node Ready。课程输出版本可能与本地不同。</p><p>Node Ready 只表示集群基础健康，BGP 还要用标签、BGPPeer 和 cEOS summary 分层确认。</p></aside>
+      </section>
+
+      <section class="slide" data-section="标签验证" data-title="标签查询应只返回两台 Speaker">
+        <div class="slide-header"><div><p class="eyebrow">Exercise 2</p><h2>标签查询应只返回两台 Speaker</h2><div class="rule"></div></div></div>
+        <div class="label-query"><pre class="code terminal"><span class="prompt">$</span> kubectl get nodes --show-labels | grep bgp-peer
+
+k01-worker   Ready  ...  <span class="hot">bgp-peer=true</span>,...
+k01-worker2  Ready  ...  <span class="hot">bgp-peer=true</span>,...</pre><pre class="code terminal"><span class="prompt">$</span> kubectl get nodes -l bgp-peer=true
+
+NAME          STATUS  ROLES   VERSION
+k01-worker    Ready   &lt;none&gt;  v1.32.2
+k01-worker2   Ready   &lt;none&gt;  v1.32.2</pre></div>
+        <div class="callout"><strong>先核对集合：</strong>selector 逻辑没错但标签打错 Node 时，BGP 仍会“正确地”在错误节点建立。</div>
+        <div class="slide-number">18</div>
+        <aside class="speaker-copy"><p>用 label selector 直接得到 speaker 集合，应该只有 worker 和 worker2。</p><p>这是变更前最简单也最重要的验证。标签是期望拓扑的输入，打错标签就会得到错误但一致的结果。</p></aside>
+      </section>
+
+      <section class="slide" data-section="初始 BGP" data-title="Peer 可以 Established，但尚无 LB 前缀">
+        <div class="slide-header"><div><p class="eyebrow">Session state and advertised routes are separate</p><h2>Peer 可以 Established，但尚无 LB 前缀</h2><div class="rule"></div></div></div>
+        <div class="state-vs-prefix"><article><span>BGP sessions</span><strong>2 × Established</strong><p>BGPPeer 已应用，TCP/179 与 OPEN/KEEPALIVE 正常。</p></article><div class="not-equal">≠</div><article><span>LB route</span><strong>not present yet</strong><p>serviceLoadBalancerIPs 尚未加入 BGPConfiguration。</p></article></div>
+        <div class="grid-2 compact-gap"><div class="flat-block green"><h3>邻接证据</h3><p class="body"><code>show ip bgp summary</code></p></div><div class="flat-block orange"><h3>路由证据</h3><p class="body"><code>show ip route 172.16.0.240/28</code></p></div></div>
+        <div class="slide-number">19</div>
+        <aside class="speaker-copy"><p>BGP Established 只证明会话建立，不证明目标前缀已经发布。部署初始就是这种状态。</p><p>后续要分别验证 session、BGP RIB、主路由表和 end-to-end 连接。</p></aside>
+      </section>
+
+      <section class="slide" data-section="LB IPPool" data-title="LoadBalancer 专用 IPPool 提供 /28 地址段">
+        <div class="slide-header"><div><p class="eyebrow">Exercise 4.1</p><h2>LoadBalancer 专用 IPPool 提供 /28 地址段</h2><div class="rule"></div></div></div>
+        <div class="grid-2"><pre class="code manifest-code"><span class="key">apiVersion:</span> projectcalico.org/v3
+<span class="key">kind:</span> IPPool
+<span class="key">metadata:</span>
+  <span class="key">name:</span> loadbalancer-ip-pool
+<span class="key">spec:</span>
+  <span class="key">cidr:</span> <span class="hot">172.16.0.240/28</span>
+  <span class="key">blockSize:</span> <span class="value">28</span>
+  <span class="key">assignmentMode:</span> Automatic
+  <span class="key">allowedUses:</span>
+  - <span class="value">LoadBalancer</span></pre><div class="pool-facts"><article><span>size</span><strong>16 addresses</strong></article><article><span>consumer</span><strong>Service LoadBalancer</strong></article><article><span>allocation</span><strong>Automatic</strong></article><article><span>pod IP</span><strong>not allowed</strong></article></div></div>
+        <pre class="code command-code">kubectl apply -f k8s-manifests/lb-ippool.yaml
+kubectl get ippools</pre>
+        <div class="slide-number">20</div>
+        <aside class="speaker-copy"><p>这个 IPPool 专供 LoadBalancer，allowedUses 不包含 Workload，因此不会给 Pod 分配地址。</p><p>/28 提供 16 个数值地址。实际可分配行为由 Calico IPAM 实现决定，不要用传统 subnet 的 network/broadcast 直觉猜第一个 Service IP。</p></aside>
+      </section>
+
+      <section class="slide" data-section="LB IPPool" data-title="allowedUses 把 Service 地址与 Pod 地址隔离">
+        <div class="slide-header"><div><p class="eyebrow">One pool, one purpose</p><h2>allowedUses 把 Service 地址与 Pod 地址隔离</h2><div class="rule"></div></div></div>
+        <div class="allowed-use"><article class="lb"><span>loadbalancer-ip-pool</span><strong>172.16.0.240/28</strong><div><b>LoadBalancer Service</b><i>allowed</i></div><div><b>Workload / Tunnel</b><i>blocked</i></div></article><article class="pod"><span>default-ipv4-ippool</span><strong>192.168.0.0/16</strong><div><b>Workload Pod</b><i>allowed</i></div><div><b>BGP export</b><i>disabled</i></div></article></div>
+        <div class="callout"><strong>运维价值：</strong>地址用途分离后，外部发布前缀、地址审计和容量规划更清楚。</div>
+        <div class="slide-number">21</div>
+        <aside class="speaker-copy"><p>一个池只给 LB Service，一个池给 Pod。用途隔离能防止相同前缀被不同对象混用。</p><p>外部网络只需要认识稳定的 172.16.0.240/28，不需要认识 192.168.0.0/16 的 Pod 分配细节。</p></aside>
+      </section>
+
+      <section class="slide" data-section="工作负载" data-title="Nginx 两副本为 LoadBalancer 提供后端">
+        <div class="slide-header"><div><p class="eyebrow">nginx-deployment.yaml</p><h2>Nginx 两副本为 LoadBalancer 提供后端</h2><div class="rule"></div></div></div>
+        <div class="workload-service"><article class="deployment"><span>Deployment</span><h3>nginx-deployment</h3><code>replicas: 2</code><div><b>nginx Pod A</b><b>nginx Pod B</b></div></article><div class="selector-track">app: nginx</div><div class="service-pair"><article><span>ClusterIP</span><strong>nginx-service</strong></article><article><span>LoadBalancer</span><strong>lb-nginx-service</strong></article></div></div>
+        <div class="flat-block yellow"><p class="body">课程没有固定 Pod 到 speaker。两个 Nginx 副本可以调度到任意 Node，这正好验证“非 BGP Node 上的 Pod 仍可达”。</p></div>
+        <div class="slide-number">22</div>
+        <aside class="speaker-copy"><p>Nginx Deployment 有两个副本，tools 清单还创建普通 ClusterIP。后续 LB Service 使用同一个 app: nginx selector。</p><p>没有 nodeAffinity 强制 Pod 去 speaker，因此后端可以出现在 worker3/4。</p></aside>
+      </section>
+
+      <section class="slide" data-section="LoadBalancer Service" data-title="Service 从专用池获得 EXTERNAL-IP">
+        <div class="slide-header"><div><p class="eyebrow">Exercise 4.2</p><h2>Service 从专用池获得 EXTERNAL-IP</h2><div class="rule"></div></div></div>
+        <div class="grid-2"><pre class="code manifest-code"><span class="key">apiVersion:</span> v1
+<span class="key">kind:</span> Service
+<span class="key">metadata:</span>
+  <span class="key">name:</span> lb-nginx-service
+<span class="key">spec:</span>
+  <span class="key">selector:</span>
+    <span class="key">app:</span> nginx
+  <span class="key">ports:</span>
+  - <span class="key">port:</span> <span class="value">80</span>
+    <span class="key">targetPort:</span> <span class="value">80</span>
+  <span class="key">type:</span> <span class="hot">LoadBalancer</span></pre><pre class="code terminal"><span class="prompt">$</span> kubectl get svc lb-nginx-service
+
+TYPE           ClusterIP     EXTERNAL-IP
+LoadBalancer   10.96.87.127  <span class="hot">172.16.0.241</span>
+
+PORT(S)
+80:30881/TCP</pre></div>
+        <div class="callout"><strong>测试前读取实际值：</strong><code>kubectl get svc lb-nginx-service -o jsonpath='{.status.loadBalancer.ingress[0].ip}'</code></div>
+        <div class="slide-number">23</div>
+        <aside class="speaker-copy"><p>创建 LoadBalancer Service 后，Calico 从专用池分配一个 EXTERNAL-IP。课程正文示例是 172.16.0.241。</p><p>不要把示例写死进脚本。每次读取 status.loadBalancer.ingress。</p></aside>
+      </section>
+
+      <section class="slide" data-section="LB Advertisement" data-title="BGPConfiguration 加入 LoadBalancer 地址段">
+        <div class="slide-header"><div><p class="eyebrow">Exercise 4.3</p><h2>BGPConfiguration 加入 LoadBalancer 地址段</h2><div class="rule"></div></div></div>
+        <div class="before-after-config"><article><header>Before</header><pre class="code manifest-code"><span class="key">spec:</span>
+  <span class="key">asNumber:</span> 65010
+  <span class="key">nodeToNodeMeshEnabled:</span> false
+
+  <span class="comment"># no serviceLoadBalancerIPs</span></pre><strong>sessions only</strong></article><article><header>After</header><pre class="code manifest-code"><span class="key">spec:</span>
+  <span class="key">asNumber:</span> 65010
+  <span class="key">nodeToNodeMeshEnabled:</span> false
+  <span class="hot">serviceLoadBalancerIPs:</span>
+  - <span class="key">cidr:</span> <span class="value">172.16.0.240/28</span></pre><strong>prefix advertised</strong></article></div>
+        <pre class="code command-code">kubectl apply -f calico-cni-config/bgpconfiguration-lb.yaml</pre>
+        <div class="slide-number">24</div>
+        <aside class="speaker-copy"><p>应用 lb 版本 BGPConfiguration 后，session 不需要重新定义，新增的是可发布的 Service 地址段。</p><p>Calico speaker 会向已有 peer 宣告 172.16.0.240/28。</p></aside>
+      </section>
+
+      <section class="slide" data-section="BGPConfiguration" data-title="serviceLoadBalancerIPs 是发布白名单">
+        <div class="slide-header"><div><p class="eyebrow">Global default BGP configuration</p><h2>serviceLoadBalancerIPs 是发布白名单</h2><div class="rule"></div></div></div>
+        <div class="advert-policy"><article><span>Configured CIDR</span><strong>172.16.0.240/28</strong></article><div class="policy-filter"><b>Service status.LoadBalancer IP</b><i>within CIDR?</i></div><div class="policy-out"><article class="yes"><span>yes</span><strong>advertise prefix</strong></article><article class="no"><span>no</span><strong>do not advertise</strong></article></div></div>
+        <div class="grid-3 compact-gap"><div class="flat-block blue"><h3>serviceClusterIPs</h3><p class="small">发布 ClusterIP CIDR。</p></div><div class="flat-block orange"><h3>serviceExternalIPs</h3><p class="small">发布 ExternalIP CIDR。</p></div><div class="flat-block green"><h3>serviceLoadBalancerIPs</h3><p class="small">发布 status.LoadBalancer CIDR。</p></div></div>
+        <div class="slide-number">25</div>
+        <aside class="speaker-copy"><p>serviceLoadBalancerIPs 不是分配地址的 IPPool，而是 BGP 发布允许范围。Service 的实际 IP 必须落在配置 CIDR 中。</p><p>这三个 Service advertisement 字段用途不同，课件只开启 LoadBalancer。</p></aside>
+      </section>
+
+      <section class="slide" data-section="控制链" data-title="从 Node 标签到 ToR 路由的完整链路">
+        <div class="slide-header"><div><p class="eyebrow">Desired state to external RIB</p><h2>从 Node 标签到 ToR 路由的完整链路</h2><div class="rule"></div></div><button class="action-btn" data-replay="#control-flow" type="button" title="重放动画" aria-label="重放选择性 BGP 控制链">↻</button></div>
+        <div class="fixed-pipeline is-playing" id="control-flow"><article><span>1</span><h3>Node label</h3><p>bgp-peer=true</p></article><div class="pipe"><i></i></div><article><span>2</span><h3>BGPPeer selector</h3><p>match 2 nodes</p></article><div class="pipe"><i></i></div><article><span>3</span><h3>BIRD session</h3><p>TCP 179 Established</p></article><div class="pipe"><i></i></div><article><span>4</span><h3>LB advertisement</h3><p>172.16.0.240/28</p></article><div class="pipe"><i></i></div><article><span>5</span><h3>cEOS RIB/FIB</h3><p>one or two next hops</p></article></div>
+        <div class="callout"><strong>每一层都有独立证据：</strong>标签、BGPPeer YAML、session summary、BGP route、主路由表与实际连接。</div>
+        <div class="slide-number">26</div>
+        <aside class="speaker-copy"><p>标签决定本地 speaker 集合，BGPPeer 生成 BIRD 邻接，BGPConfiguration 允许发布 LB prefix，cEOS 最后安装路由。</p><p>排障时沿这条链找第一个不符合预期的层。</p></aside>
+      </section>
+
+      <section class="slide" data-section="BGP Session" data-title="只有两条 Session 建立，其余 Node 不发起连接">
+        <div class="slide-header"><div><p class="eyebrow">Selective adjacency</p><h2>只有两条 Session 建立，其余 Node 不发起连接</h2><div class="rule"></div></div><button class="action-btn" data-replay="#selective-sessions" type="button" title="重放动画" aria-label="重放选择性 BGP 会话">↻</button></div>
+        <div class="session-demo is-playing" id="selective-sessions"><article class="tor"><span>cEOS</span><strong>10.10.10.1</strong><code>AS 65001</code></article><div class="session-demo-lanes"><div class="demo-lane a"><i>OPEN</i></div><div class="demo-lane b"><i>OPEN</i></div></div><div class="session-demo-nodes"><article class="up"><b>worker .11</b><span>Established</span></article><article class="up"><b>worker2 .12</b><span>Established</span></article><article><b>control .10</b><span>no session</span></article><article><b>worker3 .13</b><span>no session</span></article><article><b>worker4 .14</b><span>no session</span></article></div></div>
+        <div class="slide-number">27</div>
+        <aside class="speaker-copy"><p>两条 OPEN/KEEPALIVE 只在 cEOS 与 worker、worker2 之间交换。其他节点没有 failed session，而是根本没有被配置发起。</p><p>这一区别很重要：no session 是预期状态，不应触发故障告警。</p></aside>
+      </section>
+
+      <section class="slide" data-section="BGP 验证" data-title="cEOS Summary 只显示两个 Established 邻居">
+        <div class="slide-header"><div><p class="eyebrow">Exercise 5.1</p><h2>cEOS Summary 只显示两个 Established 邻居</h2><div class="rule"></div></div></div>
+        <pre class="code terminal wide-terminal"><span class="prompt">ceos#</span> show ip bgp summary
+
+Router identifier 10.10.10.1, local AS number 65001
+
+Neighbor      V  AS     Up/Down   State   PfxRcd
+<span class="good">10.10.10.11</span>  4  65010  00:10:30  Estab   1
+<span class="good">10.10.10.12</span>  4  65010  00:10:30  Estab   1</pre>
+        <div class="session-proof"><article><span>Expected</span><strong>.11 / .12</strong><p>两个 speaker。</p></article><article><span>Absent by design</span><strong>.10 / .13 / .14</strong><p>不应出现。</p></article><article><span>PfxRcd</span><strong>1</strong><p>收到一个聚合 LB 前缀。</p></article></div>
+        <div class="slide-number">28</div>
+        <aside class="speaker-copy"><p>summary 中只有 .11 和 .12，remote AS 都是 65010，State 为 Established。PfxRcd 1 表示每个 peer 发布一个前缀。</p><p>课程输出的 Description 可能取决于 cEOS 配置版本，关键字段是 Neighbor、AS、State 和 Prefix count。</p></aside>
+      </section>
+
+      <section class="slide" data-section="路由验证" data-title="未开启 ECMP 时只安装一个最佳 Next Hop">
+        <div class="slide-header"><div><p class="eyebrow">Exercise 5.2</p><h2>未开启 ECMP 时只安装一个最佳 Next Hop</h2><div class="rule"></div></div></div>
+        <pre class="code terminal large-output"><span class="prompt">ceos#</span> show ip route
+
+C    10.10.10.0/24 directly connected, Vlan10
+
+B E  <span class="hot">172.16.0.240/28</span> [200/0]
+     via <span class="cool">10.10.10.11</span>, Vlan10
+
+C    172.20.20.0/24 directly connected, Management0</pre>
+        <div class="route-state"><span>2 BGP paths received</span><i>best-path selection</i><strong>1 path installed</strong></div>
+        <div class="slide-number">29</div>
+        <aside class="speaker-copy"><p>两个 speaker 都能发布相同 /28，但默认主路由表只安装一个最佳路径，示例是 10.10.10.11。</p><p>不要根据一条路由误判第二条 session 没有发布。查看 BGP RIB 可以看到候选路径，main RIB 只装最佳。</p></aside>
+      </section>
+
+      <section class="slide" data-section="Best Path" data-title="Established 邻居不等于所有路径同时转发">
+        <div class="slide-header"><div><p class="eyebrow">Control-plane multipath versus forwarding</p><h2>Established 邻居不等于所有路径同时转发</h2><div class="rule"></div></div></div>
+        <div class="rib-flow"><div class="candidate-paths"><article><span>Path A</span><strong>via 10.10.10.11</strong><code>eBGP AS65010</code></article><article><span>Path B</span><strong>via 10.10.10.12</strong><code>eBGP AS65010</code></article></div><div class="best-select"><strong>BGP decision</strong><span>equal attributes</span></div><div class="fib-path"><span>FIB</span><strong>one best path</strong><code>until maximum-paths</code></div></div>
+        <div class="flat-block yellow"><p class="body">BGP 默认避免把多条路径都装入 FIB。要让等价路径同时转发，设备必须显式启用 multipath/ECMP。</p></div>
+        <div class="slide-number">30</div>
+        <aside class="speaker-copy"><p>BGP session 数、RIB 候选路径数和 FIB 安装路径数是三个不同指标。</p><p>课程需要在 cEOS 配置 maximum-paths 4，才会同时安装两个 speaker next hop。</p></aside>
+      </section>
+
+      <section class="slide" data-section="ECMP" data-title="maximum-paths 允许多个等价 BGP 路径">
+        <div class="slide-header"><div><p class="eyebrow">Exercise 5.3</p><h2>maximum-paths 允许多个等价 BGP 路径</h2><div class="rule"></div></div></div>
+        <div class="ecmp-command"><pre class="code terminal"><span class="prompt">ceos#</span> configure terminal
+<span class="prompt">ceos(config)#</span> router bgp 65001
+<span class="prompt">ceos(config-router-bgp)#</span> maximum-paths 4
+<span class="prompt">ceos(config-router-bgp)#</span> end</pre><div class="ecmp-effect"><span>Configured ceiling</span><strong>up to 4 equal paths</strong><p>本实验只有两个有效 speaker，因此最终安装两条。</p></div></div>
+        <div class="callout"><strong>设备语法：</strong><code>maximum-paths</code> 的命令、默认值和 multipath 条件因网络操作系统而异。</div>
+        <div class="slide-number">31</div>
+        <aside class="speaker-copy"><p>maximum-paths 4 是允许上限，不会凭空生成四条路径。当前只有两个 speaker，所以安装两条。</p><p>生产设备还可能要求相同 AS path 长度、MED、local-pref 等属性满足 multipath 条件。</p></aside>
+      </section>
+
+      <section class="slide" data-section="ECMP" data-title="开启 ECMP 后两个 Speaker 同时成为 Next Hop">
+        <div class="slide-header"><div><p class="eyebrow">Two installed paths</p><h2>开启 ECMP 后两个 Speaker 同时成为 Next Hop</h2><div class="rule"></div></div><button class="action-btn" data-replay="#ecmp-flow" type="button" title="重放动画" aria-label="重放 ECMP 路径">↻</button></div>
+        <div class="ecmp-flow is-playing" id="ecmp-flow"><article class="prefix"><span>cEOS route</span><strong>172.16.0.240/28</strong></article><div class="ecmp-split"><div class="ecmp-lane top"><i>flow A</i></div><div class="ecmp-lane bottom"><i>flow B</i></div></div><div class="ecmp-hops"><article><span>next hop A</span><strong>10.10.10.11</strong></article><article><span>next hop B</span><strong>10.10.10.12</strong></article></div></div>
+        <pre class="code command-code">B E 172.16.0.240/28 [200/0]
+    via 10.10.10.11, Vlan10
+    via 10.10.10.12, Vlan10</pre>
+        <div class="slide-number">32</div>
+        <aside class="speaker-copy"><p>主路由表现在为同一 /28 安装两个 next hop。两个 speaker 都可以承接新流量。</p><p>ECMP 提供路径冗余和负载分担，但不代表每个包轮流发送到 A、B。</p></aside>
+      </section>
+
+      <section class="slide" data-section="ECMP" data-title="ECMP 通常按 Flow Hash 选择路径">
+        <div class="slide-header"><div><p class="eyebrow">Stable per-flow forwarding</p><h2>ECMP 通常按 Flow Hash 选择路径</h2><div class="rule"></div></div></div>
+        <div class="hash-layout"><article class="flow-input"><span>5-tuple</span><code>src IP</code><code>dst IP</code><code>protocol</code><code>src/dst port</code></article><div class="hash-box"><strong>hash</strong><span>device-dependent</span></div><div class="hash-output"><article><span>bucket 0</span><strong>worker .11</strong></article><article><span>bucket 1</span><strong>worker2 .12</strong></article></div></div>
+        <div class="grid-2 compact-gap"><div class="flat-block green"><h3>同一 flow</h3><p class="body">通常保持同一路径，避免 TCP 乱序。</p></div><div class="flat-block yellow"><h3>多 flow</h3><p class="body">不同 hash 结果分散到两台 speaker。</p></div></div>
+        <div class="slide-number">33</div>
+        <aside class="speaker-copy"><p>ECMP 多数按 flow hash，而不是每包 round-robin。单个 telnet 连接只走其中一条路径。</p><p>要验证负载分担，需要发起多个不同五元组 flow，并观察两个 speaker 的计数。</p></aside>
+      </section>
+
+      <section class="slide" data-section="端到端路径" data-title="外部连接经过两次独立选择">
+        <div class="slide-header"><div><p class="eyebrow">ECMP choice then endpoint choice</p><h2>外部连接经过两次独立选择</h2><div class="rule"></div></div><button class="action-btn" data-replay="#end-to-end" type="button" title="重放动画" aria-label="重放端到端选择路径">↻</button></div>
+        <div class="end-to-end is-playing" id="end-to-end"><article><span>client / cEOS</span><strong>LB_IP:80</strong></article><div class="e2e-track"><i>ECMP</i></div><article class="speaker"><span>ingress node</span><strong>speaker A/B</strong></article><div class="e2e-track"><i>kube-proxy</i></div><article class="service"><span>Service</span><strong>Endpoint selection</strong></article><div class="e2e-track"><i>Calico</i></div><article><span>backend</span><strong>nginx Pod</strong></article></div>
+        <div class="choice-row"><article><span>Choice 1</span><strong>ToR chooses Node</strong></article><article><span>Choice 2</span><strong>Service chooses Pod</strong></article></div>
+        <div class="slide-number">34</div>
+        <aside class="speaker-copy"><p>先由 cEOS ECMP 选择 ingress speaker，再由 speaker 上的 kube-proxy 规则选择一个 Nginx Endpoint。</p><p>这两次选择相互独立。选了 worker 作为入口，不代表后端一定在 worker。</p></aside>
+      </section>
+
+      <section class="slide" data-section="Service 转发" data-title="Speaker 用 kube-proxy 规则把 VIP 转成 Pod IP">
+        <div class="slide-header"><div><p class="eyebrow">LoadBalancer service datapath</p><h2>Speaker 用 kube-proxy 规则把 VIP 转成 Pod IP</h2><div class="rule"></div></div></div>
+        <div class="nat-path"><article><span>packet arrives</span><strong>dst 172.16.0.241:80</strong></article><i>›</i><article class="nat"><span>nat table</span><strong>KUBE-SVC-...</strong><code>DNAT</code></article><i>›</i><article><span>selected endpoint</span><strong>192.168.x.y:80</strong></article></div>
+        <div class="grid-3 compact-gap"><div class="flat-block blue"><h3>LB IP</h3><p class="small">外部路由定位到 speaker。</p></div><div class="flat-block orange"><h3>Service rule</h3><p class="small">VIP 与端口匹配后选择 Endpoint。</p></div><div class="flat-block green"><h3>Pod route</h3><p class="small">Calico 把 DNAT 后的包送到目标 Node。</p></div></div>
+        <div class="slide-number">35</div>
+        <aside class="speaker-copy"><p>speaker 收到目标 LB IP 的包，kube-proxy NAT 规则匹配 Service，DNAT 到后端 Pod IP。</p><p>之后就是普通 Pod 路由。这里的关键前提是 externalTrafficPolicy 默认 Cluster。</p></aside>
+      </section>
+
+      <section class="slide" data-section="非 Speaker 后端" data-title="worker4 上的 Pod 仍可通过 Speaker 被访问">
+        <div class="slide-header"><div><p class="eyebrow">BGP role does not constrain pod placement</p><h2>worker4 上的 Pod 仍可通过 Speaker 被访问</h2><div class="rule"></div></div></div>
+        <div class="non-speaker-path"><article class="tor"><span>cEOS</span><strong>route via worker</strong></article><div class="ns-track"><i>LB packet</i></div><article class="speaker"><span>worker</span><strong>BGP speaker</strong><code>DNAT → Pod IP</code></article><div class="ns-track internal"><i>pod route</i></div><article class="backend"><span>worker4</span><strong>nginx Pod</strong><code>no external BGP</code></article></div>
+        <div class="callout"><strong>核心结论：</strong>Node 是否与 ToR peering，和该 Node 能否运行 Service 后端 Pod，是两回事。</div>
+        <div class="slide-number">36</div>
+        <aside class="speaker-copy"><p>假设后端在 worker4。外部包先到 speaker，DNAT 后通过集群内部网络到 worker4。</p><p>worker4 不需要知道 cEOS BGP，也不需要发布 LB prefix。</p></aside>
+      </section>
+
+      <section class="slide" data-section="连通性验证" data-title="从 cEOS 连接实际 LoadBalancer IP">
+        <div class="slide-header"><div><p class="eyebrow">Exercise 6</p><h2>从 cEOS 连接实际 LoadBalancer IP</h2><div class="rule"></div></div></div>
+        <div class="connectivity-test"><pre class="code terminal"><span class="prompt">$</span> kubectl get svc lb-nginx-service \
+  -o jsonpath='{.status.loadBalancer.ingress[0].ip}'
+
+<span class="hot">172.16.0.241</span>
+
+<span class="prompt">ceos#</span> telnet 172.16.0.241 80
+Trying 172.16.0.241...
+<span class="good">Connected to 172.16.0.241.</span>
+get
+HTTP/1.1 400 Bad Request
+Server: nginx/1.28.0</pre><div class="test-proof"><article><span>route</span><strong>/28 reachable</strong></article><article><span>TCP</span><strong>3-way handshake</strong></article><article><span>Service</span><strong>DNAT to nginx</strong></article><article><span>application</span><strong>nginx response</strong></article></div></div>
+        <div class="slide-number">37</div>
+        <aside class="speaker-copy"><p>telnet Connected 证明 TCP 三次握手成功，随便输入 get 得到 Nginx 400 说明请求已经到应用。</p><p>400 是预期，因为输入不是完整 HTTP 请求。它反而提供了应用层回包证据。</p></aside>
+      </section>
+
+      <section class="slide" data-section="动态扩容" data-title="加标签会让 worker3 自动加入 Peering">
+        <div class="slide-header"><div><p class="eyebrow">Exercise 7 · add a speaker</p><h2>加标签会让 worker3 自动加入 Peering</h2><div class="rule"></div></div><button class="action-btn" data-replay="#scale-out" type="button" title="重放动画" aria-label="重放 BGP Speaker 扩容">↻</button></div>
+        <div class="label-change is-playing" id="scale-out"><article><span>before</span><strong>worker3</strong><code>label absent</code></article><div class="label-track"><i>kubectl label</i></div><article class="labelled"><span>metadata</span><strong>bgp-peer=true</strong><code>selector matches</code></article><div class="label-track"><i>BGP OPEN</i></div><article class="established"><span>cEOS</span><strong>third session</strong><code>10.10.10.13</code></article></div>
+        <pre class="code command-code">kubectl label node k01-worker3 bgp-peer=true</pre>
+        <div class="slide-number">38</div>
+        <aside class="speaker-copy"><p>给 worker3 加标签后，BGPPeer selector 立即命中。Calico 自动生成配置并发起第三条 session。</p><p>随后 cEOS 会多一个邻居，若 ECMP 上限允许，也可能多一个等价 next hop。</p></aside>
+      </section>
+
+      <section class="slide" data-section="动态缩容" data-title="移除标签会撤销对应 Session">
+        <div class="slide-header"><div><p class="eyebrow">Exercise 7 · remove a speaker</p><h2>移除标签会撤销对应 Session</h2><div class="rule"></div></div></div>
+        <div class="remove-speaker"><article><span>1</span><h3>移除标签</h3><code>kubectl label node k01-worker3 bgp-peer-</code></article><i>›</i><article><span>2</span><h3>selector 不再匹配</h3><p>Calico 删除 worker3 到 cEOS 的 peer 配置。</p></article><i>›</i><article><span>3</span><h3>路由收敛</h3><p>cEOS 撤销 .13 传播的路径，其他 speaker 继续工作。</p></article></div>
+        <div class="flat-block orange"><p class="body">标签变更是网络控制面变更。删除前先确认剩余 speaker、ECMP 和连接排空策略。</p></div>
+        <div class="slide-number">39</div>
+        <aside class="speaker-copy"><p>标签 key 后加减号表示删除标签。Calico 撤销对应 session，cEOS 删除来自该邻居的 path。</p><p>已有连接是否受影响取决于它原本经过哪条路径、设备重哈希和 Service conntrack 状态。</p></aside>
+      </section>
+
+      <section class="slide" data-section="规模设计" data-title="每个 Rack 选择少量 Speaker 即可">
+        <div class="slide-header"><div><p class="eyebrow">Bound external sessions per failure domain</p><h2>每个 Rack 选择少量 Speaker 即可</h2><div class="rule"></div></div></div>
+        <div class="rack-scale"><article><span>Rack A</span><div><b>speaker</b><b>speaker</b><i>18 regular nodes</i></div><strong>2 ToR sessions</strong></article><article><span>Rack B</span><div><b>speaker</b><b>speaker</b><i>18 regular nodes</i></div><strong>2 ToR sessions</strong></article><article><span>Rack C</span><div><b>speaker</b><b>speaker</b><i>18 regular nodes</i></div><strong>2 ToR sessions</strong></article></div>
+        <div class="formula-banner">60 Nodes · 3 Racks · 2 Speakers/Rack = 6 external BGP sessions</div>
+        <div class="slide-number">40</div>
+        <aside class="speaker-copy"><p>生产常按 rack 选择 2 到 4 台 speaker，而不是全局随便挑两台。这样路由入口靠近对应 ToR，也能控制 session 数。</p><p>具体数量取决于容量、故障模型和设备 ECMP 能力，不是固定答案。</p></aside>
+      </section>
+
+      <section class="slide" data-section="高可用" data-title="Speaker 要跨节点与硬件故障域分布">
+        <div class="slide-header"><div><p class="eyebrow">Redundancy requires independent failure domains</p><h2>Speaker 要跨节点与硬件故障域分布</h2><div class="rule"></div></div></div>
+        <div class="failure-domains"><article class="bad"><span>风险布局</span><h3>两台 Speaker 在同一宿主机 / 电源域</h3><div><b>S1</b><b>S2</b></div><p>一次硬件故障同时失去两条路径。</p></article><article class="good"><span>推荐布局</span><h3>分散到不同宿主机 / 电源 / ToR</h3><div><b>S1</b><i>separate</i><b>S2</b></div><p>单点故障后仍有至少一条入口。</p></article></div>
+        <div class="callout"><strong>同时监控：</strong>Node Ready、BGP Established、prefix received、FIB next hops 和端到端探测。</div>
+        <div class="slide-number">41</div>
+        <aside class="speaker-copy"><p>两台 speaker 如果落在同一物理故障域，数量上冗余，实际并不高可用。</p><p>生产要同时考虑 Kubernetes 调度域、服务器、电源、网卡和 ToR 故障域。</p></aside>
+      </section>
+
+      <section class="slide" data-section="故障收敛" data-title="一台 Speaker 故障后 ECMP 收敛到剩余路径">
+        <div class="slide-header"><div><p class="eyebrow">Failure withdrawal and forwarding recovery</p><h2>一台 Speaker 故障后 ECMP 收敛到剩余路径</h2><div class="rule"></div></div></div>
+        <div class="failover-flow"><article class="failed"><span>worker .11</span><strong>session DOWN</strong><code>path withdrawn</code></article><div class="failover-rib"><span>cEOS</span><strong>remove next hop .11</strong><b>keep .12</b></div><article class="healthy"><span>worker2 .12</span><strong>session UP</strong><code>traffic continues</code></article></div>
+        <div class="grid-3 compact-gap"><div class="flat-block red"><h3>检测</h3><p class="small">BGP hold timer / BFD（若部署）。</p></div><div class="flat-block yellow"><h3>撤路由</h3><p class="small">失效 peer 的 path 从 RIB/FIB 删除。</p></div><div class="flat-block green"><h3>重哈希</h3><p class="small">新流量走剩余 speaker。</p></div></div>
+        <div class="slide-number">42</div>
+        <aside class="speaker-copy"><p>一台 speaker 故障后，BGP 检测 session down，撤销它的 path。cEOS 只保留另一条 next hop。</p><p>收敛时间取决于 hold timer、BFD、设备和 Calico 配置。已有 TCP 连接可能中断，不能把路由冗余等同于无损会话迁移。</p></aside>
+      </section>
+
+      <section class="slide" data-section="变更风险" data-title="BGP 拓扑切换应放入维护窗口">
+        <div class="slide-header"><div><p class="eyebrow">Topology changes can disrupt connectivity</p><h2>BGP 拓扑切换应放入维护窗口</h2><div class="rule"></div></div></div>
+        <div class="change-timeline"><article><span>Before</span><h3>记录现状</h3><p>邻居、前缀、next hop、Service 与流量基线。</p></article><i>›</i><article><span>Change</span><h3>分阶段应用</h3><p>先增加新路径，再验证，再撤旧路径。</p></article><i>›</i><article><span>After</span><h3>端到端验收</h3><p>控制面、FIB、连接与监控全部确认。</p></article></div>
+        <div class="flat-block red"><p class="body">Calico 官方文档提醒：从 full mesh 大幅切换到 ToR peering 可能造成暂时 Pod 网络中断。生产变更要准备回退和带外访问。</p></div>
+        <div class="slide-number">43</div>
+        <aside class="speaker-copy"><p>显著改变 BGP 拓扑会引发路由撤销和重新学习，短暂黑洞并不意外。</p><p>安全做法是先加新路径，确认稳定，再拆旧路径。准备回退命令和不依赖业务网络的管理通道。</p></aside>
+      </section>
+
+      <section class="slide" data-section="排障" data-title="沿标签、邻接、前缀与数据面逐层检查">
+        <div class="slide-header"><div><p class="eyebrow">Troubleshooting ladder</p><h2>沿标签、邻接、前缀与数据面逐层检查</h2><div class="rule"></div></div></div>
+        <div class="trouble-grid"><article><span>1</span><h3>Node labels</h3><code>kubectl get nodes -l bgp-peer=true</code><p>speaker 集合是否正确。</p></article><article><span>2</span><h3>BGPPeer</h3><code>peerIP / AS / nodeSelector</code><p>YAML 与 selector 是否匹配。</p></article><article><span>3</span><h3>TCP/BGP</h3><code>show ip bgp summary</code><p>State、Up/Down、PfxRcd。</p></article><article><span>4</span><h3>Advertisement</h3><code>serviceLoadBalancerIPs</code><p>实际 LB IP 是否位于 CIDR。</p></article><article><span>5</span><h3>FIB/ECMP</h3><code>show ip route</code><p>安装了几个 next hop。</p></article><article><span>6</span><h3>Service path</h3><code>telnet / curl / endpointslice</code><p>DNAT 与后端 Pod 是否正常。</p></article></div>
+        <div class="slide-number">44</div>
+        <aside class="speaker-copy"><p>排障先看 selector 输入，再看 session，然后看前缀，最后看 FIB 和 Service 数据面。</p><p>常见误区是 session Established 就停止排查，或者路由存在却没有检查 Service Endpoint。</p></aside>
+      </section>
+
+      <section class="slide" data-section="现场演示" data-title="二十分钟选择性 BGP 演示顺序">
+        <div class="slide-header"><div><p class="eyebrow">From labels to end-to-end connectivity</p><h2>二十分钟选择性 BGP 演示顺序</h2><div class="rule"></div></div></div>
+        <div class="demo-columns"><ol><li><code>containerlab inspect topology.clab.yaml</code><span>确认 cEOS 与五 Node</span></li><li><code>kubectl get nodes -l bgp-peer=true</code><span>确认两台 speaker</span></li><li><code>kubectl get bgppeer bgppeer-arista -o yaml</code><span>解释 selector</span></li><li><code>show ip bgp summary</code><span>只见 .11 与 .12</span></li><li><code>kubectl apply -f lb-ippool.yaml</code><span>创建专用池</span></li></ol><ol start="6"><li><code>kubectl apply -f lb-nginx-service.yaml</code><span>读取实际 EXTERNAL-IP</span></li><li><code>kubectl apply -f bgpconfiguration-lb.yaml</code><span>允许发布 /28</span></li><li><code>show ip route</code><span>观察单最佳路径</span></li><li><code>maximum-paths 4</code><span>观察两个 ECMP next hop</span></li><li><code>telnet &lt;LB_IP&gt; 80</code><span>验证端到端后清理</span></li></ol></div>
+        <div class="callout"><strong>可选动态演示：</strong>给 worker3 加标签，观察第三条 session；验证后移除标签恢复初始状态。</div>
+        <div class="slide-number">45</div>
+        <aside class="speaker-copy"><p>演示先证明选择集合与两条 session，再创建 LB 地址、允许发布、开启 ECMP，最后测试连接。</p><p>动态加标签很直观，但演示结束要恢复初始状态，并运行 destroy.sh 清理整个实验。</p></aside>
+      </section>
+
+      <section class="slide" data-section="总结与来源" data-title="选择性 BGP 的完整证据链">
+        <div class="slide-header"><div><p class="eyebrow">Summary and sources</p><h2>选择性 BGP 的完整证据链</h2><div class="rule"></div></div></div>
+        <div class="summary-row"><article><span>01</span><h3>选择</h3><p>Kubernetes Node label 定义哪些节点承担外部 speaker 角色。</p></article><article><span>02</span><h3>邻接</h3><p>BGPPeer nodeSelector 只在匹配节点生成到 cEOS 的 eBGP。</p></article><article><span>03</span><h3>发布</h3><p>BGPConfiguration 允许 speaker 发布 LoadBalancer `/28`。</p></article><article><span>04</span><h3>转发</h3><p>cEOS ECMP 选 speaker，Service 再选任意 Node 上的 Pod。</p></article></div>
+        <div class="sources"><article><strong>Lesson 15</strong><a href="https://k8snetworking.com/lessons/15-selective-bgp-peering">k8snetworking.com/lessons/15-selective-bgp-peering</a></article><article><strong>课程仓库</strong><a href="https://github.com/aadhilam/k8-networking-calico-containerlab/tree/master/containerlab/15-selective-bgp-peering">github.com/aadhilam/.../15-selective-bgp-peering</a></article><article><strong>Calico BGP</strong><a href="https://docs.tigera.io/calico/latest/networking/configuring/bgp">docs.tigera.io/.../configuring/bgp</a></article><article><strong>BGPPeer Reference</strong><a href="https://docs.tigera.io/calico/latest/reference/resources/bgppeer">docs.tigera.io/.../bgppeer</a></article></div>
+        <div class="slide-number">46</div>
+        <aside class="speaker-copy"><p>最后记住四层：标签选择 speaker，BGPPeer 建立邻接，BGPConfiguration 控制发布前缀，ECMP 和 kube-proxy 完成数据转发。</p><p>非 speaker Node 不是不可达节点，它们只是没有外部 BGP session。Pod 仍通过集群内部网络参与 Service。</p></aside>
+      </section>
+    </div>
+    <div class="progress-track" aria-hidden="true"><div id="progress-fill"></div></div>
+    <nav class="controls" aria-label="演示控制"><button class="tool-btn" id="prev" type="button" title="上一页" aria-label="上一页">‹</button><button class="tool-btn" id="next" type="button" title="下一页" aria-label="下一页">›</button><button class="tool-btn" id="notes-toggle" type="button" title="讲稿" aria-label="显示或隐藏讲稿" aria-pressed="false">N</button><button class="tool-btn" id="overview-toggle" type="button" title="总览" aria-label="显示或隐藏总览" aria-pressed="false">▦</button><button class="tool-btn" id="fullscreen" type="button" title="全屏" aria-label="切换全屏">⛶</button></nav>
+    <button class="notes-backdrop" id="notes-backdrop" type="button" aria-label="关闭讲稿" tabindex="-1"></button>
+    <aside class="notes-panel" id="notes-panel" aria-live="polite" aria-hidden="true"><div class="notes-header"><h2 id="notes-title">讲稿</h2><button class="notes-close" id="notes-close" type="button" title="关闭讲稿" aria-label="关闭讲稿">×</button></div><div id="notes-body"></div></aside>
+    <aside class="overview" id="overview" aria-label="幻灯片总览"></aside>
+  </main>
+  <script src="app.js?v=1"></script>
+</body>
+</html>
