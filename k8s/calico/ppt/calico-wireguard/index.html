@@ -1,0 +1,636 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="基于 Kubernetes Networking Labs Lesson 13 的 Calico WireGuard、抓包验证、密钥与策略路由中文动态演示课件">
+  <title>Calico WireGuard：把跨节点 Pod 流量装进加密隧道</title>
+  <link rel="stylesheet" href="styles.css?v=1">
+</head>
+<body>
+  <main class="deck-shell" aria-label="Calico WireGuard HTML 演示文稿">
+    <div id="deck-canvas">
+
+      <section class="slide cover active" data-section="Calico WireGuard" data-title="把跨节点 Pod 流量装进加密隧道">
+        <div class="cover-layout">
+          <div class="cover-copy">
+            <p class="eyebrow">Lesson 13 · WireGuard · Felix · policy routing</p>
+            <h1>Calico WireGuard<br><span class="yellow-mark">跨节点流量加密</span></h1>
+            <p class="lead">同一份 HTTP 请求，开启前能读到 token，开启后只剩 Node IP、UDP 51820 与不可读密文。</p>
+            <div class="cover-meta"><span>wireguard.cali</span><span>UDP 51820</span><span>fwmark 0x200000</span></div>
+          </div>
+          <div class="cover-stage is-playing" id="cover-flow" aria-label="Pod 流量在两个节点之间通过 WireGuard 加密传输">
+            <article class="cover-node source"><span>worker</span><strong>frontend-client</strong><code>192.168.128.66</code></article>
+            <div class="cover-track"><i class="plain">HTTP</i><span class="lock">LOCK</span><i class="cipher">WG</i></div>
+            <article class="cover-node target"><span>worker2</span><strong>backend-api</strong><code>192.168.58.200</code></article>
+            <div class="cover-wire"><b>172.18.0.3:51820</b><span>encrypted UDP</span><b>172.18.0.4:51820</b></div>
+            <p class="stage-caption">应用继续使用 Pod IP 与 HTTP，节点之间的 underlay 只看到 WireGuard 外层</p>
+          </div>
+        </div>
+        <aside class="speaker-copy">
+          <p>大家好，这一节我们把跨节点 Pod 流量装进 WireGuard 隧道。应用不需要改代码，仍然发送普通 HTTP；Calico 在源节点加密，在目标节点解密。</p>
+          <p>验证方法非常直接：开启前 tcpdump 能读到 token 和示例凭据，开启后 eth0 上只看到 Node IP、UDP 51820 和不可读载荷。</p>
+          <p class="note-source">主课程：<a href="https://k8snetworking.com/lessons/13-wireguard">https://k8snetworking.com/lessons/13-wireguard</a></p>
+        </aside>
+      </section>
+
+      <section class="slide" data-section="威胁模型" data-title="跨节点流量会经过共享 underlay">
+        <div class="slide-header"><div><p class="eyebrow">Why encrypt east-west traffic</p><h2>跨节点流量会经过共享 underlay</h2><div class="rule"></div></div><button class="action-btn" data-replay="#risk-flow" type="button" title="重放动画" aria-label="重放明文风险动画">↻</button></div>
+        <div class="risk-flow is-playing" id="risk-flow">
+          <article><span>Node A</span><strong>Pod A</strong><code>HTTP + Bearer token</code></article>
+          <div class="risk-track"><i>password=...</i><b>tcpdump</b></div>
+          <article><span>Node B</span><strong>Pod B</strong><code>JSON + credentials</code></article>
+        </div>
+        <div class="quad-row"><article><b>监听</b><span>underlay 抓包可读取应用明文</span></article><article><b>篡改</b><span>路径中间设备可能改变报文</span></article><article><b>横向移动</b><span>节点权限泄露扩大观察范围</span></article><article><b>合规</b><span>传输中数据可能需要加密</span></article></div>
+        <div class="slide-number">02</div>
+        <aside class="speaker-copy">
+          <p>Pod 到 Pod 的逻辑地址属于集群，但跨节点包仍要经过 Node 网卡和 underlay。没有加密时，拥有抓包能力的人可能看到 HTTP header 与 JSON 内容。</p>
+          <p>本实验故意放入公开的演示字符串来证明风险，不能在真实环境里使用真实密码、token 或云密钥做演示。</p>
+        </aside>
+      </section>
+
+      <section class="slide" data-section="保护范围" data-title="WireGuard 保护 Node 到 Node 这一段">
+        <div class="slide-header"><div><p class="eyebrow">Encryption boundary</p><h2>WireGuard 保护 Node 到 Node 这一段</h2><div class="rule"></div></div><button class="action-btn" data-replay="#boundary-flow" type="button" title="重放动画" aria-label="重放加密边界动画">↻</button></div>
+        <div class="boundary-flow is-playing" id="boundary-flow">
+          <article class="pod"><span>Pod A</span><strong>plaintext</strong></article><div class="short-track"><i></i></div><article class="node"><span>Node A</span><strong>encrypt</strong></article><div class="encrypted-track"><i>UDP 51820</i></div><article class="node"><span>Node B</span><strong>decrypt</strong></article><div class="short-track"><i></i></div><article class="pod"><span>Pod B</span><strong>plaintext</strong></article>
+        </div>
+        <div class="scope-grid"><article class="yes"><span>加密</span><p>跨节点 Pod 流量的 host-to-host 段。</p></article><article class="no"><span>不加密</span><p>同节点 Pod 之间的本地路径。</p></article><article class="caveat"><span>边界</span><p>Pod 到本机 host 的短段仍是明文，需要 root 才易于截获。</p></article></div>
+        <div class="slide-number">03</div>
+        <aside class="speaker-copy">
+          <p>Calico WireGuard 不是 sidecar，所以不会从 Pod 进程开始一路加密到对端进程。它保护的是 host-to-host 这一段。</p>
+          <p>源节点收到 Pod 包后加密，目标节点解密后再交给 Pod。同节点通信不会绕到 WireGuard 隧道，这也是实验必须跨节点放置 Pod 的原因。</p>
+        </aside>
+      </section>
+
+      <section class="slide" data-section="包结构" data-title="开启前后，underlay 看到的内容不同">
+        <div class="slide-header"><div><p class="eyebrow">Visible headers and hidden payload</p><h2>开启前后，underlay 看到的内容不同</h2><div class="rule"></div></div></div>
+        <div class="packet-compare">
+          <article class="before"><header>WireGuard 关闭</header><div class="packet-row"><span>Outer IP</span><span>transport</span><span>VXLAN / routed IP</span><strong>HTTP + auth + JSON</strong></div><footer>应用内容可见</footer></article>
+          <article class="after"><header>WireGuard 开启</header><div class="packet-row"><span>Node IP</span><span>UDP 51820</span><span>WG header</span><strong>encrypted inner packet</strong></div><footer>仅外层寻址信息可见</footer></article>
+        </div>
+        <div class="callout"><strong>准确理解：</strong>WireGuard 不隐藏外层 Node IP 和 UDP 端口。它隐藏内层 Pod 地址、传输层信息和应用载荷。</div>
+        <div class="slide-number">04</div>
+        <aside class="speaker-copy">
+          <p>WireGuard 开启后，underlay 仍要知道把包送到哪个 Node，所以外层 Node IP 和 UDP 51820 是可见的。</p>
+          <p>真正被加密的是完整内层 IP 包。Pod IP、TCP header、HTTP header 和 JSON 都进入密文载荷。</p>
+        </aside>
+      </section>
+
+      <section class="slide" data-section="实验前提" data-title="两个测试 Pod 必须位于不同节点">
+        <div class="slide-header"><div><p class="eyebrow">Cross-node placement is required</p><h2>两个测试 Pod 必须位于不同节点</h2><div class="rule"></div></div></div>
+        <div class="placement-layout"><article><span>wireguard-worker</span><h3>frontend-client</h3><code>192.168.128.66</code><p>preferred nodeAffinity</p></article><div class="placement-link"><b>encrypted scope</b><i></i></div><article><span>wireguard-worker2</span><h3>backend-api</h3><code>192.168.58.200</code><p>preferred nodeAffinity</p></article></div>
+        <div class="grid-2 compact-gap"><div class="flat-block green"><h3>podAntiAffinity</h3><p class="body">frontend 要求与 backend 分布到不同 hostname。</p></div><div class="flat-block red"><h3>同节点时</h3><p class="body">删除并重建 Pod，直到 <code>kubectl get pods -o wide</code> 显示不同 Node。</p></div></div>
+        <div class="slide-number">05</div>
+        <aside class="speaker-copy">
+          <p>backend 偏好 worker2，frontend 偏好 worker，并且 frontend 还有 required podAntiAffinity，避免与 backend 同节点。</p>
+          <p>演示前一定读 NODE 列。两个 Pod 同节点时，流量不经过 WireGuard，抓不到预期的 UDP 51820。</p>
+        </aside>
+      </section>
+
+      <section class="slide" data-section="实验环境" data-title="Lesson 13 的三节点拓扑">
+        <div class="slide-header"><div><p class="eyebrow">containerlab/13-wireguard</p><h2>Lesson 13 的三节点拓扑</h2><div class="rule"></div></div><span class="command">Calico 3.30.0</span></div>
+        <div class="three-nodes"><article><span>control-plane</span><h3>wireguard-control-plane</h3><p>API、CoreDNS、Calico 控制组件</p></article><article><span>worker</span><h3>wireguard-worker</h3><p>frontend-client</p></article><article><span>worker</span><h3>wireguard-worker2</h3><p>backend-api 与抓包点</p></article></div>
+        <table class="data-table compact"><thead><tr><th>参数</th><th>课程值</th><th>作用</th></tr></thead><tbody><tr><td>Pod CIDR</td><td>192.168.0.0/16</td><td>Calico IPPool</td></tr><tr><td>Service CIDR</td><td>10.96.0.0/16</td><td>backend-api ClusterIP</td></tr><tr><td>encapsulation</td><td>VXLANCrossSubnet</td><td>WireGuard 开启前的基础网络</td></tr><tr><td>Node image</td><td>kindest/node:v1.28.0</td><td>WireGuard 内核能力来自宿主机</td></tr></tbody></table>
+        <div class="slide-number">06</div>
+        <aside class="speaker-copy">
+          <p>实验是一个 control-plane 加两个 worker。Calico 初始只配置基础 IPPool，不在 Installation 资源里直接开启 WireGuard。</p>
+          <p>开启动作会在练习中通过 FelixConfiguration patch 完成，这样才能做前后抓包对照。</p>
+        </aside>
+      </section>
+
+      <section class="slide" data-section="业务场景" data-title="Frontend 持续请求 Backend API">
+        <div class="slide-header"><div><p class="eyebrow">A deliberate plaintext demo</p><h2>Frontend 持续请求 Backend API</h2><div class="rule"></div></div></div>
+        <div class="app-flow"><article class="frontend"><span>curlimages/curl</span><h3>frontend-client</h3><code>GET /api/users</code><code>GET /api/config</code><code>GET /api/health</code></article><div class="http-track"><i>HTTP</i><b>1 request / second</b></div><article class="backend"><span>python:3.11-slim</span><h3>backend-api</h3><code>HTTPServer :8080</code><p>返回 JSON 示例数据</p></article></div>
+        <div class="secret-strip"><span>Bearer token</span><span>X-API-Key</span><span>session cookie</span><span>Basic auth</span><span>demo credentials</span></div>
+        <div class="slide-number">07</div>
+        <aside class="speaker-copy">
+          <p>frontend 容器进入循环，每秒访问用户、配置和健康检查接口。请求 header 带 Bearer token、API key、cookie 和 Basic auth。</p>
+          <p>backend 返回带演示密码和示例云密钥的 JSON。所有内容都来自公开实验清单，只用于证明明文可见。</p>
+        </aside>
+      </section>
+
+      <section class="slide" data-section="Backend 清单" data-title="Backend API 返回可识别的演示数据">
+        <div class="slide-header"><div><p class="eyebrow">tools/01-backend-api.yaml</p><h2>Backend API 返回可识别的演示数据</h2><div class="rule"></div></div></div>
+        <div class="grid-2"><pre class="code manifest-code"><span class="key">metadata:</span>
+  <span class="key">name:</span> backend-api
+  <span class="key">labels:</span>
+    <span class="key">app:</span> backend-api
+    <span class="key">role:</span> backend
+<span class="key">spec:</span>
+  <span class="key">affinity:</span>
+    <span class="key">nodeAffinity:</span> <span class="comment"># prefer worker2</span>
+  <span class="key">containers:</span>
+  - <span class="key">image:</span> python:3.11-slim
+    <span class="key">ports:</span>
+    - <span class="key">containerPort:</span> <span class="value">8080</span></pre><pre class="code manifest-code"><span class="comment"># HTTP handlers</span>
+<span class="key">/api/users</span>
+  usernames, demo passwords,
+  database connection string
+
+<span class="key">/api/config</span>
+  demo AWS key,
+  demo Stripe key,
+  database URL
+
+<span class="key">/api/health</span>
+  status + timestamp</pre></div>
+        <div class="flat-block red"><p class="body"><strong>安全提示：</strong>不要把真实凭据写进测试流量。实验字符串是公开的 fake/demo 数据。</p></div>
+        <div class="slide-number">08</div>
+        <aside class="speaker-copy">
+          <p>backend 是一个内嵌 Python HTTPServer，Service 暴露 8080。接口返回内容故意容易被 grep 匹配。</p>
+          <p>演示只需要展示字段名或已遮盖值，不要在正式截图和录屏里替换成真实秘密。</p>
+        </aside>
+      </section>
+
+      <section class="slide" data-section="Frontend 清单" data-title="Frontend 用 header 携带演示凭据">
+        <div class="slide-header"><div><p class="eyebrow">tools/02-frontend-client.yaml</p><h2>Frontend 用 header 携带演示凭据</h2><div class="rule"></div></div></div>
+        <div class="manifest-focus"><pre class="code manifest-code"><span class="key">metadata:</span>
+  <span class="key">name:</span> frontend-client
+<span class="key">spec:</span>
+  <span class="key">affinity:</span>
+    <span class="key">podAntiAffinity:</span>
+      <span class="key">requiredDuringSchedulingIgnoredDuringExecution:</span>
+      - <span class="key">topologyKey:</span> kubernetes.io/hostname
+    <span class="key">nodeAffinity:</span> <span class="comment"># prefer worker</span>
+  <span class="key">containers:</span>
+  - <span class="key">image:</span> curlimages/curl:latest</pre><div class="request-sample"><h3>循环请求</h3><pre class="code mini-code">curl -s \
+  -H "Authorization: Bearer eyJ..." \
+  -H "X-API-Key: test_fake..." \
+  -H "Cookie: session=demo..." \
+  http://backend-api:8080/api/users
+
+sleep 1</pre><p>Service DNS 与 ClusterIP 路径保持正常，WireGuard 对应用透明。</p></div></div>
+        <div class="slide-number">09</div>
+        <aside class="speaker-copy">
+          <p>frontend 使用 curl 镜像，不停访问 backend-api Service。required podAntiAffinity 保证它与 backend 不同节点。</p>
+          <p>开启 WireGuard 前后，这段 curl 命令不会变化。透明加密的含义就是应用协议和服务发现都不需要改。</p>
+        </aside>
+      </section>
+
+      <section class="slide" data-section="安全边界" data-title="演示凭据必须保持公开与可撤销">
+        <div class="slide-header"><div><p class="eyebrow">Safe demonstration practice</p><h2>演示凭据必须保持公开与可撤销</h2><div class="rule"></div></div></div>
+        <div class="safety-split"><article class="ok"><span>可用</span><h3>课程内置 fake 值</h3><p>固定字符串、已公开、不能登录任何真实系统。</p><code>test_fake_api_key_for_demo_only</code></article><article class="bad"><span>禁止</span><h3>真实环境凭据</h3><p>真实 JWT、数据库密码、云访问密钥或 session cookie。</p><code>never capture production secrets</code></article></div>
+        <div class="callout"><strong>抓包权限：</strong>能在 Node 上运行 tcpdump 通常意味着高权限。生产环境应限制 Node root、审计访问并缩短抓包保留时间。</div>
+        <div class="slide-number">10</div>
+        <aside class="speaker-copy">
+          <p>这份实验能成功 grep 出敏感字段，正因为它故意发送公开 fake 值。真实环境绝不能为了演示造一条包含真密钥的流量。</p>
+          <p>tcpdump 本身也是高权限操作。演示环境与生产数据必须隔离，抓包文件也要按敏感数据处理。</p>
+        </aside>
+      </section>
+
+      <section class="slide" data-section="部署" data-title="deploy.sh 创建环境并安装抓包工具">
+        <div class="slide-header"><div><p class="eyebrow">Automated lab setup</p><h2>deploy.sh 创建环境并安装抓包工具</h2><div class="rule"></div></div></div>
+        <div class="runway"><article><span>01</span><h3>Kind topology</h3><code>1 control-plane + 2 workers</code></article><i>›</i><article><span>02</span><h3>Calico 3.30</h3><code>WireGuard disabled</code></article><i>›</i><article><span>03</span><h3>Microservices</h3><code>backend + frontend</code></article><i>›</i><article><span>04</span><h3>Placement check</h3><code>different nodes</code></article><i>›</i><article><span>05</span><h3>Node tools</h3><code>tcpdump + wg</code></article></div>
+        <pre class="code command-code">cd containerlab/13-wireguard
+chmod +x deploy.sh
+./deploy.sh
+export KUBECONFIG=$(pwd)/wireguard.kubeconfig</pre>
+        <div class="slide-number">11</div>
+        <aside class="speaker-copy">
+          <p>deploy.sh 重建 ContainerLab、安装 Calico、部署两个 Pod，再检查它们是否跨节点。最后通过 docker exec 在两个 worker 安装 tcpdump 和 wireguard-tools。</p>
+          <p>脚本结尾明确提示当前 WireGuard 是 DISABLED，方便我们先抓明文。</p>
+        </aside>
+      </section>
+
+      <section class="slide" data-section="环境验证" data-title="三台节点 Ready，两个 Pod 跨节点">
+        <div class="slide-header"><div><p class="eyebrow">Exercise 1</p><h2>三台节点 Ready，两个 Pod 跨节点</h2><div class="rule"></div></div></div>
+        <div class="grid-2"><pre class="code terminal"><span class="prompt">$</span> kubectl get nodes -o wide
+
+wireguard-control-plane  Ready  control-plane
+wireguard-worker         Ready
+wireguard-worker2        Ready</pre><pre class="code terminal"><span class="prompt">$</span> kubectl get pods -o wide
+
+backend-api      1/1 Running  <span class="cool">192.168.58.200</span>  wireguard-worker2
+frontend-client  1/1 Running  <span class="cool">192.168.128.66</span> wireguard-worker</pre></div>
+        <div class="flat-block yellow"><p class="body">课程中的 Pod IP 是示例值。现场先记录自己的 IP 与 NODE，后续路由表、allowed ips 和抓包都要按现场输出解释。</p></div>
+        <div class="slide-number">12</div>
+        <aside class="speaker-copy">
+          <p>三台 Node 全部 Ready，backend 在 worker2，frontend 在 worker。这个调度结果满足跨节点加密前提。</p>
+          <p>课程示例 IP 会随 IPAM 变化，后面的 192.168.58.200 和 192.168.128.66 只用于串联概念。</p>
+        </aside>
+      </section>
+
+      <section class="slide" data-section="开启前" data-title="Felix 与 Node 都没有 WireGuard 配置">
+        <div class="slide-header"><div><p class="eyebrow">Exercise 2</p><h2>Felix 与 Node 都没有 WireGuard 配置</h2><div class="rule"></div></div></div>
+        <div class="grid-2"><div><h3>控制面</h3><pre class="code terminal"><span class="prompt">$</span> kubectl get felixconfiguration default \
+    -o yaml | grep -i wireguard
+
+<span class="muted">(no output)</span></pre><p class="evidence-note">spec 中尚未设置 wireguardEnabled。</p></div><div><h3>数据面</h3><pre class="code terminal"><span class="prompt">$</span> docker exec -it wireguard-worker \
+    ip link show type wireguard
+
+<span class="muted">(no output)</span></pre><p class="evidence-note">节点没有 wireguard.cali 接口。</p></div></div>
+        <div class="callout"><strong>证据链：</strong>FelixConfiguration 没有开关，Node 也没有接口，下一步抓到的 underlay 流量属于未启用状态。</div>
+        <div class="slide-number">13</div>
+        <aside class="speaker-copy">
+          <p>先证明当前没有加密。FelixConfiguration grep 不到 WireGuard 字段，Node 也没有 type wireguard 的接口。</p>
+          <p>这个基线很重要，否则后面看到 UDP 51820 时无法证明变化由本次 patch 引起。</p>
+        </aside>
+      </section>
+
+      <section class="slide" data-section="明文抓包" data-title="开启前能直接 grep 到演示字段">
+        <div class="slide-header"><div><p class="eyebrow">Exercise 3.1</p><h2>开启前能直接 grep 到演示字段</h2><div class="rule"></div></div></div>
+        <pre class="code terminal capture"><span class="prompt">#</span> docker exec -it wireguard-worker2 \
+  tcpdump -Z root -i eth0 -A 2&gt;/dev/null | \
+  grep -E --color=always 'password|secret|Bearer|API-Key|aws_|stripe_'
+
+"password": "<span class="error">xxx</span>"
+Authorization: Bearer <span class="error">eyJxxx.xxx.xxx</span>
+X-API-Key: <span class="error">sk_live_xxx</span>
+"aws_access_key": "<span class="error">AKIAxxx</span>"
+"aws_secret_key": "<span class="error">xxx</span>"
+"stripe_api_key": "<span class="error">sk_live_xxx</span>"</pre>
+        <div class="reading-strip"><article><span>接口</span><strong>worker2 eth0</strong></article><article><span>模式</span><strong>-A ASCII</strong></article><article><span>结论</span><strong>应用字段可读</strong></article><article><span>停止</span><strong>Ctrl+C</strong></article></div>
+        <div class="slide-number">14</div>
+        <aside class="speaker-copy">
+          <p>在 worker2 的 eth0 抓包，用 -A 把 payload 按 ASCII 打印，再 grep 特征字段。课程能看到 password、Bearer、API-Key 和示例云密钥。</p>
+          <p>这证明未加密路径上的观察者可以读取应用层内容。演示时展示已遮盖值就够了。</p>
+        </aside>
+      </section>
+
+      <section class="slide" data-section="明文抓包" data-title="完整抓包还能还原 HTTP 上下文">
+        <div class="slide-header"><div><p class="eyebrow">Exercise 3.2</p><h2>完整抓包还能还原 HTTP 上下文</h2><div class="rule"></div></div></div>
+        <div class="http-capture"><pre class="code terminal"><span class="prompt">#</span> docker exec -it wireguard-worker2 timeout 10 \
+  tcpdump -Z root -i eth0 -A 2&gt;/dev/null | head -150
+
+GET /api/users HTTP/1.1
+Host: backend-api:8080
+Authorization: Bearer <span class="error">[demo token]</span>
+X-API-Key: <span class="error">[demo key]</span>
+Cookie: session=<span class="error">[demo cookie]</span>
+
+HTTP/1.0 200 OK
+Content-Type: application/json
+{ "users": [...], "db_connection": "[demo value]" }</pre><div class="http-layers"><article><span>L3</span><p>Pod / Node address</p></article><article><span>L4</span><p>TCP ports</p></article><article><span>L7</span><p>method、path、header、JSON</p></article></div></div>
+        <div class="slide-number">15</div>
+        <aside class="speaker-copy">
+          <p>去掉 grep 后，可以看到完整请求路径、header 和 JSON 返回。网络层抓包能直接还原应用上下文。</p>
+          <p>这页说明为什么仅依赖“集群网络是内部网络”不够。共享 underlay 仍应有传输加密。</p>
+        </aside>
+      </section>
+
+      <section class="slide" data-section="开启 WireGuard" data-title="一个 FelixConfiguration patch 开启 IPv4 加密">
+        <div class="slide-header"><div><p class="eyebrow">Exercise 4.1 and 4.2</p><h2>一个 FelixConfiguration patch 开启 IPv4 加密</h2><div class="rule"></div></div></div>
+        <div class="patch-layout"><pre class="code command-code"><span class="prompt">$</span> kubectl patch felixconfiguration default \
+  --type='merge' \
+  -p '{"spec":{"wireguardEnabled":true}}'
+
+felixconfiguration.crd.projectcalico.org/default patched</pre><div class="patch-result"><span>desired state</span><strong>wireguardEnabled: true</strong><p>Felix 在参与节点上生成配置并建立 peers。</p></div></div>
+        <pre class="code command-code"><span class="prompt">$</span> kubectl get felixconfiguration default -o yaml | grep -i wireguard
+  wireguardEnabled: true</pre>
+        <div class="callout"><strong>不要立刻抓包：</strong>控制面字段先更新，Node 接口、peer 和路由需要几秒钟完成 reconcile。</div>
+        <div class="slide-number">16</div>
+        <aside class="speaker-copy">
+          <p>课程用一个 merge patch 打开 IPv4 WireGuard。kubectl 返回 patched 后，再读取 FelixConfiguration 确认字段为 true。</p>
+          <p>这只证明期望状态已提交。Felix 还要生成密钥、创建接口、配置 peer 和路由，所以稍等几秒再验证数据面。</p>
+        </aside>
+      </section>
+
+      <section class="slide" data-section="控制链" data-title="Calico 自动完成密钥、Peer 与路由配置">
+        <div class="slide-header"><div><p class="eyebrow">Cluster-wide reconciliation</p><h2>Calico 自动完成密钥、Peer 与路由配置</h2><div class="rule"></div></div><button class="action-btn" data-replay="#reconcile-flow" type="button" title="重放动画" aria-label="重放 WireGuard 配置动画">↻</button></div>
+        <div class="fixed-pipeline is-playing" id="reconcile-flow"><article><span>1</span><h3>Felix<wbr>Configuration</h3><p>wireguardEnabled true</p></article><div class="pipe"><i></i></div><article><span>2</span><h3>Node key pair</h3><p>private stays local</p></article><div class="pipe"><i></i></div><article><span>3</span><h3>Peer discovery</h3><p>public key + endpoint</p></article><div class="pipe"><i></i></div><article><span>4</span><h3>wireguard.cali</h3><p>interface + UDP 51820</p></article><div class="pipe"><i></i></div><article><span>5</span><h3>Policy routing</h3><p>table 1 + fwmark</p></article></div>
+        <div class="callout"><strong>无需手工维护：</strong>Felix 根据 Node 与 IPAM 信息计算 peer、endpoint 和 allowed ips。</div>
+        <div class="slide-number">17</div>
+        <aside class="speaker-copy">
+          <p>开关打开后，Calico 为节点准备 WireGuard key pair，发现其他节点，配置 wireguard.cali、peer、allowed ips 和策略路由。</p>
+          <p>用户不需要手工写 wg0 配置或分发 peer 文件，这正是集成价值。</p>
+        </aside>
+      </section>
+
+      <section class="slide" data-section="接口验证" data-title="wireguard.cali 出现且 MTU 为 1440">
+        <div class="slide-header"><div><p class="eyebrow">Exercise 4.3</p><h2>wireguard.cali 出现且 MTU 为 1440</h2><div class="rule"></div></div></div>
+        <pre class="code terminal large-output"><span class="prompt">#</span> docker exec -it wireguard-worker ip link show type wireguard
+
+10: <span class="cool">wireguard.cali</span>: &lt;POINTOPOINT,NOARP,UP,LOWER_UP&gt;
+    mtu <span class="hot">1440</span> qdisc noqueue state UNKNOWN mode DEFAULT
+    group default qlen 1000
+    link/none</pre>
+        <div class="attribute-row"><article><span>UP</span><strong>接口已启用</strong></article><article><span>POINTOPOINT</span><strong>隧道型接口</strong></article><article><span>NOARP</span><strong>不做二层邻居解析</strong></article><article><span>MTU 1440</span><strong>为外层开销预留空间</strong></article></div>
+        <div class="slide-number">18</div>
+        <aside class="speaker-copy">
+          <p>Node 上出现 wireguard.cali，状态 UP，课程示例 MTU 1440。它比常见 1500 小，用来给 WireGuard 外层头部留空间。</p>
+          <p>state UNKNOWN 对这类虚拟点对点接口并不等于故障，要结合 UP、peer handshake 和真实流量判断。</p>
+        </aside>
+      </section>
+
+      <section class="slide" data-section="Peer 验证" data-title="wg show 给出节点身份与 Peer 状态">
+        <div class="slide-header"><div><p class="eyebrow">Exercise 4.4</p><h2>wg show 给出节点身份与 Peer 状态</h2><div class="rule"></div></div></div>
+        <div class="wg-layout"><pre class="code terminal"><span class="prompt">#</span> docker exec -it wireguard-worker wg show
+
+interface: <span class="cool">wireguard.cali</span>
+  public key: eD2V...MREs=
+  private key: <span class="muted">(hidden)</span>
+  listening port: <span class="hot">51820</span>
+  fwmark: <span class="hot">0x200000</span>
+
+peer: FJ8D...G0c=
+  endpoint: <span class="cool">172.18.0.4:51820</span>
+  allowed ips: 192.168.58.192/26, ...
+  latest handshake: 34 seconds ago
+  transfer: 8.11 MiB received, 6.00 MiB sent</pre><div class="wg-fields"><article><span>identity</span><strong>public key</strong></article><article><span>reachability</span><strong>endpoint</strong></article><article><span>cryptokey routing</span><strong>allowed ips</strong></article><article><span>liveness</span><strong>latest handshake</strong></article><article><span>traffic</span><strong>transfer counters</strong></article></div></div>
+        <div class="slide-number">19</div>
+        <aside class="speaker-copy">
+          <p>wg show 是最重要的状态命令。先看接口名、监听端口和 fwmark，再看每个 peer 的 endpoint、allowed ips、handshake 和 transfer。</p>
+          <p>私钥默认隐藏，这是正确行为。排障通常不需要导出私钥。</p>
+        </aside>
+      </section>
+
+      <section class="slide" data-section="密钥" data-title="静态身份密钥与会话密钥分工不同">
+        <div class="slide-header"><div><p class="eyebrow">Node identity and transport sessions</p><h2>静态身份密钥与会话密钥分工不同</h2><div class="rule"></div></div></div>
+        <div class="key-layout"><article class="node-key"><span>Node A</span><h3>Static key pair</h3><div><b>private A</b><small>只留在本节点，参与 DH</small></div><div><b>public A</b><small>由 Calico 分发给 peers</small></div></article><div class="key-exchange"><strong>Noise IKpsk2</strong><span>ephemeral keys</span><i></i><b>session keys</b></div><article class="node-key"><span>Node B</span><h3>Static key pair</h3><div><b>private B</b><small>只留在本节点，参与 DH</small></div><div><b>public B</b><small>由 Calico 分发给 peers</small></div></article></div>
+        <div class="flat-block yellow"><p class="body"><strong>准确表述：</strong>WireGuard 不使用数字签名来“签出站包”。静态私钥参与 Diffie-Hellman，握手再派生对称会话密钥保护数据包。</p></div>
+        <div class="slide-number">20</div>
+        <aside class="speaker-copy">
+          <p>每个 Node 有长期静态 key pair。私钥留在本节点，公钥提供给 peer。握手还会生成临时密钥，最后派生出数据传输使用的对称 session key。</p>
+          <p>课程表格写了 private key 用于 sign outgoing traffic，这个说法不精确。WireGuard 协议使用 DH 和 AEAD，不是传统数字签名。</p>
+        </aside>
+      </section>
+
+      <section class="slide" data-section="握手" data-title="握手建立会话，数据包使用对称密钥">
+        <div class="slide-header"><div><p class="eyebrow">Handshake and transport</p><h2>握手建立会话，数据包使用对称密钥</h2><div class="rule"></div></div><button class="action-btn" data-replay="#handshake-flow" type="button" title="重放动画" aria-label="重放 WireGuard 握手动画">↻</button></div>
+        <div class="handshake-flow is-playing" id="handshake-flow"><article><span>Initiator</span><strong>static A + ephemeral a</strong></article><div class="handshake-tracks"><div class="hs-track request"><i>initiation</i></div><div class="hs-track response"><i>response</i></div></div><article><span>Responder</span><strong>static B + ephemeral b</strong></article></div>
+        <div class="session-result"><article><span>握手输出</span><strong>双向对称 session keys</strong></article><article><span>数据阶段</span><strong>packet counter + AEAD</strong></article><article><span>重协商</span><strong>自动刷新会话密钥</strong></article></div>
+        <div class="slide-number">21</div>
+        <aside class="speaker-copy">
+          <p>发起方发送 handshake initiation，响应方返回 handshake response。双方用静态和临时 Curve25519 密钥材料派生相同会话状态。</p>
+          <p>之后每个数据包用高效的对称密钥加密。所谓自动 key rotation，主要指会话密钥通过后续握手更新，不等于每天替换 Node 的静态公钥身份。</p>
+        </aside>
+      </section>
+
+      <section class="slide" data-section="密码套件" data-title="WireGuard 固定使用一组现代算法">
+        <div class="slide-header"><div><p class="eyebrow">Noise_IKpsk2_25519_ChaChaPoly_BLAKE2s</p><h2>WireGuard 固定使用一组现代算法</h2><div class="rule"></div></div></div>
+        <table class="data-table crypto-table"><thead><tr><th>阶段</th><th>算法</th><th>作用</th><th>输出</th></tr></thead><tbody><tr><td>DH</td><td>Curve25519</td><td>组合静态与临时密钥材料</td><td>共享秘密</td></tr><tr><td>Key derivation</td><td>BLAKE2s / HKDF</td><td>混合握手上下文</td><td>会话密钥</td></tr><tr><td>Encryption</td><td>ChaCha20</td><td>加密内层 IP packet</td><td>ciphertext</td></tr><tr><td>Authentication</td><td>Poly1305</td><td>检测载荷被篡改</td><td>16-byte tag</td></tr></tbody></table>
+        <div class="grid-2 compact-gap"><div class="flat-block green"><h3>固定套件</h3><p class="body">没有复杂算法协商，配置面更小。</p></div><div class="flat-block blue"><h3>AEAD</h3><p class="body">机密性和完整性一起处理，篡改报文无法通过认证。</p></div></div>
+        <div class="slide-number">22</div>
+        <aside class="speaker-copy">
+          <p>WireGuard 不提供大量可选 cipher suite，而是固定 Curve25519、ChaCha20-Poly1305 和 BLAKE2s。</p>
+          <p>ChaCha20 负责保密，Poly1305 负责认证。没有正确会话密钥的节点既不能读，也不能伪造有效数据包。</p>
+          <p class="note-source">协议来源：<a href="https://www.wireguard.com/protocol/">WireGuard Protocol & Cryptography</a></p>
+        </aside>
+      </section>
+
+      <section class="slide" data-section="加密流程" data-title="原始 Pod 包作为 WireGuard 密文载荷">
+        <div class="slide-header"><div><p class="eyebrow">Encrypt, transport, decrypt</p><h2>原始 Pod 包作为 WireGuard 密文载荷</h2><div class="rule"></div></div><button class="action-btn" data-replay="#encrypt-flow" type="button" title="重放动画" aria-label="重放加解密动画">↻</button></div>
+        <div class="encrypt-flow is-playing" id="encrypt-flow"><article><span>1</span><h3>Inner packet</h3><code>192.168.128.66 → 192.168.58.200</code></article><div class="enc-track"><i>plain</i></div><article class="crypto"><span>2</span><h3>wireguard.cali</h3><code>ChaCha20-Poly1305</code></article><div class="enc-track"><i>cipher</i></div><article><span>3</span><h3>Outer packet</h3><code>172.18.0.3:51820 → 172.18.0.4:51820</code></article></div>
+        <div class="process-strip"><span>allowed ips 选择 peer</span><span>session key 加密</span><span>UDP 外层发送</span><span>目标 Node 验证并解密</span></div>
+        <div class="slide-number">23</div>
+        <aside class="speaker-copy">
+          <p>原始包的源和目的都是 Pod IP。策略路由把它送进 wireguard.cali，allowed ips 找到 peer，WireGuard 用该 peer 的 session key 加密。</p>
+          <p>新外层使用 Node IP 和 UDP 51820。目标 Node 验证认证标签、解密，再把原始 Pod 包交给 backend。</p>
+        </aside>
+      </section>
+
+      <section class="slide" data-section="接口地址" data-title="wireguard.cali 也有自己的 /32 地址">
+        <div class="slide-header"><div><p class="eyebrow">Exercise 4.5</p><h2>wireguard.cali 也有自己的 /32 地址</h2><div class="rule"></div></div></div>
+        <pre class="code terminal large-output"><span class="prompt">#</span> docker exec -it wireguard-worker ip addr show wireguard.cali
+
+10: wireguard.cali: &lt;POINTOPOINT,NOARP,UP,LOWER_UP&gt;
+    mtu 1440 qdisc noqueue state UNKNOWN
+    link/none
+    inet <span class="hot">192.168.128.67/32</span> scope global wireguard.cali
+       valid_lft forever preferred_lft forever</pre>
+        <div class="grid-3 compact-gap"><div class="flat-block green"><h3>来自 Pod CIDR</h3><p class="small">课程示例与 worker 的 IPAM block 对齐。</p></div><div class="flat-block yellow"><h3>参与 allowed ips</h3><p class="small">peer 配置会包含远端相关 tunnel 地址。</p></div><div class="flat-block blue"><h3>外层源地址</h3><p class="small">最终由 main table 选择 eth0 的 Node IP。</p></div></div>
+        <div class="slide-number">24</div>
+        <aside class="speaker-copy">
+          <p>课程示例给 wireguard.cali 分配 192.168.128.67/32，来自 Node 的 Pod CIDR 范围。</p>
+          <p>要区分接口内层地址和外层 underlay 地址。真正出 eth0 的 UDP 包源地址由 main table 选择，示例是 172.18.0.3。</p>
+        </aside>
+      </section>
+
+      <section class="slide" data-section="Cryptokey Routing" data-title="allowed ips 同时决定 Peer 与密钥">
+        <div class="slide-header"><div><p class="eyebrow">Destination prefix selects the peer</p><h2>allowed ips 同时决定 Peer 与密钥</h2><div class="rule"></div></div></div>
+        <div class="allowed-layout"><div class="destination"><span>destination</span><strong>192.168.58.200</strong></div><div class="lookup"><h3>Longest prefix match</h3><article><code>192.168.58.192/26</code><span class="match">MATCH</span></article><article><code>192.168.141.128/26</code><span>no</span></article></div><div class="peer-selected"><span>selected peer</span><strong>FJ8D...G0c=</strong><code>endpoint 172.18.0.4:51820</code><p>使用这个 peer 的会话密钥</p></div></div>
+        <div class="callout"><strong>Cryptokey routing：</strong>目标前缀既是路由选择条件，也是加密身份选择条件。Felix 自动计算和维护这些 allowed ips。</div>
+        <div class="slide-number">25</div>
+        <aside class="speaker-copy">
+          <p>WireGuard 收到目标 192.168.58.200 后，在 allowed ips 里做最长前缀匹配，找到拥有 192.168.58.192/26 的 peer。</p>
+          <p>这个匹配同时给出远端 endpoint 和加密所需会话状态，因此叫 cryptokey routing。</p>
+        </aside>
+      </section>
+
+      <section class="slide" data-section="密文抓包" data-title="同一条 grep 命令不再返回敏感字段">
+        <div class="slide-header"><div><p class="eyebrow">Exercise 5.1</p><h2>同一条 grep 命令不再返回敏感字段</h2><div class="rule"></div></div></div>
+        <div class="before-after-terminal"><article><header>Before</header><pre class="code terminal">tcpdump -i eth0 -A | grep ...
+
+password
+Bearer
+API-Key
+aws_access_key
+stripe_api_key</pre><strong class="visible">VISIBLE</strong></article><article><header>After</header><pre class="code terminal">timeout 15 tcpdump -i eth0 -A | grep ...
+
+<span class="muted">(no output)</span></pre><strong class="hidden">ENCRYPTED</strong></article></div>
+        <div class="flat-block yellow"><p class="body"><strong>解释边界：</strong>grep 无输出是重要证据，但还要继续抓 UDP 51820，确认流量存在且确实进入 WireGuard，而不是业务停了。</p></div>
+        <div class="slide-number">26</div>
+        <aside class="speaker-copy">
+          <p>开启后运行完全相同的 grep，预期 15 秒内没有输出。密码和 header 特征不再出现在 eth0 ASCII payload 中。</p>
+          <p>无输出不能单独证明加密，因为业务停止也会无输出。下一步用 UDP 51820 抓包确认隧道流量存在。</p>
+        </aside>
+      </section>
+
+      <section class="slide" data-section="密文抓包" data-title="eth0 上出现双向 UDP 51820">
+        <div class="slide-header"><div><p class="eyebrow">Exercise 5.2</p><h2>eth0 上出现双向 UDP 51820</h2><div class="rule"></div></div></div>
+        <pre class="code terminal capture"><span class="prompt">#</span> docker exec -it wireguard-worker2 \
+  tcpdump -Z root -i eth0 -c 10 'udp port 51820'
+
+21:17:40.237446 IP wireguard-worker.kind.<span class="hot">51820</span> &gt; wireguard-worker2.<span class="hot">51820</span>: UDP, length 128
+21:17:40.237905 IP wireguard-worker2.<span class="hot">51820</span> &gt; wireguard-worker.kind.<span class="hot">51820</span>: UDP, length 176
+21:17:40.237936 IP wireguard-worker2.<span class="hot">51820</span> &gt; wireguard-worker.kind.<span class="hot">51820</span>: UDP, length 208
+21:17:40.238769 IP wireguard-worker.kind.<span class="hot">51820</span> &gt; wireguard-worker2.<span class="hot">51820</span>: UDP, length 96</pre>
+        <div class="reading-strip"><article><span>协议</span><strong>UDP</strong></article><article><span>端口</span><strong>51820</strong></article><article><span>方向</span><strong>双向</strong></article><article><span>长度</span><strong>随内层包变化</strong></article></div>
+        <div class="slide-number">27</div>
+        <aside class="speaker-copy">
+          <p>这次使用过滤器 udp port 51820，可以看到 worker 与 worker2 之间双向 WireGuard 数据包。</p>
+          <p>包长不同，因为内层 HTTP 请求、响应和握手消息大小不同。外层不会暴露内层 HTTP header。</p>
+        </aside>
+      </section>
+
+      <section class="slide" data-section="外层地址" data-title="抓包只显示 Node IP，不显示 Pod IP">
+        <div class="slide-header"><div><p class="eyebrow">Exercise 5.3</p><h2>抓包只显示 Node IP，不显示 Pod IP</h2><div class="rule"></div></div></div>
+        <div class="header-layers"><div class="outer"><span>VISIBLE OUTER</span><h3>172.18.0.3:51820 → 172.18.0.4:51820</h3><p>underlay 用 Node IP 转发</p></div><div class="inner"><span>ENCRYPTED INNER</span><h3>192.168.128.66 → 192.168.58.200</h3><p>Pod IP、TCP 和 HTTP 全部在密文中</p></div></div>
+        <pre class="code command-code">docker exec -it wireguard-worker2 tcpdump -Z root -i eth0 -n \
+  -c 10 'udp port 51820'</pre>
+        <div class="callout"><strong>隐私边界：</strong>观察者仍能知道哪些 Node 在通信、时间和包长，但无法直接读取内层 Pod 身份与内容。</div>
+        <div class="slide-number">28</div>
+        <aside class="speaker-copy">
+          <p>加 -n 后明确看到外层 172.18.0.3 与 172.18.0.4。原始 Pod IP 不再出现在 eth0 的可解析 header 中。</p>
+          <p>WireGuard提供内容机密性和完整性，但不会隐藏流量元数据，例如通信节点、时间、方向和包长。</p>
+        </aside>
+      </section>
+
+      <section class="slide" data-section="密文载荷" data-title="ASCII 模式只剩不可读二进制">
+        <div class="slide-header"><div><p class="eyebrow">Exercise 5.4</p><h2>ASCII 模式只剩不可读二进制</h2><div class="rule"></div></div></div>
+        <div class="cipher-layout"><pre class="code terminal"><span class="prompt">#</span> timeout 5 tcpdump -Z root -i eth0 -A \
+    'udp port 51820' | head -30
+
+E....."@.@........#...........
+.J..z..K.n..Q.x.*.......m..H.W..
+..3.s.....R......j.K.Y..8.L....
+.%...u....N....x..#....a..</pre><div class="cipher-result"><span>NO PLAINTEXT</span><strong>认证通过后<br>目标节点才能解密</strong><p>随机外观来自密文，不代表“乱码编码”；没有密钥就无法恢复原始包。</p></div></div>
+        <div class="slide-number">29</div>
+        <aside class="speaker-copy">
+          <p>即使继续用 -A 输出 payload，也只看到不可读二进制。这里不是换了字符编码，而是原始内层包经过加密。</p>
+          <p>目标 peer 用会话密钥验证 Poly1305 tag，只有认证成功的包才会解密并交给内层网络栈。</p>
+        </aside>
+      </section>
+
+      <section class="slide" data-section="结果对比" data-title="开启前后抓包证据对照">
+        <div class="slide-header"><div><p class="eyebrow">Traffic comparison</p><h2>开启前后抓包证据对照</h2><div class="rule"></div></div></div>
+        <table class="data-table comparison-table"><thead><tr><th>观察项</th><th>开启前</th><th>开启后</th></tr></thead><tbody><tr><td>Underlay 协议</td><td>原生路由或 VXLAN，取决于实际路径</td><td class="good-cell">WireGuard UDP 51820</td></tr><tr><td>Node IP</td><td>可见</td><td>可见</td></tr><tr><td>Pod IP</td><td>可见或在可解析封装内</td><td class="good-cell">位于密文内</td></tr><tr><td>HTTP header</td><td class="bad-cell">可读</td><td class="good-cell">不可读</td></tr><tr><td>密码 / token</td><td class="bad-cell">可 grep</td><td class="good-cell">无法 grep</td></tr><tr><td>完整性保护</td><td>依赖应用协议</td><td class="good-cell">WireGuard AEAD</td></tr></tbody></table>
+        <div class="flat-block yellow"><p class="body">课程总结把开启前写为 VXLAN UDP 4789。由于配置是 <code>VXLANCrossSubnet</code>，同 underlay 子网的现场环境也可能走未封装路由，应以 tcpdump 为准。</p></div>
+        <div class="slide-number">30</div>
+        <aside class="speaker-copy">
+          <p>最稳定的对照结论是：开启后跨节点流量变成 UDP 51820，应用内容进入密文。</p>
+          <p>课程写开启前是 VXLAN 4789，但 VXLANCrossSubnet 会根据 Node 是否跨子网决定封装。ContainerLab 现场可能同子网，因此要以实际抓包为准。</p>
+        </aside>
+      </section>
+
+      <section class="slide" data-section="策略路由" data-title="未标记内层包先查 Table 1">
+        <div class="slide-header"><div><p class="eyebrow">Policy routing overview</p><h2>未标记内层包先查 Table 1</h2><div class="rule"></div></div><button class="action-btn" data-replay="#routing-flow" type="button" title="重放动画" aria-label="重放策略路由动画">↻</button></div>
+        <div class="routing-flow is-playing" id="routing-flow"><article><span>inner packet</span><strong>dst 192.168.58.200</strong><code>no fwmark</code></article><div class="route-track"><i>rule 99</i></div><article class="table"><span>lookup</span><strong>Table 1</strong><code>remote /26 dev wireguard.cali</code></article><div class="route-track"><i>encrypt</i></div><article><span>outer packet</span><strong>dst 172.18.0.4</strong><code>fwmark 0x200000</code></article></div>
+        <div class="callout"><strong>两次路由：</strong>第一次选择 WireGuard 接口，第二次为已加密外层包选择 eth0。</div>
+        <div class="slide-number">31</div>
+        <aside class="speaker-copy">
+          <p>未加密内层包没有 fwmark，命中 rule 99 去查 Table 1。Table 1 的远端 Pod CIDR 路由把包交给 wireguard.cali。</p>
+          <p>WireGuard 生成外层包并打上 0x200000，内核再进行一次路由，用 main table 把 UDP 包从 eth0 发出。</p>
+        </aside>
+      </section>
+
+      <section class="slide" data-section="策略路由" data-title="ip rule 用 fwmark 区分内层与外层">
+        <div class="slide-header"><div><p class="eyebrow">Exercise 7.1 · ip rule</p><h2>ip rule 用 fwmark 区分内层与外层</h2><div class="rule"></div></div></div>
+        <pre class="code terminal large-output"><span class="prompt">#</span> docker exec -it wireguard-worker ip rule
+
+0:      from all lookup local
+99:     <span class="hot">not from all fwmark 0x200000/0x200000 lookup 1</span>
+32766:  from all lookup main
+32767:  from all lookup default</pre>
+        <div class="rule-reading"><article><span>没有 mark</span><strong>lookup 1</strong><p>原始跨节点 Pod 包进入隧道。</p></article><article><span>有 0x200000</span><strong>skip rule 99</strong><p>外层密文包走 main table。</p></article></div>
+        <div class="slide-number">32</div>
+        <aside class="speaker-copy">
+          <p>rule 99 的关键是 not fwmark。没有 0x200000 的包查 Table 1，有标记的 WireGuard 外层包跳过这条规则。</p>
+          <p>不同系统的 rule priority 和输出可能不同，现场应看语义，不要只背 99。</p>
+        </aside>
+      </section>
+
+      <section class="slide" data-section="策略路由" data-title="Table 1 把远端 Pod CIDR 指向隧道">
+        <div class="slide-header"><div><p class="eyebrow">Exercise 7.1 · route table 1</p><h2>Table 1 把远端 Pod CIDR 指向隧道</h2><div class="rule"></div></div></div>
+        <div class="table-route"><pre class="code terminal"><span class="prompt">#</span> docker exec -it wireguard-worker \
+    ip route show table 1
+
+<span class="hot">192.168.58.192/26</span> dev <span class="cool">wireguard.cali</span> scope link</pre><div class="route-explain"><span>destination</span><strong>backend-api 192.168.58.200</strong><b>∈</b><strong>remote block 192.168.58.192/26</strong><i>lookup result</i><strong>dev wireguard.cali</strong></div></div>
+        <div class="flat-block green"><p class="body">Calico 根据远端节点的 IPAM block 生成前缀路由，Pod 扩缩时不需要为每个地址手工维护一条 tunnel route。</p></div>
+        <div class="slide-number">33</div>
+        <aside class="speaker-copy">
+          <p>课程示例 Table 1 有 192.168.58.192/26 指向 wireguard.cali，backend 的 192.168.58.200 落在这个 block 中。</p>
+          <p>按 block 路由比逐 Pod 路由更紧凑。现场 block 地址可能不同，结合 calicoctl ipam 和 Pod IP 解释。</p>
+        </aside>
+      </section>
+
+      <section class="slide" data-section="防止环路" data-title="fwmark 防止外层包再次进入隧道">
+        <div class="slide-header"><div><p class="eyebrow">Why 0x200000 matters</p><h2>fwmark 防止外层包再次进入隧道</h2><div class="rule"></div></div><button class="action-btn" data-replay="#loop-flow" type="button" title="重放动画" aria-label="重放 fwmark 防环路动画">↻</button></div>
+        <div class="loop-flow is-playing" id="loop-flow"><div class="loop-step inner"><span>1</span><strong>inner packet</strong><code>no mark</code></div><div class="loop-track"><i></i></div><div class="loop-step wg"><span>2</span><strong>WireGuard</strong><code>encrypt + set mark</code></div><div class="loop-track"><i></i></div><div class="loop-step outer"><span>3</span><strong>outer packet</strong><code>0x200000 → main</code></div></div>
+        <div class="wrong-loop"><strong>没有 mark 会怎样</strong><span>外层 UDP 再次命中 Table 1</span><b>重复进 wireguard.cali，形成路由环路</b></div>
+        <div class="slide-number">34</div>
+        <aside class="speaker-copy">
+          <p>fwmark 是防环路标记。内层包无 mark，进入 tunnel；外层包由 WireGuard 打 mark，跳过 Table 1。</p>
+          <p>如果没有这个区分，刚封装好的 UDP 包可能再次被规则送回 wireguard.cali，形成循环。</p>
+        </aside>
+      </section>
+
+      <section class="slide" data-section="课程原图" data-title="课程原图：策略路由与 WireGuard 接口">
+        <div class="slide-header compact-header"><div><p class="eyebrow">WireGuard routing in the host namespace</p><h2>课程原图：策略路由与 WireGuard 接口</h2><div class="rule"></div></div></div>
+        <img class="course-image wide" src="assets/course-wireguard-routing.png" alt="课程原图，两个节点通过 wireguard.cali 与策略路由传输加密包">
+        <div class="image-note"><strong>课程图勘误：</strong>右侧 worker-2 的 underlay 地址标成了 <code>127.18.0.4</code>，正文与抓包示例使用的是 <code>172.18.0.4</code>；现场以 <code>ip addr</code> 为准。</div>
+        <div class="slide-number">35</div>
+        <aside class="speaker-copy">
+          <p>课程原图把两边 host namespace、routing table、wireguard interface 和最终 encrypted packet 放在一张图里。</p>
+          <p>需要指出一个笔误：右侧 eth1 写成 127.18.0.4，课程正文和 tcpdump 都是 172.18.0.4。演示时不要照错地址。</p>
+          <p class="note-source">图片来源：<a href="https://raw.githubusercontent.com/aadhilam/k8-networking-calico-containerlab/master/images/wg.png">课程 wg.png</a></p>
+        </aside>
+      </section>
+
+      <section class="slide" data-section="关闭 WireGuard" data-title="关闭后接口消失，流量回到未加密路径">
+        <div class="slide-header"><div><p class="eyebrow">Exercise 8</p><h2>关闭后接口消失，流量回到未加密路径</h2><div class="rule"></div></div></div>
+        <div class="disable-flow"><article><span>1</span><h3>更新开关</h3><pre class="code mini-code">kubectl patch felixconfiguration default \
+  --type='merge' \
+  -p '{"spec":{"wireguardEnabled":false}}'</pre></article><i>›</i><article><span>2</span><h3>等待 reconcile</h3><p>wireguard.cali、peer 与相关策略路由被撤销。</p></article><i>›</i><article><span>3</span><h3>再次验证</h3><pre class="code mini-code">ip link show type wireguard
+tcpdump -i eth0 -A | grep ...</pre></article></div>
+        <div class="flat-block red"><p class="body">关闭是可选实验步骤。生产环境执行前应评估合规、变更窗口与明文暴露风险。</p></div>
+        <div class="slide-number">36</div>
+        <aside class="speaker-copy">
+          <p>把 wireguardEnabled patch 回 false，等待几秒后接口应消失。再次运行明文 grep，实验字符串会重新可见。</p>
+          <p>这一步适合教学环境，不应在生产集群为了演示而关闭传输加密。</p>
+        </aside>
+      </section>
+
+      <section class="slide" data-section="性能与 MTU" data-title="加密增加计算与封装开销">
+        <div class="slide-header"><div><p class="eyebrow">Measure in the real workload</p><h2>加密增加计算与封装开销</h2><div class="rule"></div></div></div>
+        <div class="overhead-layout"><article><span>CPU</span><h3>ChaCha20-Poly1305</h3><p>每个跨节点包都要加解密和认证。</p></article><article><span>MTU</span><h3>示例 1440</h3><p>外层 IP、UDP 与 WireGuard header 占用空间。</p></article><article><span>Throughput</span><h3>自行压测</h3><p>结果取决于 CPU、包长、并发与内核实现。</p></article><article><span>Latency</span><h3>关注尾延迟</h3><p>平均值正常时，高分位仍可能变化。</p></article></div>
+        <div class="callout"><strong>课程给出 5–10% 的经验开销。</strong>这不是性能保证。上线前用真实消息大小、并发和跨区路径做基准测试。</div>
+        <div class="slide-number">37</div>
+        <aside class="speaker-copy">
+          <p>WireGuard 在内核中实现，性能通常很好，但加密和额外封装仍有成本。课程给出 5 到 10 百分比的经验值。</p>
+          <p>生产决策要测自己的 CPU、MTU、包长、并发和尾延迟，不能把经验值当 SLA。</p>
+        </aside>
+      </section>
+
+      <section class="slide" data-section="平台支持" data-title="IPv4、IPv6 与内核能力分别确认">
+        <div class="slide-header"><div><p class="eyebrow">Configuration and support matrix</p><h2>IPv4、IPv6 与内核能力分别确认</h2><div class="rule"></div></div></div>
+        <div class="support-grid"><article><span>IPv4</span><h3><code>wireguardEnabled</code></h3><p>本课程的完整抓包与路由演示。</p></article><article><span>IPv6</span><h3><code>wireguardEnabledV6</code></h3><p>独立开关，需要 IPv6 underlay 与版本支持。</p></article><article><span>Kernel</span><h3>Linux 5.6+ 或 backport</h3><p>Node 必须有 WireGuard 内核能力与工具。</p></article><article><span>Mixed support</span><h3>逐节点检查</h3><p>缺少 WireGuard 的 Node 与其他 Node 通信可能不加密。</p></article></div>
+        <pre class="code command-code">kubectl patch felixconfiguration default --type='merge' \
+  -p '{"spec":{"wireguardEnabled":true,"wireguardEnabledV6":true}}'</pre>
+        <div class="flat-block yellow"><p class="body">Calico 官方文档对平台与流量类型有范围限制。启用前按正在使用的 Calico 版本、云平台和数据面核对支持矩阵。</p></div>
+        <div class="slide-number">38</div>
+        <aside class="speaker-copy">
+          <p>IPv4 和 IPv6 使用独立开关。课程主实验只覆盖 IPv4。</p>
+          <p>WireGuard 从 Linux 5.6 进入主线，也可能由发行版 backport。不能只看 uname 数字，还要确认模块与 Calico 当前版本支持。</p>
+          <p class="note-source">范围来源：<a href="https://docs.tigera.io/calico/latest/network-policy/encrypt-cluster-pod-traffic">Calico Encrypt in-cluster pod traffic</a></p>
+        </aside>
+      </section>
+
+      <section class="slide" data-section="排障" data-title="从开关、接口、Peer 到路由逐层检查">
+        <div class="slide-header"><div><p class="eyebrow">Troubleshooting ladder</p><h2>从开关、接口、Peer 到路由逐层检查</h2><div class="rule"></div></div></div>
+        <div class="trouble-grid"><article><span>1</span><h3>FelixConfiguration</h3><code>wireguardEnabled: true</code><p>先确认期望状态。</p></article><article><span>2</span><h3>Kernel support</h3><code>uname -r / lsmod / modprobe</code><p>每个参与节点都检查。</p></article><article><span>3</span><h3>Interface</h3><code>ip link show type wireguard</code><p>确认 wireguard.cali UP。</p></article><article><span>4</span><h3>Peer</h3><code>wg show</code><p>看 endpoint、handshake、transfer。</p></article><article><span>5</span><h3>Policy routing</h3><code>ip rule / ip route table 1</code><p>远端 Pod block 是否进 tunnel。</p></article><article><span>6</span><h3>Packet capture</h3><code>tcpdump udp port 51820</code><p>确认外层流量真实存在。</p></article></div>
+        <div class="slide-number">39</div>
+        <aside class="speaker-copy">
+          <p>排障按控制面到数据面推进。开关正确但接口不存在，先查 calico-node 日志和内核模块。接口存在但没 handshake，查 endpoint reachability 和 UDP 51820。</p>
+          <p>有 handshake 但业务仍走旧路径，再看 ip rule、Table 1 和远端 Pod block。课程建议必要时重启 calico-node DaemonSet。</p>
+        </aside>
+      </section>
+
+      <section class="slide" data-section="现场演示" data-title="二十分钟 WireGuard 演示顺序">
+        <div class="slide-header"><div><p class="eyebrow">Prove the change with independent evidence</p><h2>二十分钟 WireGuard 演示顺序</h2><div class="rule"></div></div></div>
+        <div class="demo-columns"><ol><li><code>kubectl get nodes,pods -o wide</code><span>确认跨节点 placement</span></li><li><code>felixconfiguration | grep wireguard</code><span>证明开关未配置</span></li><li><code>ip link show type wireguard</code><span>证明接口不存在</span></li><li><code>tcpdump -i eth0 -A | grep ...</code><span>展示明文字段</span></li><li><code>kubectl patch ... wireguardEnabled:true</code><span>提交期望状态</span></li></ol><ol start="6"><li><code>ip link show type wireguard</code><span>确认接口与 MTU</span></li><li><code>wg show</code><span>确认 peer 与 handshake</span></li><li><code>tcpdump 'udp port 51820'</code><span>看到密文外层包</span></li><li><code>ip rule && ip route show table 1</code><span>解释策略路由</span></li><li><code>./destroy.sh</code><span>清理 topology</span></li></ol></div>
+        <div class="callout"><strong>讲解方法：</strong>每一步先说明它证明控制面、接口、peer、路由还是数据包，不把“命令成功”当作加密完成。</div>
+        <div class="slide-number">40</div>
+        <aside class="speaker-copy">
+          <p>演示顺序先建立未加密基线，再 patch 开关，然后分别验证接口、peer、抓包和策略路由。</p>
+          <p>每个命令证明的层次不同。最有说服力的是多条独立证据同时成立：应用继续工作，UDP 51820 出现，明文 grep 消失，Table 1 指向 WireGuard。</p>
+        </aside>
+      </section>
+
+      <section class="slide" data-section="总结与来源" data-title="WireGuard 的完整证据链">
+        <div class="slide-header"><div><p class="eyebrow">Summary and sources</p><h2>WireGuard 的完整证据链</h2><div class="rule"></div></div></div>
+        <div class="summary-row"><article><span>01</span><h3>范围</h3><p>Calico 保护跨节点 host-to-host 段，同节点流量不进 tunnel。</p></article><article><span>02</span><h3>控制</h3><p>FelixConfiguration 开启后，Calico 自动管理 key、peer 和路由。</p></article><article><span>03</span><h3>数据面</h3><p>wireguard.cali 加密内层 Pod 包，underlay 传输 UDP 51820。</p></article><article><span>04</span><h3>验证</h3><p>明文 grep 消失、peer 计数增长、策略路由与密文抓包相互印证。</p></article></div>
+        <div class="sources"><article><strong>Lesson 13</strong><a href="https://k8snetworking.com/lessons/13-wireguard">k8snetworking.com/lessons/13-wireguard</a></article><article><strong>课程仓库</strong><a href="https://github.com/aadhilam/k8-networking-calico-containerlab/tree/master/containerlab/13-wireguard">github.com/aadhilam/.../13-wireguard</a></article><article><strong>Calico Encryption</strong><a href="https://docs.tigera.io/calico/latest/network-policy/encrypt-cluster-pod-traffic">docs.tigera.io/.../encrypt-cluster-pod-traffic</a></article><article><strong>WireGuard Protocol</strong><a href="https://www.wireguard.com/protocol/">wireguard.com/protocol</a></article></div>
+        <div class="slide-number">41</div>
+        <aside class="speaker-copy">
+          <p>最后把证据链串起来：开关表达期望状态，Calico 自动配置 Node，策略路由把远端 Pod 包送入 wireguard.cali，underlay 只看到 Node IP 和 UDP 51820。</p>
+          <p>演示时同时强调边界：它保护跨节点段，不替代应用层 TLS，也不会加密同节点 Pod 之间的本地路径。</p>
+        </aside>
+      </section>
+    </div>
+
+    <div class="progress-track" aria-hidden="true"><div id="progress-fill"></div></div>
+    <nav class="controls" aria-label="演示控制">
+      <button class="tool-btn" id="prev" type="button" title="上一页" aria-label="上一页">‹</button>
+      <button class="tool-btn" id="next" type="button" title="下一页" aria-label="下一页">›</button>
+      <button class="tool-btn" id="notes-toggle" type="button" title="讲稿" aria-label="显示或隐藏讲稿" aria-pressed="false">N</button>
+      <button class="tool-btn" id="overview-toggle" type="button" title="总览" aria-label="显示或隐藏总览" aria-pressed="false">▦</button>
+      <button class="tool-btn" id="fullscreen" type="button" title="全屏" aria-label="切换全屏">⛶</button>
+    </nav>
+    <button class="notes-backdrop" id="notes-backdrop" type="button" aria-label="关闭讲稿" tabindex="-1"></button>
+    <aside class="notes-panel" id="notes-panel" aria-live="polite" aria-hidden="true"><div class="notes-header"><h2 id="notes-title">讲稿</h2><button class="notes-close" id="notes-close" type="button" title="关闭讲稿" aria-label="关闭讲稿">×</button></div><div id="notes-body"></div></aside>
+    <aside class="overview" id="overview" aria-label="幻灯片总览"></aside>
+  </main>
+  <script src="app.js?v=1"></script>
+</body>
+</html>

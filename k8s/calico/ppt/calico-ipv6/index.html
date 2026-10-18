@@ -1,0 +1,495 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="基于 Kubernetes Networking Labs Lesson 14 的 Calico IPv4/IPv6 双栈、IPPool、VXLAN、Service 与 DNS 中文动态演示课件">
+  <title>Calico IPv4 / IPv6：一个集群，两套地址族</title>
+  <link rel="stylesheet" href="styles.css?v=1">
+</head>
+<body>
+  <main class="deck-shell" aria-label="Calico IPv4 IPv6 Dual-Stack HTML 演示文稿">
+    <div id="deck-canvas">
+      <section class="slide cover active" data-section="Calico Dual-Stack" data-title="一个集群，两套地址族">
+        <div class="cover-layout ipv6-cover-layout">
+          <div class="cover-copy">
+            <p class="eyebrow">Lesson 14 · IPv4 · IPv6 · VXLAN · Services</p>
+            <h1>Calico IPv4 / IPv6<br><span class="yellow-mark">一个集群，两套地址族</span></h1>
+            <p class="lead">Pod、Service、Node 与外部路由同时具备 IPv4 和 IPv6，应用按目的地址选择其中一条路径。</p>
+            <div class="cover-meta"><span>192.168.0.0/16</span><span>fd00:10:244::/48</span><span>RequireDualStack</span></div>
+          </div>
+          <div class="dual-cover is-playing" id="cover-flow" aria-label="Pod 同时通过 IPv4 和 IPv6 与目标通信">
+            <article class="dual-pod"><span>multitool Pod</span><strong>dual-stack</strong><code>192.168.x.x</code><code>fd00:10:244::x</code></article>
+            <div class="dual-lanes"><div class="family-lane v4"><span>IPv4</span><i>4</i></div><div class="family-lane v6"><span>IPv6</span><i>6</i></div></div>
+            <div class="dual-targets"><article><span>IPv4 target</span><strong>1.1.1.1</strong></article><article><span>IPv6 target</span><strong>2001:db8::1</strong></article></div>
+            <div class="cover-family-strip"><b>A record</b><b>AAAA record</b><b>two ClusterIPs</b></div>
+          </div>
+        </div>
+        <aside class="speaker-copy">
+          <p>大家好，这一节我们做真正的 Kubernetes 双栈。每个 Pod 同时拿到 IPv4 和 IPv6，Service 也可以同时拥有两个 ClusterIP。</p>
+          <p>双栈不是把 IPv4 包自动翻译成 IPv6，而是两套地址族并存。应用根据 DNS 结果、目标地址和 socket 选择一条路径。</p>
+          <p class="note-source">主课程：<a href="https://k8snetworking.com/lessons/14-calico-ipv6">https://k8snetworking.com/lessons/14-calico-ipv6</a></p>
+        </aside>
+      </section>
+
+      <section class="slide" data-section="核心概念" data-title="双栈让两套网络同时可用">
+        <div class="slide-header"><div><p class="eyebrow">Two independent address families</p><h2>双栈让两套网络同时可用</h2><div class="rule"></div></div></div>
+        <div class="family-split"><article class="v4"><span>IPv4</span><h3>32-bit address family</h3><code>192.168.2.10</code><p>兼容现有系统、设备和运维工具。</p></article><div class="plus-sign">+</div><article class="v6"><span>IPv6</span><h3>128-bit address family</h3><code>fd00:10:244:abcd::a</code><p>更大地址空间与面向 IPv6 的基础设施。</p></article></div>
+        <div class="callout"><strong>关键点：</strong>同一个对象可以同时有两种地址，但每个连接仍选择一个地址族。失败切换和优先级由应用与系统 resolver 行为决定。</div>
+        <div class="slide-number">02</div>
+        <aside class="speaker-copy"><p>双栈的意思是 IPv4 与 IPv6 同时存在。Pod 可以各有一个地址，Service 可以有两个 ClusterIP，DNS 可以同时返回 A 和 AAAA。</p><p>一次 TCP 连接不会同时横跨两个地址族。客户端先选目标地址，再建立 IPv4 或 IPv6 连接。</p></aside>
+      </section>
+
+      <section class="slide" data-section="迁移价值" data-title="双栈支持渐进式 IPv6 迁移">
+        <div class="slide-header"><div><p class="eyebrow">Compatibility while adopting IPv6</p><h2>双栈支持渐进式 IPv6 迁移</h2><div class="rule"></div></div></div>
+        <div class="migration-line"><article><span>阶段 1</span><h3>IPv4 为主</h3><p>现有依赖保持不变，先准备 Node 与 CNI 的 IPv6 能力。</p></article><i>›</i><article><span>阶段 2</span><h3>双栈验证</h3><p>服务发布 A/AAAA，应用和监控逐项验证 IPv6。</p></article><i>›</i><article><span>阶段 3</span><h3>IPv6 优先或单栈</h3><p>按业务范围减少 IPv4 依赖，而不是一次性切换全部系统。</p></article></div>
+        <div class="grid-3 compact-gap"><div class="flat-block blue"><h3>兼容</h3><p class="small">旧客户端继续使用 IPv4。</p></div><div class="flat-block green"><h3>验证</h3><p class="small">IPv6 可以逐服务上线。</p></div><div class="flat-block yellow"><h3>回退</h3><p class="small">双栈期间仍保留另一地址族。</p></div></div>
+        <div class="slide-number">03</div>
+        <aside class="speaker-copy"><p>双栈最适合渐进迁移。先让基础设施支持两套地址，再逐个应用验证 IPv6，旧系统继续走 IPv4。</p><p>它也增加了运维复杂度：NetworkPolicy、Service、DNS、监控和排障都要同时考虑两套地址族。</p></aside>
+      </section>
+
+      <section class="slide" data-section="前提条件" data-title="集群网络范围要在创建时确定">
+        <div class="slide-header"><div><p class="eyebrow">Cluster CIDRs are foundational</p><h2>集群网络范围要在创建时确定</h2><div class="rule"></div></div></div>
+        <div class="prereq-grid"><article><span>Control plane</span><h3>双 Service CIDR</h3><code>10.96.0.0/16</code><code>fd00:10:96::/112</code></article><article><span>Controller</span><h3>双 Pod CIDR</h3><code>192.168.0.0/16</code><code>fd00:10:244::/48</code></article><article><span>Node</span><h3>双 node-ip</h3><code>10.10.10.10</code><code>fd00:10:10::10</code></article><article><span>CNI</span><h3>双栈能力</h3><code>Calico IPv4 + IPv6 pools</code></article></div>
+        <div class="flat-block red"><p class="body">本实验需要按双栈配置重建 Kind。不要把“给现有 Pod 加一个 IPv6”当作完整的集群双栈转换方案。</p></div>
+        <div class="slide-number">04</div>
+        <aside class="speaker-copy"><p>双栈涉及 API server、controller-manager、kube-proxy、kubelet 和 CNI。实验在 Kind 创建时一次性配置 Pod 与 Service 两组 CIDR。</p><p>Kubernetes 双栈功能已经稳定，但现有集群能否在线扩展地址族取决于发行版、网络插件和控制面参数。课程环境直接重建最可靠。</p></aside>
+      </section>
+
+      <section class="slide" data-section="Kind 配置" data-title="Kind 同时声明 Pod 与 Service 双 CIDR">
+        <div class="slide-header"><div><p class="eyebrow">dual-stack-no-cni.yaml</p><h2>Kind 同时声明 Pod 与 Service 双 CIDR</h2><div class="rule"></div></div></div>
+        <div class="grid-2"><pre class="code manifest-code"><span class="key">apiVersion:</span> kind.x-k8s.io/v1alpha4
+<span class="key">kind:</span> Cluster
+<span class="key">name:</span> dual-stack
+<span class="key">networking:</span>
+  <span class="key">disableDefaultCNI:</span> <span class="value">true</span>
+  <span class="key">podSubnet:</span>
+    <span class="value">"192.168.0.0/16,fd00:10:244::/48"</span>
+  <span class="key">serviceSubnet:</span>
+    <span class="value">"10.96.0.0/16,fd00:10:96::/112"</span>
+  <span class="key">ipFamily:</span> <span class="hot">dual</span></pre><div class="config-explain"><article><span>顺序</span><p>IPv4 写在前面，因此成为 primary family。</p></article><article><span>Pod</span><p>Controller 为工作负载管理两组网络范围。</p></article><article><span>Service</span><p>API server 可以分配 v4 与 v6 ClusterIP。</p></article><article><span>CNI</span><p>禁用默认 CNI，后续安装 Calico。</p></article></div></div>
+        <div class="slide-number">05</div>
+        <aside class="speaker-copy"><p>Kind 配置里 Pod 与 Service CIDR 都用逗号分隔，IPv4 在前、IPv6 在后。ipFamily dual 明确要求双栈。</p><p>第一地址族会影响默认 Service 的 primary ClusterIP，所以顺序不是装饰。</p></aside>
+      </section>
+
+      <section class="slide" data-section="Node 地址" data-title="kubelet 用 node-ip 注册两种 InternalIP">
+        <div class="slide-header"><div><p class="eyebrow">Bare-metal style node registration</p><h2>kubelet 用 node-ip 注册两种 InternalIP</h2><div class="rule"></div></div></div>
+        <div class="nodeip-layout"><pre class="code manifest-code"><span class="key">nodes:</span>
+- <span class="key">role:</span> control-plane
+  <span class="key">kubeadmConfigPatches:</span>
+  - |
+    <span class="key">kind:</span> InitConfiguration
+    <span class="key">nodeRegistration:</span>
+      <span class="key">kubeletExtraArgs:</span>
+        <span class="key">node-ip:</span> <span class="hot">"10.10.10.10,fd00:10:10::10"</span></pre><div class="nodeip-result"><span>Node object</span><strong>InternalIP</strong><code>10.10.10.10</code><code>fd00:10:10::10</code><p>worker 与 worker2 分别使用 .11/::11、.12/::12。</p></div></div>
+        <div class="callout"><strong>显示提示：</strong><code>kubectl get nodes -o wide</code> 常只显示一个 INTERNAL-IP；用 JSONPath 或 <code>kubectl get node -o yaml</code> 查看完整 addresses 数组。</div>
+        <div class="slide-number">06</div>
+        <aside class="speaker-copy"><p>课程为每个 kubelet 指定逗号分隔的 IPv4 和 IPv6 node-ip。这相当于没有 cloud provider 的裸机双栈配置。</p><p>表格输出通常只展示第一地址，完整 Node status.addresses 才能确认两个 InternalIP 都已注册。</p></aside>
+      </section>
+
+      <section class="slide" data-section="Calico IPPool" data-title="Calico 为两种地址族创建独立 IPPool">
+        <div class="slide-header"><div><p class="eyebrow">custom-resources.yaml</p><h2>Calico 为两种地址族创建独立 IPPool</h2><div class="rule"></div></div></div>
+        <div class="pool-split"><article class="v4"><header>default-ipv4-ippool</header><code>192.168.0.0/16</code><dl><dt>blockSize</dt><dd>/26</dd><dt>encapsulation</dt><dd>VXLANCrossSubnet</dd><dt>natOutgoing</dt><dd>Enabled</dd></dl></article><article class="v6"><header>default-ipv6-ippool</header><code>fd00:10:244::/48</code><dl><dt>blockSize</dt><dd>/122</dd><dt>encapsulation</dt><dd>VXLAN</dd><dt>natOutgoing</dt><dd>Enabled</dd></dl></article></div>
+        <div class="flat-block yellow"><p class="body">IPPool 属于 Pod IPAM 与 Pod 数据面。Kubernetes Service CIDR 由控制面管理，不会出现在 Calico IPPool 列表里。</p></div>
+        <div class="slide-number">07</div>
+        <aside class="speaker-copy"><p>Calico 创建两个 IPPool：IPv4 /16 和 IPv6 /48。每个池有自己的 blockSize、封装策略和 NAT 设置。</p><p>Service CIDR 不属于 Calico IPAM。Calico 给 Pod 分配地址，Kubernetes 控制面给 Service 分配 ClusterIP。</p></aside>
+      </section>
+
+      <section class="slide" data-section="IPAM Block" data-title="IPv4 /26 与 IPv6 /122 都包含 64 个地址">
+        <div class="slide-header"><div><p class="eyebrow">Different prefix lengths, same block capacity</p><h2>IPv4 /26 与 IPv6 /122 都包含 64 个地址</h2><div class="rule"></div></div></div>
+        <div class="block-math"><article><span>IPv4</span><strong>2<sup>32−26</sup> = 64</strong><code>192.168.x.0/26</code><div class="unit-dots v4"></div></article><div class="equal-sign">=</div><article><span>IPv6</span><strong>2<sup>128−122</sup> = 64</strong><code>fd00:10:244:...::/122</code><div class="unit-dots v6"></div></article></div>
+        <div class="callout"><strong>为什么重要：</strong>两种地址族按相近容量向节点分配 block，方便每个 Node 承载相同数量级的 Pod 地址。</div>
+        <div class="slide-number">08</div>
+        <aside class="speaker-copy"><p>虽然 /26 和 /122 看起来差很多，但剩余 host bits 都是 6，所以各包含 64 个地址。</p><p>IPv6 前缀长度必须结合 128 位地址理解，不能沿用 IPv4 的直觉。</p></aside>
+      </section>
+
+      <section class="slide" data-section="地址探测" data-title="Calico 固定从 eth1 选择 Node 地址">
+        <div class="slide-header"><div><p class="eyebrow">Node address autodetection</p><h2>Calico 固定从 eth1 选择 Node 地址</h2><div class="rule"></div></div></div>
+        <div class="autodetect-layout"><pre class="code manifest-code"><span class="key">nodeAddressAutodetectionV4:</span>
+  <span class="key">cidrs:</span>
+  - <span class="value">10.10.10.0/24</span>
+
+<span class="key">nodeAddressAutodetectionV6:</span>
+  <span class="key">cidrs:</span>
+  - <span class="value">fd00:10:10::/64</span></pre><div class="iface-choices"><article class="ignored"><span>eth0</span><code>Docker management network</code><b>not selected</b></article><article class="selected"><span>eth1</span><code>10.10.10.x + fd00:10:10::x</code><b>selected for Calico</b></article></div></div>
+        <div class="flat-block orange"><p class="body">多网卡 Node 若选错接口，VXLAN outer header、Node-to-Node 路由与外部连通性会同时异常。</p></div>
+        <div class="slide-number">09</div>
+        <aside class="speaker-copy"><p>Kind 容器还有 Docker 管理网 eth0。课程通过 CIDR 自动探测锁定连接 cEOS 的 eth1。</p><p>IPv4 与 IPv6 分别配置探测 CIDR，确保两种 VXLAN VTEP 和外部路径都使用正确 underlay 地址。</p></aside>
+      </section>
+
+      <section class="slide" data-section="实验拓扑" data-title="cEOS 为三个 Node 提供双栈 underlay">
+        <div class="slide-header"><div><p class="eyebrow">ContainerLab topology</p><h2>cEOS 为三个 Node 提供双栈 underlay</h2><div class="rule"></div></div><button class="action-btn" data-replay="#topology-flow" type="button" title="重放动画" aria-label="重放双栈拓扑动画">↻</button></div>
+        <div class="ipv6-topology is-playing" id="topology-flow"><article class="ceos"><span>cEOS Vlan10</span><strong>10.10.10.1/24</strong><strong>fd00:10:10::1/64</strong><code>Lo0: 1.1.1.1 + 2001:db8::1</code></article><div class="topology-bus"><div class="bus-line v4"><i>v4</i></div><div class="bus-line v6"><i>v6</i></div></div><div class="topology-nodes"><article><b>control-plane</b><code>.10 / ::10</code></article><article><b>worker</b><code>.11 / ::11</code></article><article><b>worker2</b><code>.12 / ::12</code></article></div></div>
+        <div class="slide-number">10</div>
+        <aside class="speaker-copy"><p>cEOS 的 Vlan10 同时配置 IPv4 与 IPv6，三个 Node 的 eth1 接入同一 VLAN。</p><p>Loopback0 提供 1.1.1.1 和 2001:db8::1，充当可控的“外部目标”，不是访问真实互联网。</p></aside>
+      </section>
+
+      <section class="slide" data-section="地址计划" data-title="四类对象各有自己的双栈地址范围">
+        <div class="slide-header"><div><p class="eyebrow">Address plan</p><h2>四类对象各有自己的双栈地址范围</h2><div class="rule"></div></div></div>
+        <table class="data-table address-table"><thead><tr><th>对象</th><th>IPv4</th><th>IPv6</th><th>用途</th></tr></thead><tbody><tr><td>Node eth1</td><td>10.10.10.0/24</td><td>fd00:10:10::/64</td><td>underlay 与外部路由</td></tr><tr><td>Pod</td><td>192.168.0.0/16</td><td>fd00:10:244::/48</td><td>Calico workload 地址</td></tr><tr><td>Service</td><td>10.96.0.0/16</td><td>fd00:10:96::/112</td><td>虚拟 ClusterIP</td></tr><tr><td>cEOS Loopback</td><td>1.1.1.1/32</td><td>2001:db8::1/128</td><td>实验外部目标</td></tr></tbody></table>
+        <div class="grid-2 compact-gap"><div class="flat-block green"><h3>ULA</h3><p class="body"><code>fd00::/8</code> 是 Unique Local 地址空间，适合实验和内部网络。</p></div><div class="flat-block yellow"><h3>Documentation prefix</h3><p class="body"><code>2001:db8::/32</code> 专供文档示例，不是公网可路由目标。</p></div></div>
+        <div class="slide-number">11</div>
+        <aside class="speaker-copy"><p>Node、Pod、Service 和外部目标各有独立地址范围。排障时先判断地址属于哪一层。</p><p>fd00 是 ULA，2001:db8 是文档前缀。课程把 2001:db8::1 放在本地 cEOS loopback，所以能 ping 通。</p></aside>
+      </section>
+
+      <section class="slide" data-section="cEOS 配置" data-title="VLAN 10 与 Loopback0 构成可控外部网络">
+        <div class="slide-header"><div><p class="eyebrow">ceos01 startup configuration</p><h2>VLAN 10 与 Loopback0 构成可控外部网络</h2><div class="rule"></div></div></div>
+        <div class="grid-2"><pre class="code manifest-code"><span class="key">interface Vlan10</span>
+  ip address <span class="value">10.10.10.1/24</span>
+  ipv6 address <span class="value">fd00:10:10::1/64</span>
+
+<span class="key">interface Loopback0</span>
+  ip address <span class="value">1.1.1.1/32</span>
+  ipv6 address <span class="value">2001:db8::1/128</span>
+
+ip routing
+ipv6 routing</pre><pre class="code manifest-code"><span class="comment">! Return routes to pod networks</span>
+ip route <span class="value">192.168.0.0/16</span> 10.10.10.10
+ipv6 route <span class="value">fd00:10:244::/48</span> fd00:10:10::10
+
+<span class="comment">! Access ports</span>
+Ethernet1 → control-plane
+Ethernet2 → worker
+Ethernet3 → worker2</pre></div>
+        <div class="flat-block yellow"><p class="body">由于 Calico IPPool 启用了 <code>natOutgoing</code>，外部路径常看到 Node 地址；静态 pod CIDR 回程路由仍用于展示原生路由能力与无 SNAT 场景。</p></div>
+        <div class="slide-number">12</div>
+        <aside class="speaker-copy"><p>cEOS 开启 IPv4 与 IPv6 routing，Vlan10 是 Node 网关，Loopback0 模拟外部目标。</p><p>配置还包含指向 control-plane 的 Pod CIDR 回程路由。实际源地址是否被 SNAT 取决于 IPPool natOutgoing 与目的地址范围。</p></aside>
+      </section>
+
+      <section class="slide" data-section="部署" data-title="deploy.sh 完成双栈基础设施与测试 Pod">
+        <div class="slide-header"><div><p class="eyebrow">Automated setup</p><h2>deploy.sh 完成双栈基础设施与测试 Pod</h2><div class="rule"></div></div></div>
+        <div class="runway"><article><span>01</span><h3>导入 cEOS</h3><code>ceos:4.34.0F</code></article><i>›</i><article><span>02</span><h3>创建 topology</h3><code>cEOS + Kind</code></article><i>›</i><article><span>03</span><h3>安装 Calico</h3><code>dual IPPools</code></article><i>›</i><article><span>04</span><h3>等待 Available</h3><code>TigeraStatus</code></article><i>›</i><article><span>05</span><h3>部署 multitool</h3><code>DaemonSet + Services</code></article></div>
+        <pre class="code command-code">cd containerlab/14-calico-ipv6
+chmod +x deploy.sh
+./deploy.sh
+export KUBECONFIG=$(pwd)/dual-stack.kubeconfig</pre>
+        <div class="slide-number">13</div>
+        <aside class="speaker-copy"><p>部署脚本先确认本地有 cEOS 镜像，再创建 topology、导出 kubeconfig、安装 Calico 双 IPPool，最后部署 multitool。</p><p>cEOS 镜像不在公开仓库自动下载，实验机必须事先准备课程要求的 tar 包或已有镜像。</p></aside>
+      </section>
+
+      <section class="slide" data-section="拓扑验证" data-title="ContainerLab 同时展示管理网 IPv4 与 IPv6">
+        <div class="slide-header"><div><p class="eyebrow">Exercise 2</p><h2>ContainerLab 同时展示管理网 IPv4 与 IPv6</h2><div class="rule"></div></div></div>
+        <pre class="code terminal wide-terminal"><span class="prompt">$</span> containerlab inspect -t topology.clab.yaml
+
+clab-dual-stack-ceos01    arista_ceos       running  172.20.20.2
+dual-stack-control-plane  kindest/node:v1.28 running  172.18.0.2  fc00:f853:ccd:e793::2
+dual-stack-worker         kindest/node:v1.28 running  172.18.0.3  fc00:f853:ccd:e793::3
+dual-stack-worker2        kindest/node:v1.28 running  172.18.0.4  fc00:f853:ccd:e793::4</pre>
+        <div class="grid-2 compact-gap"><div class="flat-block blue"><h3>管理网络</h3><p class="body">ContainerLab inspect 显示 Docker/management 地址。</p></div><div class="flat-block green"><h3>实验 underlay</h3><p class="body">真正用于课程路径的是额外连接 cEOS 的 eth1 双栈地址。</p></div></div>
+        <div class="slide-number">14</div>
+        <aside class="speaker-copy"><p>ContainerLab inspect 显示的是节点容器的管理网络地址，包括 fc00 开头的 Docker IPv6。</p><p>不要把它和 eth1 的 fd00:10:10::/64 混淆。课程数据面通过 cEOS 连接的 eth1。</p></aside>
+      </section>
+
+      <section class="slide" data-section="Node 验证" data-title="Kubernetes Node 首选 IPv4 InternalIP">
+        <div class="slide-header"><div><p class="eyebrow">Exercise 3</p><h2>Kubernetes Node 首选 IPv4 InternalIP</h2><div class="rule"></div></div></div>
+        <pre class="code terminal wide-terminal"><span class="prompt">$</span> kubectl get nodes -o wide
+
+dual-stack-control-plane  Ready  control-plane  v1.28.0  <span class="hot">10.10.10.10</span>
+dual-stack-worker         Ready  &lt;none&gt;         v1.28.0  <span class="hot">10.10.10.11</span>
+dual-stack-worker2        Ready  &lt;none&gt;         v1.28.0  <span class="hot">10.10.10.12</span></pre>
+        <pre class="code command-code">kubectl get node dual-stack-worker -o jsonpath='{range .status.addresses[*]}{.type}{"="}{.address}{"\n"}{end}'</pre>
+        <div class="callout"><strong>不要误判：</strong>表格只显示一个 INTERNAL-IP，不代表 Node 没有 IPv6。检查完整 addresses 数组和 eth1 接口。</div>
+        <div class="slide-number">15</div>
+        <aside class="speaker-copy"><p>kubectl get nodes -o wide 的单列会显示 primary IPv4 InternalIP。课程用这个结果证明节点 Ready，而不是证明只有 IPv4。</p><p>需要双地址证据时，读取 Node YAML/JSONPath 或进入容器查看 eth1。</p></aside>
+      </section>
+
+      <section class="slide" data-section="Node 验证" data-title="eth1 同时拥有 global IPv4 与 IPv6">
+        <div class="slide-header"><div><p class="eyebrow">Exercise 4</p><h2>eth1 同时拥有 global IPv4 与 IPv6</h2><div class="rule"></div></div></div>
+        <pre class="code terminal large-output"><span class="prompt">#</span> docker exec dual-stack-control-plane ip addr show eth1
+
+3: eth1@if...: &lt;BROADCAST,MULTICAST,UP,LOWER_UP&gt; mtu 1500
+    inet <span class="hot">10.10.10.10/24</span> scope global eth1
+    inet6 <span class="cool">fd00:10:10::10/64</span> scope global
+    inet6 <span class="good">fe80::a8c1:abff:fe11:da52/64</span> scope link</pre>
+        <div class="attribute-row"><article><span>IPv4 global</span><strong>10.10.10.10/24</strong></article><article><span>IPv6 global</span><strong>fd00:10:10::10/64</strong></article><article><span>IPv6 link-local</span><strong>fe80::/64</strong></article><article><span>MTU</span><strong>1500</strong></article></div>
+        <div class="slide-number">16</div>
+        <aside class="speaker-copy"><p>eth1 有一个 IPv4、一个 ULA IPv6 和一个自动生成的 link-local IPv6。</p><p>global 在这里表示可跨链路路由范围，不等于互联网公网地址。fd00 仍是内部 ULA。</p></aside>
+      </section>
+
+      <section class="slide" data-section="IPv6 Scope" data-title="global 与 link-local 的使用范围不同">
+        <div class="slide-header"><div><p class="eyebrow">Address scope</p><h2>global 与 link-local 的使用范围不同</h2><div class="rule"></div></div></div>
+        <div class="scope-compare"><article class="global"><span>scope global</span><h3>fd00:10:10::10/64</h3><p>可以通过路由表跨链路使用，Calico 将其作为 IPv6 Node/VTEP 地址。</p><code>routed on eth1</code></article><article class="link"><span>scope link</span><h3>fe80::.../64</h3><p>只在当前二层链路有效，用于 Neighbor Discovery 和本地 next-hop。</p><code>often needs %interface</code></article></div>
+        <div class="flat-block yellow"><p class="body">IPv6 默认路由经常写成 <code>via fe80::...</code>，因为 next-hop 邻居就在本链路；目标地址仍然可以是 global/ULA。</p></div>
+        <div class="slide-number">17</div>
+        <aside class="speaker-copy"><p>link-local 地址每个 IPv6 接口都有，只在本链路有效。跨链路使用时通常还要指定接口。</p><p>Calico 自动探测使用 fd00:10:10::/64 的 global 地址；Pod 默认路由的 next-hop 则可以是 fe80 link-local。</p></aside>
+      </section>
+
+      <section class="slide" data-section="IPPool 验证" data-title="calicoctl 显示两个启用的地址池">
+        <div class="slide-header"><div><p class="eyebrow">Exercise 5</p><h2>calicoctl 显示两个启用的地址池</h2><div class="rule"></div></div></div>
+        <pre class="code terminal wide-terminal"><span class="prompt">$</span> calicoctl get ippools -o wide
+
+NAME                  CIDR               NAT   IPIPMODE  VXLANMODE    DISABLED
+default-ipv4-ippool   <span class="hot">192.168.0.0/16</span>     true  Never     CrossSubnet  false
+default-ipv6-ippool   <span class="cool">fd00:10:244::/48</span>   true  Never     Always       false</pre>
+        <div class="pool-status"><article><span>v4</span><strong>CrossSubnet</strong><p>同 subnet 可不封装，跨 subnet 使用 VXLAN。</p></article><article><span>v6</span><strong>Always</strong><p>跨节点 Pod IPv6 使用 vxlan-v6.calico。</p></article><article><span>NAT</span><strong>true</strong><p>访问池外目标时启用 outgoing NAT。</p></article></div>
+        <div class="slide-number">18</div>
+        <aside class="speaker-copy"><p>两个 IPPool 都启用，IPv4 是 CrossSubnet，IPv6 是 Always。IPIP 都是 Never。</p><p>课程后面重点分析 IPv6 always VXLAN，因此跨节点 IPv6 路由一定指向 vxlan-v6.calico。</p></aside>
+      </section>
+
+      <section class="slide" data-section="Pod 地址" data-title="每个 WorkloadEndpoint 同时记录 v4 /32 与 v6 /128">
+        <div class="slide-header"><div><p class="eyebrow">Exercise 6</p><h2>每个 WorkloadEndpoint 同时记录 v4 /32 与 v6 /128</h2><div class="rule"></div></div></div>
+        <div class="wep-table"><div class="wep-head"><span>NODE</span><span>WORKLOAD</span><span>NETWORKS</span></div><article><span>control-plane</span><b>multitool-xxx</b><code>192.168.1.5/32</code><code>fd00:10:244:...::5/128</code></article><article><span>worker</span><b>multitool-yyy</b><code>192.168.2.10/32</code><code>fd00:10:244:...::a/128</code></article><article><span>worker2</span><b>multitool-zzz</b><code>192.168.3.15/32</code><code>fd00:10:244:...::f/128</code></article></div>
+        <pre class="code command-code">calicoctl get workloadendpoints -o wide</pre>
+        <div class="callout"><strong>/32 与 /128：</strong>WorkloadEndpoint 记录的是单个主机地址；所属节点 block 仍然是 /26 与 /122。</div>
+        <div class="slide-number">19</div>
+        <aside class="speaker-copy"><p>NETWORKS 列同时出现 IPv4 /32 与 IPv6 /128，这才是 Pod 双栈分配的直接证据。</p><p>每个 endpoint 地址用 host prefix 表示，IPAM block 的 /26、/122 是上一级聚合。</p></aside>
+      </section>
+
+      <section class="slide" data-section="测试工作负载" data-title="Multitool DaemonSet 覆盖全部节点">
+        <div class="slide-header"><div><p class="eyebrow">tools/multitool-pod.yaml</p><h2>Multitool DaemonSet 覆盖全部节点</h2><div class="rule"></div></div></div>
+        <div class="daemonset-layout"><article><span>DaemonSet</span><h3>multitool</h3><p>每个 Node 一个测试 Pod，容忍 control-plane taint。</p><code>wbitt/network-multitool:alpine-extra</code></article><div class="listen-stack"><article><span>IPv4 listener</span><strong>listen 8080</strong><code>0.0.0.0:8080</code></article><article><span>IPv6 listener</span><strong>listen [::]:8080</strong><code>[::]:8080</code></article></div></div>
+        <div class="grid-2 compact-gap"><div class="flat-block green"><h3>服务响应</h3><p class="body">固定返回 <code>Dual-Stack Pod - IPv4 and IPv6 enabled</code>。</p></div><div class="flat-block blue"><h3>测试工具</h3><p class="body">包含 ping、ping6、dig、curl、ip、netstat 等。</p></div></div>
+        <div class="slide-number">20</div>
+        <aside class="speaker-copy"><p>DaemonSet 确保三台 Node 各有一个 multitool Pod。Nginx 配置同时 listen 8080 和 [::]:8080。</p><p>这一步很关键：Service 有 IPv6 ClusterIP 不代表后端一定监听 IPv6。应用必须绑定 IPv6 socket。</p></aside>
+      </section>
+
+      <section class="slide" data-section="外部 IPv4" data-title="Pod 可以访问 cEOS 的 IPv4 Loopback">
+        <div class="slide-header"><div><p class="eyebrow">Exercise 7</p><h2>Pod 可以访问 cEOS 的 IPv4 Loopback</h2><div class="rule"></div></div></div>
+        <pre class="code terminal large-output"><span class="prompt">$</span> kubectl exec -it $(kubectl get pods -l app=multitool \
+  -o name | head -1) -- ping -c 3 <span class="hot">1.1.1.1</span>
+
+64 bytes from 1.1.1.1: seq=0 ttl=63 time=0.892 ms
+64 bytes from 1.1.1.1: seq=1 ttl=63 time=0.654 ms
+64 bytes from 1.1.1.1: seq=2 ttl=63 time=0.712 ms</pre>
+        <div class="result-row"><article><span>address family</span><strong>IPv4</strong></article><article><span>target</span><strong>cEOS Lo0</strong></article><article><span>path</span><strong>Node eth1 native</strong></article><article><span>loss</span><strong>0%</strong></article></div>
+        <div class="slide-number">21</div>
+        <aside class="speaker-copy"><p>从任意 multitool Pod ping 1.1.1.1，三次成功。这个地址属于实验 cEOS Loopback，不是 Cloudflare 的真实公网路径。</p><p>Pod 包进入 Node，Node 根据静态路由经 eth1 把流量送到 10.10.10.1。</p></aside>
+      </section>
+
+      <section class="slide" data-section="外部 IPv6" data-title="同一个 Pod 也能访问 IPv6 Loopback">
+        <div class="slide-header"><div><p class="eyebrow">Exercise 8</p><h2>同一个 Pod 也能访问 IPv6 Loopback</h2><div class="rule"></div></div></div>
+        <pre class="code terminal large-output"><span class="prompt">$</span> kubectl exec -it $(kubectl get pods -l app=multitool \
+  -o name | head -1) -- ping6 -c 3 <span class="cool">2001:db8::1</span>
+
+64 bytes from 2001:db8::1: seq=0 ttl=63 time=1.021 ms
+64 bytes from 2001:db8::1: seq=1 ttl=63 time=0.734 ms
+64 bytes from 2001:db8::1: seq=2 ttl=63 time=0.689 ms</pre>
+        <div class="result-row"><article><span>address family</span><strong>IPv6</strong></article><article><span>target</span><strong>cEOS Lo0</strong></article><article><span>path</span><strong>Node eth1 native</strong></article><article><span>loss</span><strong>0%</strong></article></div>
+        <div class="slide-number">22</div>
+        <aside class="speaker-copy"><p>同一个 Pod 再用 ping6 访问 2001:db8::1，证明外部 IPv6 路径可用。</p><p>这次目的地址属于 2001:db8::/32，Node 使用通过 fd00:10:10::1 的静态路由。</p></aside>
+      </section>
+
+      <section class="slide" data-section="外部路径" data-title="IPv4 外部路径经 169.254.1.1 到 eth1">
+        <div class="slide-header"><div><p class="eyebrow">Exercise 9.1</p><h2>IPv4 外部路径经 169.254.1.1 到 eth1</h2><div class="rule"></div></div><button class="action-btn" data-replay="#external-v4" type="button" title="重放动画" aria-label="重放 IPv4 外部路径">↻</button></div>
+        <div class="path-pipeline is-playing" id="external-v4"><article><span>Pod</span><strong>192.168.x.x</strong></article><div class="path-track"><i>v4</i></div><article><span>Calico gateway</span><strong>169.254.1.1</strong></article><div class="path-track"><i>route</i></div><article><span>Node eth1</span><strong>via 10.10.10.1</strong></article><div class="path-track"><i>ICMP</i></div><article><span>cEOS Lo0</span><strong>1.1.1.1</strong></article></div>
+        <div class="callout"><strong>Calico gateway：</strong>Pod 默认路由指向链路本地的虚拟下一跳，Node 再完成真正的三层转发。</div>
+        <div class="slide-number">23</div>
+        <aside class="speaker-copy"><p>IPv4 Pod 默认路由经 169.254.1.1，把包交给 Node。Node 静态路由把 1.1.1.1/32 指向 cEOS 10.10.10.1。</p><p>169.254.1.1 是 Calico 的虚拟网关模式，不是一个独立路由器容器。</p></aside>
+      </section>
+
+      <section class="slide" data-section="外部路径" data-title="IPv6 外部路径使用 link-local 网关">
+        <div class="slide-header"><div><p class="eyebrow">Exercise 9.2</p><h2>IPv6 外部路径使用 link-local 网关</h2><div class="rule"></div></div><button class="action-btn" data-replay="#external-v6" type="button" title="重放动画" aria-label="重放 IPv6 外部路径">↻</button></div>
+        <div class="path-pipeline v6 is-playing" id="external-v6"><article><span>Pod</span><strong>fd00:10:244::x</strong></article><div class="path-track"><i>v6</i></div><article><span>Calico gateway</span><strong>fe80::...</strong></article><div class="path-track"><i>route</i></div><article><span>Node eth1</span><strong>via fd00:10:10::1</strong></article><div class="path-track"><i>ICMPv6</i></div><article><span>cEOS Lo0</span><strong>2001:db8::1</strong></article></div>
+        <div class="callout"><strong>Native route：</strong>外部 IPv6 目标不属于 Pod pool，课程让 Node 从 eth1 原生转发，不送入 vxlan-v6.calico。</div>
+        <div class="slide-number">24</div>
+        <aside class="speaker-copy"><p>IPv6 Pod 默认路由使用 fe80 link-local 下一跳，把包交给 Node。Node 的 2001:db8::/32 路由指向 cEOS 的 fd00:10:10::1。</p><p>外部目标不属于 Pod pool，所以这里走 eth1 原生路由，不经过 VXLAN。</p></aside>
+      </section>
+
+      <section class="slide" data-section="路径对比" data-title="外部 v4 与 v6 都走原生三层转发">
+        <div class="slide-header"><div><p class="eyebrow">Parallel native paths</p><h2>外部 v4 与 v6 都走原生三层转发</h2><div class="rule"></div></div></div>
+        <div class="parallel-paths"><article class="v4"><header>IPv4</header><div><span>Pod</span><i>›</i><span>Node route</span><i>›</i><span>eth1</span><i>›</i><span>10.10.10.1</span><i>›</i><span>1.1.1.1</span></div><footer>ip route + ARP</footer></article><article class="v6"><header>IPv6</header><div><span>Pod</span><i>›</i><span>Node route</span><i>›</i><span>eth1</span><i>›</i><span>fd00:10:10::1</span><i>›</i><span>2001:db8::1</span></div><footer>ip -6 route + Neighbor Discovery</footer></article></div>
+        <div class="flat-block green"><p class="body">双栈并不要求两条路径完全相同，但本实验让它们共享同一个 eth1 与 cEOS，同时保留各自的路由表和邻居协议。</p></div>
+        <div class="slide-number">25</div>
+        <aside class="speaker-copy"><p>外部 IPv4 和 IPv6 都从 Node eth1 发出，区别在路由表、网关地址和邻居解析协议。</p><p>IPv4 用 ARP，IPv6 用 Neighbor Discovery。观察时分别使用 ip route / ip neigh 和 ip -6 route / ip -6 neigh。</p></aside>
+      </section>
+
+      <section class="slide" data-section="Pod-to-Pod IPv6" data-title="跨节点 Pod IPv6 连通性单独验证">
+        <div class="slide-header"><div><p class="eyebrow">Exercise 10</p><h2>跨节点 Pod IPv6 连通性单独验证</h2><div class="rule"></div></div></div>
+        <pre class="code terminal large-output"><span class="prompt">$</span> calicoctl get workloadendpoints -o wide
+<span class="prompt">$</span> kubectl exec -it &lt;source-pod&gt; -- \
+    ping6 -c 3 <span class="cool">fd00:10:244:yyyy::a</span>
+
+64 bytes from fd00:10:244:yyyy::a: seq=0 ttl=62 time=0.543 ms
+64 bytes from fd00:10:244:yyyy::a: seq=1 ttl=62 time=0.321 ms</pre>
+        <div class="grid-3 compact-gap"><div class="flat-block blue"><h3>选源 Pod</h3><p class="small">记录它所在 Node。</p></div><div class="flat-block yellow"><h3>选远端 IPv6</h3><p class="small">确认目标 Pod 在另一 Node。</p></div><div class="flat-block green"><h3>观察 TTL</h3><p class="small">跨 Node 路径比同 Node 多一跳。</p></div></div>
+        <div class="slide-number">26</div>
+        <aside class="speaker-copy"><p>先从 WorkloadEndpoint 列表选两个不同节点的 Pod，再用 ping6 测试。否则同节点成功不能证明 vxlan-v6 路径。</p><p>现场地址很长，可以通过脚本或 JSONPath 提取，不要手工抄错。</p></aside>
+      </section>
+
+      <section class="slide" data-section="IPv6 VXLAN" data-title="跨节点 IPv6 使用独立的 vxlan-v6.calico">
+        <div class="slide-header"><div><p class="eyebrow">IPv6-in-IPv6 VXLAN</p><h2>跨节点 IPv6 使用独立的 vxlan-v6.calico</h2><div class="rule"></div></div><button class="action-btn" data-replay="#vxlan-flow" type="button" title="重放动画" aria-label="重放 IPv6 VXLAN 路径">↻</button></div>
+        <div class="vxlan-flow is-playing" id="vxlan-flow"><article class="node source"><span>worker</span><strong>Pod IPv6</strong><code>fd00:10:244:...::a</code></article><div class="vxlan-track"><i>inner IPv6</i><b>VXLAN UDP 4789</b></div><article class="tunnel"><span>vxlan-v6.calico</span><strong>VNI 4096</strong><code>outer IPv6</code></article><div class="vxlan-track"><i>encapsulated</i></div><article class="node target"><span>worker2</span><strong>Pod IPv6</strong><code>fd00:10:244:...::f</code></article></div>
+        <div class="callout"><strong>与外部路径不同：</strong>目标落在远端 Pod /122 block 时进入 VXLAN；目标是 2001:db8::/32 时走 eth1 原生路由。</div>
+        <div class="slide-number">27</div>
+        <aside class="speaker-copy"><p>跨节点 Pod IPv6 命中远端 /122 block 路由，进入 vxlan-v6.calico。课程使用 IPv6 inner 与 IPv6 outer。</p><p>目标 Node 解封装后再送往目标 cali 接口。外部 IPv6 不走这条 tunnel。</p></aside>
+      </section>
+
+      <section class="slide" data-section="IPv6 VXLAN" data-title="vxlan-v6.calico 使用 VNI 4096 与 UDP 4789">
+        <div class="slide-header"><div><p class="eyebrow">Tunnel interface details</p><h2>vxlan-v6.calico 使用 VNI 4096 与 UDP 4789</h2><div class="rule"></div></div></div>
+        <pre class="code terminal large-output"><span class="prompt">#</span> docker exec dual-stack-control-plane \
+    ip -d link show vxlan-v6.calico
+
+vxlan-v6.calico: &lt;BROADCAST,MULTICAST,UP,LOWER_UP&gt; mtu <span class="hot">1430</span>
+    vxlan id <span class="cool">4096</span> local <span class="cool">fd00:10:10::10</span> dev eth1
+    srcport 0 0 dstport <span class="hot">4789</span></pre>
+        <div class="attribute-row"><article><span>VNI</span><strong>4096</strong></article><article><span>local VTEP</span><strong>fd00:10:10::10</strong></article><article><span>underlay</span><strong>eth1</strong></article><article><span>MTU</span><strong>1430</strong></article></div>
+        <div class="slide-number">28</div>
+        <aside class="speaker-copy"><p>接口详情给出四个关键字段：VNI 4096、本地 IPv6 VTEP、底层 eth1 和 UDP 4789。</p><p>MTU 1430 从 1500 下调，为 IPv6 外层、UDP 和 VXLAN 头部留空间。</p></aside>
+      </section>
+
+      <section class="slide" data-section="IPv6 Route" data-title="远端 /122 Pod block 路由指向 VXLAN">
+        <div class="slide-header"><div><p class="eyebrow">Route lookup</p><h2>远端 /122 Pod block 路由指向 VXLAN</h2><div class="rule"></div></div></div>
+        <pre class="code terminal large-output"><span class="prompt">#</span> docker exec dual-stack-control-plane \
+    ip -6 route | grep vxlan-v6
+
+fd00:10:244:1b38:1133:7e2c:be1e:4d00/122 \
+  via fd00:10:244:... dev <span class="cool">vxlan-v6.calico</span>
+
+fd00:10:244:b742:2d01:58:8f51:b000/122 \
+  via fd00:10:244:... dev <span class="cool">vxlan-v6.calico</span></pre>
+        <div class="callout"><strong>路由职责：</strong>它决定“这个目标 block 进入哪个接口”，但还没有决定 outer packet 发往哪台 Node；下一步需要邻居表与 FDB。</div>
+        <div class="slide-number">29</div>
+        <aside class="speaker-copy"><p>每个远端节点的 IPv6 Pod block 都有一条 /122 路由，设备是 vxlan-v6.calico。</p><p>路由表只把目标交给 tunnel。VXLAN 还要通过 neighbor 和 FDB 找到远端 VTEP。</p></aside>
+      </section>
+
+      <section class="slide" data-section="IPv6 Neighbor" data-title="Neighbor 表把 VXLAN next-hop 映射到 MAC">
+        <div class="slide-header"><div><p class="eyebrow">L3 next-hop to overlay MAC</p><h2>Neighbor 表把 VXLAN next-hop 映射到 MAC</h2><div class="rule"></div></div></div>
+        <pre class="code terminal large-output"><span class="prompt">#</span> docker exec dual-stack-control-plane \
+    ip -6 neigh show dev vxlan-v6.calico
+
+fd00:10:244:1b38:...:4d00 lladdr <span class="hot">66:ee:a7:ef:78:65</span> PERMANENT
+fd00:10:244:b742:...:b000 lladdr <span class="hot">66:52:6a:03:c1:3b</span> PERMANENT</pre>
+        <div class="neighbor-map"><article><span>IPv6 next-hop</span><strong>fd00:10:244:...:4d00</strong></article><i>›</i><article><span>overlay MAC</span><strong>66:ee:a7:ef:78:65</strong></article><i>›</i><article><span>FDB lookup</span><strong>remote VTEP</strong></article></div>
+        <div class="slide-number">30</div>
+        <aside class="speaker-copy"><p>IPv6 路由里的 next-hop 先通过 Neighbor 表变成 overlay MAC。Calico 安装的是 PERMANENT 项，不依赖广播式学习。</p><p>拿到 MAC 后，bridge FDB 才能查出对应的远端 Node IPv6。</p></aside>
+      </section>
+
+      <section class="slide" data-section="VXLAN FDB" data-title="FDB 最终选择远端 Node 的 IPv6 VTEP">
+        <div class="slide-header"><div><p class="eyebrow">Overlay MAC to underlay destination</p><h2>FDB 最终选择远端 Node 的 IPv6 VTEP</h2><div class="rule"></div></div></div>
+        <pre class="code terminal large-output"><span class="prompt">#</span> docker exec dual-stack-control-plane \
+    bridge fdb show dev vxlan-v6.calico
+
+<span class="hot">66:ee:a7:ef:78:65</span> dst <span class="cool">fd00:10:10::11</span> self permanent
+<span class="hot">66:52:6a:03:c1:3b</span> dst <span class="cool">fd00:10:10::12</span> self permanent</pre>
+        <div class="fdb-meaning"><article><span>overlay MAC</span><strong>代表远端 VTEP</strong></article><article><span>dst IPv6</span><strong>outer header 目的 Node</strong></article><article><span>self permanent</span><strong>Calico 静态编程</strong></article></div>
+        <div class="slide-number">31</div>
+        <aside class="speaker-copy"><p>FDB 把 overlay MAC 映射到远端 Node 的 fd00:10:10::11 或 ::12。这个地址成为 VXLAN outer IPv6 destination。</p><p>route、neighbor、FDB 三张表合在一起，才得到完整的远端转发决定。</p></aside>
+      </section>
+
+      <section class="slide" data-section="查表链" data-title="Route、Neighbor、FDB 连成三次查找">
+        <div class="slide-header"><div><p class="eyebrow">Three lookups before encapsulation</p><h2>Route、Neighbor、FDB 连成三次查找</h2><div class="rule"></div></div><button class="action-btn" data-replay="#lookup-flow" type="button" title="重放动画" aria-label="重放 VXLAN 查表链">↻</button></div>
+        <div class="lookup-flow is-playing" id="lookup-flow"><article><span>1</span><h3>IPv6 route</h3><code>remote /122 → vxlan-v6</code></article><div class="lookup-track"><i>next-hop</i></div><article><span>2</span><h3>Neighbor</h3><code>next-hop → overlay MAC</code></article><div class="lookup-track"><i>MAC</i></div><article><span>3</span><h3>FDB</h3><code>MAC → Node VTEP IPv6</code></article><div class="lookup-track"><i>outer dst</i></div><article><span>4</span><h3>Encapsulate</h3><code>UDP 4789 / VNI 4096</code></article></div>
+        <div class="callout"><strong>排障顺序：</strong>先看路由是否进 tunnel，再看 Neighbor 是否有 MAC，最后看 FDB 是否指向正确 Node。</div>
+        <div class="slide-number">32</div>
+        <aside class="speaker-copy"><p>查表链从目标 Pod IPv6 开始。route 找 tunnel next-hop，Neighbor 找 overlay MAC，FDB 找 remote VTEP。</p><p>任何一层缺失都会导致跨节点 IPv6 失败，所以不要只检查 vxlan-v6 接口是否 UP。</p></aside>
+      </section>
+
+      <section class="slide" data-section="Service 清单" data-title="一份双栈 Service，一份 IPv6-only Service">
+        <div class="slide-header"><div><p class="eyebrow">Service family policies</p><h2>一份双栈 Service，一份 IPv6-only Service</h2><div class="rule"></div></div></div>
+        <div class="yaml-compare"><article><h3>multitool-dual-stack</h3><pre class="code"><span class="key">spec:</span>
+  <span class="key">ipFamilyPolicy:</span> <span class="hot">RequireDualStack</span>
+  <span class="key">ipFamilies:</span>
+  - IPv4
+  - IPv6
+  <span class="key">selector:</span>
+    <span class="key">app:</span> multitool
+  <span class="key">ports:</span>
+  - <span class="key">port:</span> <span class="value">80</span>
+    <span class="key">targetPort:</span> <span class="value">8080</span></pre></article><article><h3>multitool-ipv6-only</h3><pre class="code"><span class="key">spec:</span>
+  <span class="key">ipFamilyPolicy:</span> <span class="hot">SingleStack</span>
+  <span class="key">ipFamilies:</span>
+  - IPv6
+  <span class="key">selector:</span>
+    <span class="key">app:</span> multitool
+  <span class="key">ports:</span>
+  - <span class="key">port:</span> <span class="value">80</span>
+    <span class="key">targetPort:</span> <span class="value">8080</span></pre></article></div>
+        <div class="slide-number">33</div>
+        <aside class="speaker-copy"><p>双栈 Service 要求 IPv4、IPv6 两个 ClusterIP。IPv6-only Service 明确 SingleStack + IPv6。</p><p>两者 selector 相同，后端还是同一组 dual-stack multitool Pod。</p></aside>
+      </section>
+
+      <section class="slide" data-section="Service 地址" data-title="clusterIPs 与 ipFamilies 才能展示完整双栈">
+        <div class="slide-header"><div><p class="eyebrow">Exercise 11.1</p><h2>clusterIPs 与 ipFamilies 才能展示完整双栈</h2><div class="rule"></div></div></div>
+        <pre class="code terminal wide-terminal"><span class="prompt">$</span> kubectl get svc -o custom-columns=\
+'NAME:.metadata.name,TYPE:.spec.type,CLUSTER-IPs:.spec.clusterIPs,PORTS:.spec.ports[*].port'
+
+kubernetes             ClusterIP  ["10.96.0.1","fd00:10:96::1"]       443
+multitool-dual-stack   ClusterIP  ["10.96.x.x","fd00:10:96::xxxx"]    80
+multitool-ipv6-only    ClusterIP  ["fd00:10:96::yyyy"]                 80</pre>
+        <div class="grid-2 compact-gap"><div class="flat-block blue"><h3>legacy clusterIP</h3><p class="body">只表示 primary family 的第一个地址。</p></div><div class="flat-block green"><h3>clusterIPs</h3><p class="body">数组中包含 Service 的全部地址族。</p></div></div>
+        <div class="slide-number">34</div>
+        <aside class="speaker-copy"><p>普通 kubectl get svc 的 CLUSTER-IP 列只显示 primary 地址。自定义 clusterIPs 列才能看到两个值。</p><p>IPv6-only Service 的数组只有一个 IPv6。不要因为默认表格缺少第二地址就误判双栈失败。</p></aside>
+      </section>
+
+      <section class="slide" data-section="Service Policy" data-title="SingleStack、Prefer 与 Require 的失败语义不同">
+        <div class="slide-header"><div><p class="eyebrow">Kubernetes service policy semantics</p><h2>SingleStack、Prefer 与 Require 的失败语义不同</h2><div class="rule"></div></div></div>
+        <table class="data-table policy-table"><thead><tr><th>ipFamilyPolicy</th><th>双栈集群</th><th>单栈集群</th><th>适用场景</th></tr></thead><tbody><tr><td>SingleStack</td><td>只分配一个地址族</td><td>正常创建</td><td>IPv4-only 或 IPv6-only Service</td></tr><tr><td>PreferDualStack</td><td>优先分配两种</td><td>退化为单栈</td><td>兼容多种集群能力</td></tr><tr><td>RequireDualStack</td><td>必须分配两种</td><td class="bad-cell">创建失败</td><td>应用明确要求双栈</td></tr></tbody></table>
+        <div class="callout"><strong>Family order：</strong><code>ipFamilies: [IPv4, IPv6]</code> 让 IPv4 成为 primary；交换顺序会改变 legacy <code>clusterIP</code> 的地址族。</div>
+        <div class="slide-number">35</div>
+        <aside class="speaker-copy"><p>PreferDualStack 在不支持双栈时可以降级，RequireDualStack 则直接失败。课程使用 Require，能及早暴露集群配置问题。</p><p>ipFamilies 的第一项决定 primary family，也是旧 clusterIP 字段展示的地址。</p></aside>
+      </section>
+
+      <section class="slide" data-section="DNS" data-title="CoreDNS 为同一 Service 返回 A 与 AAAA">
+        <div class="slide-header"><div><p class="eyebrow">Exercise 11.2</p><h2>CoreDNS 为同一 Service 返回 A 与 AAAA</h2><div class="rule"></div></div><button class="action-btn" data-replay="#dns-flow" type="button" title="重放动画" aria-label="重放 A 与 AAAA 查询动画">↻</button></div>
+        <div class="dns-dual is-playing" id="dns-flow"><article class="client"><span>Pod resolver</span><strong>multitool-dual-stack</strong></article><div class="dns-queries"><div class="dns-track v4"><i>A</i></div><div class="dns-track v6"><i>AAAA</i></div></div><article class="dns"><span>CoreDNS</span><strong>Service records</strong></article><div class="dns-answers"><article><span>A</span><code>10.96.x.x</code></article><article><span>AAAA</span><code>fd00:10:96::xxxx</code></article></div></div>
+        <pre class="code command-code">dig multitool-dual-stack.default.svc.cluster.local A +short
+dig multitool-dual-stack.default.svc.cluster.local AAAA +short</pre>
+        <div class="slide-number">36</div>
+        <aside class="speaker-copy"><p>A 查询返回 IPv4 ClusterIP，AAAA 查询返回 IPv6 ClusterIP。同一个 Service 名可以同时有两类记录。</p><p>客户端最终使用哪一个取决于 resolver、连接算法、地址可达性和应用是否支持 IPv6。</p></aside>
+      </section>
+
+      <section class="slide" data-section="Service 访问" data-title="curl 与 curl -6 明确选择地址族">
+        <div class="slide-header"><div><p class="eyebrow">Exercise 11.3</p><h2>curl 与 curl -6 明确选择地址族</h2><div class="rule"></div></div></div>
+        <div class="curl-compare"><article class="v4"><span>IPv4</span><pre class="code mini-code">curl http://multitool-dual-stack</pre><p>解析 A 或选用 IPv4，访问 10.96.x.x。</p></article><article class="v6"><span>IPv6</span><pre class="code mini-code">curl -6 http://multitool-dual-stack</pre><p>强制 IPv6，访问 fd00:10:96::xxxx。</p></article><article class="only"><span>IPv6-only</span><pre class="code mini-code">curl http://multitool-ipv6-only</pre><p>只有 AAAA / IPv6 ClusterIP 可用。</p></article></div>
+        <div class="response-banner">Dual-Stack Pod - IPv4 and IPv6 enabled</div>
+        <div class="slide-number">37</div>
+        <aside class="speaker-copy"><p>普通 curl 可以根据系统策略选地址，curl -6 强制 IPv6，IPv6-only Service 则只有一种选择。</p><p>三条命令应该得到相同响应，说明两套 Service 数据面都能到达同一组后端 Pod。</p></aside>
+      </section>
+
+      <section class="slide" data-section="应用支持" data-title="Service 有 IPv6 不代表应用监听 IPv6">
+        <div class="slide-header"><div><p class="eyebrow">Socket binding matters</p><h2>Service 有 IPv6 不代表应用监听 IPv6</h2><div class="rule"></div></div></div>
+        <div class="listener-compare"><article class="bad"><span>IPv4 only</span><h3><code>0.0.0.0:8080</code></h3><p>IPv4 Service 正常，IPv6 Endpoint 连接可能拒绝或超时。</p></article><article class="good"><span>Dual listener</span><h3><code>0.0.0.0:8080</code><br><code>[::]:8080</code></h3><p>课程 Nginx 同时监听两种地址族。</p></article></div>
+        <pre class="code command-code">kubectl exec -it &lt;pod&gt; -- netstat -tlnp
+# Look for 0.0.0.0:8080 and :::8080</pre>
+        <div class="flat-block red"><p class="body">DNS、Service、EndpointSlice 和路由都正确时，最后仍要检查应用 socket。双栈网络不会自动把 IPv4-only 进程变成 IPv6 listener。</p></div>
+        <div class="slide-number">38</div>
+        <aside class="speaker-copy"><p>这是双栈最常见的应用层问题。Pod 有 IPv6、Service 有 AAAA，但进程只监听 0.0.0.0。</p><p>课程显式写 listen [::]:8080，确保 IPv6 Service 能真正到达后端。</p></aside>
+      </section>
+
+      <section class="slide" data-section="Service 数据面" data-title="IPv4 与 IPv6 Service 使用各自 NAT 表">
+        <div class="slide-header"><div><p class="eyebrow">Parallel service proxies</p><h2>IPv4 与 IPv6 Service 使用各自 NAT 表</h2><div class="rule"></div></div></div>
+        <div class="service-datapaths"><article class="v4"><span>IPv4 ClusterIP</span><strong>10.96.x.x:80</strong><div><b>iptables nat</b><i>›</i><b>Pod IPv4:8080</b></div></article><article class="v6"><span>IPv6 ClusterIP</span><strong>[fd00:10:96::x]:80</strong><div><b>ip6tables nat</b><i>›</i><b>Pod IPv6:8080</b></div></article></div>
+        <div class="callout"><strong>同一 Service，两套规则：</strong>EndpointSlice 可以记录两种 addressType，kube-proxy 按地址族编程对应的数据面。</div>
+        <div class="slide-number">39</div>
+        <aside class="speaker-copy"><p>IPv4 ClusterIP 通过 IPv4 NAT 规则选择 IPv4 endpoint，IPv6 ClusterIP 通过 IPv6 NAT 规则选择 IPv6 endpoint。</p><p>两套规则指向同一逻辑 Service，但地址族不能混用。IPv6 VIP 不会 DNAT 到 IPv4-only endpoint。</p></aside>
+      </section>
+
+      <section class="slide" data-section="路径矩阵" data-title="六类流量对应不同数据路径">
+        <div class="slide-header"><div><p class="eyebrow">Traffic matrix</p><h2>六类流量对应不同数据路径</h2><div class="rule"></div></div></div>
+        <table class="data-table matrix-table"><thead><tr><th>流量</th><th>路径</th><th>封装 / 转换</th></tr></thead><tbody><tr><td>同 Node Pod v4/v6</td><td>cali veth + Node routing</td><td>无 VXLAN</td></tr><tr><td>跨 Node Pod IPv4</td><td>vxlan.calico 或原生路由</td><td>取决于 CrossSubnet</td></tr><tr><td>跨 Node Pod IPv6</td><td>vxlan-v6.calico</td><td>IPv6-in-IPv6 VXLAN</td></tr><tr><td>Pod → external IPv4</td><td>Node eth1 → cEOS</td><td>原生 IPv4，可 SNAT</td></tr><tr><td>Pod → external IPv6</td><td>Node eth1 → cEOS</td><td>原生 IPv6，可 NAT66</td></tr><tr><td>Pod → Service</td><td>iptables / ip6tables</td><td>DNAT 到同族 Pod IP</td></tr></tbody></table>
+        <div class="slide-number">40</div>
+        <aside class="speaker-copy"><p>双栈不是一条统一路径。目标地址属于 Pod pool、Service CIDR 还是外部范围，会选择不同数据面。</p><p>尤其 IPv4 pool 是 CrossSubnet，现场同 subnet 时可能不走 vxlan.calico；IPv6 pool Always 则跨节点固定走 vxlan-v6。</p></aside>
+      </section>
+
+      <section class="slide" data-section="排障" data-title="按地址分配、路由、服务和应用分层检查">
+        <div class="slide-header"><div><p class="eyebrow">Troubleshooting ladder</p><h2>按地址分配、路由、服务和应用分层检查</h2><div class="rule"></div></div></div>
+        <div class="trouble-grid"><article><span>1</span><h3>Node addresses</h3><code>ip addr / status.addresses</code><p>eth1 是否有 v4/v6 global。</p></article><article><span>2</span><h3>IPPool / WEP</h3><code>calicoctl get ippool,wep</code><p>Pod 是否拿到两种地址。</p></article><article><span>3</span><h3>Routes</h3><code>ip route / ip -6 route</code><p>外部与远端 block 路径是否正确。</p></article><article><span>4</span><h3>VXLAN tables</h3><code>neigh / bridge fdb</code><p>IPv6 overlay 查表链是否完整。</p></article><article><span>5</span><h3>Service / DNS</h3><code>clusterIPs / A / AAAA</code><p>地址族与 policy 是否匹配。</p></article><article><span>6</span><h3>Application</h3><code>netstat -tlnp</code><p>是否真正监听 [::]。</p></article></div>
+        <div class="slide-number">41</div>
+        <aside class="speaker-copy"><p>排障从底层地址开始，再到 Pod IPAM、路由、VXLAN 表、Service/DNS，最后看应用 listener。</p><p>最有效的方法是分别测试 IPv4 和 IPv6，不要只用一个默认 curl 结果代表双栈都正常。</p></aside>
+      </section>
+
+      <section class="slide" data-section="现场演示" data-title="二十分钟双栈演示顺序">
+        <div class="slide-header"><div><p class="eyebrow">From underlay to application</p><h2>二十分钟双栈演示顺序</h2><div class="rule"></div></div></div>
+        <div class="demo-columns"><ol><li><code>containerlab inspect -t topology.clab.yaml</code><span>确认 cEOS 与三 Node running</span></li><li><code>ip addr show eth1</code><span>展示 Node v4/v6 global 与 link-local</span></li><li><code>calicoctl get ippools -o wide</code><span>展示双 IPPool</span></li><li><code>calicoctl get workloadendpoints -o wide</code><span>展示 Pod 双地址</span></li><li><code>ping 1.1.1.1 / ping6 2001:db8::1</code><span>验证外部双栈</span></li></ol><ol start="6"><li><code>ping6 &lt;remote-pod-ipv6&gt;</code><span>验证跨 Node IPv6</span></li><li><code>ip -d link show vxlan-v6.calico</code><span>展示 VNI、VTEP 与 MTU</span></li><li><code>ip -6 route / neigh / bridge fdb</code><span>串联三次查找</span></li><li><code>dig A / AAAA + curl -6</code><span>验证 Service 与应用</span></li><li><code>./destroy.sh</code><span>清理 topology</span></li></ol></div>
+        <div class="callout"><strong>演示技巧：</strong>每个结果先标注它属于 Node、Pod、Service 还是 external，避免被多个 IPv6 前缀绕晕。</div>
+        <div class="slide-number">42</div>
+        <aside class="speaker-copy"><p>演示从 underlay 地址开始，逐层到 IPPool、Pod、外部路径、VXLAN 和 Service。这样每条命令都有上下文。</p><p>地址很长时不要靠肉眼比较整串，重点识别前缀：fd00:10:10 是 Node，fd00:10:244 是 Pod，fd00:10:96 是 Service。</p></aside>
+      </section>
+
+      <section class="slide" data-section="总结与来源" data-title="双栈的完整证据链">
+        <div class="slide-header"><div><p class="eyebrow">Summary and sources</p><h2>双栈的完整证据链</h2><div class="rule"></div></div></div>
+        <div class="summary-row"><article><span>01</span><h3>集群</h3><p>Kind 在创建时声明双 Pod/Service CIDR 与双 node-ip。</p></article><article><span>02</span><h3>Calico</h3><p>两个 IPPool 分配 Pod 地址，v4/v6 维护独立数据面。</p></article><article><span>03</span><h3>路径</h3><p>外部目标走 eth1 原生路由，跨节点 Pod IPv6 走 vxlan-v6。</p></article><article><span>04</span><h3>服务</h3><p>clusterIPs、A/AAAA 和应用 listener 必须同时支持两种地址族。</p></article></div>
+        <div class="sources"><article><strong>Lesson 14</strong><a href="https://k8snetworking.com/lessons/14-calico-ipv6">k8snetworking.com/lessons/14-calico-ipv6</a></article><article><strong>课程仓库</strong><a href="https://github.com/aadhilam/k8-networking-calico-containerlab/tree/master/containerlab/14-calico-ipv6">github.com/aadhilam/.../14-calico-ipv6</a></article><article><strong>Kubernetes Dual-Stack</strong><a href="https://kubernetes.io/docs/concepts/services-networking/dual-stack/">kubernetes.io/.../dual-stack</a></article><article><strong>Calico Networking</strong><a href="https://docs.tigera.io/calico/latest/networking/">docs.tigera.io/calico/latest/networking</a></article></div>
+        <div class="slide-number">43</div>
+        <aside class="speaker-copy"><p>最后记住四层：集群控制面必须理解两个 CIDR，Calico 必须分配和路由两个地址族，Service 与 DNS 必须发布两个地址，应用也必须监听 IPv6。</p><p>双栈成功不能只靠一个 ping。Node、Pod、external、Service 和 application 五个层次都要分别取证。</p></aside>
+      </section>
+    </div>
+    <div class="progress-track" aria-hidden="true"><div id="progress-fill"></div></div>
+    <nav class="controls" aria-label="演示控制"><button class="tool-btn" id="prev" type="button" title="上一页" aria-label="上一页">‹</button><button class="tool-btn" id="next" type="button" title="下一页" aria-label="下一页">›</button><button class="tool-btn" id="notes-toggle" type="button" title="讲稿" aria-label="显示或隐藏讲稿" aria-pressed="false">N</button><button class="tool-btn" id="overview-toggle" type="button" title="总览" aria-label="显示或隐藏总览" aria-pressed="false">▦</button><button class="tool-btn" id="fullscreen" type="button" title="全屏" aria-label="切换全屏">⛶</button></nav>
+    <button class="notes-backdrop" id="notes-backdrop" type="button" aria-label="关闭讲稿" tabindex="-1"></button>
+    <aside class="notes-panel" id="notes-panel" aria-live="polite" aria-hidden="true"><div class="notes-header"><h2 id="notes-title">讲稿</h2><button class="notes-close" id="notes-close" type="button" title="关闭讲稿" aria-label="关闭讲稿">×</button></div><div id="notes-body"></div></aside>
+    <aside class="overview" id="overview" aria-label="幻灯片总览"></aside>
+  </main>
+  <script src="app.js?v=1"></script>
+</body>
+</html>
