@@ -1,0 +1,478 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="基于 Kubernetes Networking Labs Lesson 05 的 CoreDNS 与 Kubernetes DNS 中文动态演示课件">
+  <title>Kubernetes DNS：从短名称到 CoreDNS</title>
+  <link rel="stylesheet" href="styles.css?v=1">
+</head>
+<body>
+  <main class="deck-shell" aria-label="Kubernetes DNS HTML 演示文稿">
+    <div id="deck-canvas">
+      <section class="slide cover active" data-section="Kubernetes DNS" data-title="从短名称到 CoreDNS">
+        <div class="cover-grid">
+          <div class="cover-copy">
+            <p class="eyebrow">Lesson 05 · CoreDNS · Service Discovery</p>
+            <h1>Kubernetes DNS<br>从<span class="yellow-mark">短名称</span>到 CoreDNS</h1>
+            <p class="lead">沿着 Pod 的 resolv.conf、kube-dns ClusterIP、Corefile 与上游 resolver，还原一次查询的完整路径。</p>
+            <div class="cover-meta"><span>kube-dns 10.96.0.10</span><span>cluster.local</span><span>ndots:5</span></div>
+          </div>
+          <div class="cover-visual dns-cover" aria-label="Pod 查询 kube-dns Service，再分发到两个 CoreDNS Pod">
+            <div class="dns-cover-client"><strong>Application Pod</strong><span>nginx-service</span></div>
+            <div class="dns-cover-link client"><span class="dns-cover-packet query">Q</span></div>
+            <div class="dns-cover-vip"><strong>kube-dns</strong><span>10.96.0.10:53</span></div>
+            <div class="dns-cover-branch"><span class="dns-cover-stem"></span><span class="dns-cover-bus"></span><span class="dns-cover-drop a"></span><span class="dns-cover-drop b"></span><span class="dns-cover-packet ep-a">A</span><span class="dns-cover-packet ep-b">B</span></div>
+            <div class="dns-cover-endpoint a"><strong>CoreDNS</strong><span>192.168.206.6</span></div>
+            <div class="dns-cover-endpoint b"><strong>CoreDNS</strong><span>192.168.206.7</span></div>
+            <div class="dns-cover-label">ClusterIP load-balances each DNS query</div>
+          </div>
+        </div>
+        <aside class="speaker-copy">
+          <p>大家好，这一节我们从 Pod 里写下一个短名称开始，沿着 resolv.conf、kube-dns Service、CoreDNS Pod 和上游 resolver，走完整个 DNS 查询路径。</p>
+          <p>重点会放在几个常见误区：dig 默认不一定使用 search list，ndots 会让短外部域名先尝试集群后缀，跨 namespace 查询必须带 namespace，而且 CoreDNS 的 loadbalance 插件只改变多记录应答顺序。</p>
+          <p class="note-source">主课程：<a href="https://k8snetworking.com/lessons/05-k8s-dns">https://k8snetworking.com/lessons/05-k8s-dns</a></p>
+        </aside>
+      </section>
+
+      <section class="slide" data-section="DNS 价值" data-title="名字稳定，地址可以变化">
+        <div class="slide-header"><div><p class="eyebrow">Service discovery without hard-coded IPs</p><h2>名字稳定，地址可以变化</h2><div class="rule"></div></div></div>
+        <div class="service-problem">
+          <div class="unstable-side"><h3>硬编码 IP</h3><div class="pod-history"><span class="old">10.96.169.109</span><span class="dead">changed</span><span class="new">10.96.88.21</span></div><p>重建 Service 或切换环境后，配置中的旧地址需要同步修改。</p></div>
+          <div class="stable-side"><h3>使用 DNS 名称</h3><div class="vip-badge dns-name">nginx-service.default.svc.cluster.local</div><p>应用依赖名称，CoreDNS 返回当前 Service VIP。</p></div>
+        </div>
+        <div class="grid-3" style="margin-top:30px;"><div class="flat-block green"><h3>服务发现</h3><p class="small">应用通过 Service 名称定位稳定入口。</p></div><div class="flat-block yellow"><h3>Namespace 隔离</h3><p class="small">同一个短名称在不同 namespace 有不同含义。</p></div><div class="flat-block orange"><h3>外部转发</h3><p class="small">非 cluster.local 查询转发到上游 DNS。</p></div></div>
+        <div class="slide-number">02</div>
+        <aside class="speaker-copy">
+          <p>DNS 的价值不是把 IP 隐藏得更漂亮，而是把应用和网络对象生命周期解耦。应用只保存稳定名称，CoreDNS 根据当前 Kubernetes 对象返回地址。</p>
+          <p>Namespace 也是名称的一部分。短名称只在当前 namespace 内确定，跨 namespace 时需要把 namespace 带上。</p>
+        </aside>
+      </section>
+
+      <section class="slide" data-section="端到端模型" data-title="一次 DNS 查询经过五个阶段">
+        <div class="slide-header"><div><p class="eyebrow">Resolver to answer</p><h2>一次 DNS 查询经过五个阶段</h2><div class="rule"></div></div><button class="action-btn" id="replay-query" type="button">↻ 重放查询</button></div>
+        <div class="dns-path" id="dns-query-path">
+          <div><strong>应用</strong><span>请求 nginx-service</span></div><span class="dns-path-link"><b>1</b></span><div><strong>Pod resolver</strong><span>search + ndots</span></div><span class="dns-path-link"><b>2</b></span><div><strong>kube-dns VIP</strong><span>10.96.0.10:53</span></div><span class="dns-path-link"><b>3</b></span><div><strong>CoreDNS</strong><span>kubernetes / forward</span></div><span class="dns-path-link"><b>4</b></span><div><strong>Answer</strong><span>VIP 或外部地址</span></div>
+        </div>
+        <div class="flat-block green" style="margin-top:30px;"><p class="body">先确定查询名称如何展开，再判断 CoreDNS 是权威回答、缓存命中，还是转发到上游。</p></div>
+        <div class="slide-number">03</div>
+        <aside class="speaker-copy">
+          <p>一次查询可以拆成五段。应用交给 Pod resolver，resolver 根据 search 和 ndots 生成候选名称，然后发给 kube-dns ClusterIP。kube-proxy 把流量送到一个 CoreDNS Pod。</p>
+          <p>CoreDNS 再决定由 kubernetes 插件权威回答、由 cache 返回，还是交给 forward 插件访问上游。</p>
+        </aside>
+      </section>
+
+      <section class="slide" data-section="实验环境" data-title="Lesson 05 仓库配置">
+        <div class="slide-header"><div><p class="eyebrow">containerlab/05-k8s-dns</p><h2>Lesson 05 仓库配置</h2><div class="rule"></div></div><span class="command">kindest/node:v1.28.0</span></div>
+        <div class="grid-2">
+          <table class="env-table"><thead><tr><th>对象</th><th>课程值</th><th>作用</th></tr></thead><tbody><tr><td>Kind 节点</td><td>3</td><td>control-plane + 2 workers</td></tr><tr><td>Pod CIDR</td><td>192.168.0.0/16</td><td>Calico IPPool</td></tr><tr><td>Service CIDR</td><td>10.96.0.0/16</td><td>含 kube-dns ClusterIP</td></tr><tr><td>集群域</td><td>cluster.local</td><td>Service 与 Pod DNS zone</td></tr><tr><td>Calico</td><td>3.30.0</td><td>Pod 到 kube-dns/CoreDNS 可达</td></tr><tr><td>封装</td><td>VXLANCrossSubnet</td><td>跨 Node 子网时 VXLAN</td></tr></tbody></table>
+          <pre class="code manifest-code"><span class="comment"># k8s-dns-no-cni.yaml</span>
+<span class="key">networking:</span>
+  <span class="key">disableDefaultCNI:</span> <span class="hot">true</span>
+  <span class="key">podSubnet:</span> <span class="value">"192.168.0.0/16"</span>
+  <span class="key">serviceSubnet:</span> <span class="value">"10.96.0.0/16"</span>
+
+<span class="comment"># custom-resources.yaml</span>
+<span class="key">ipPools:</span>
+- <span class="key">blockSize:</span> <span class="value">26</span>
+  <span class="key">cidr:</span> <span class="value">192.168.0.0/16</span>
+  <span class="key">encapsulation:</span> <span class="hot">VXLANCrossSubnet</span>
+  <span class="key">natOutgoing:</span> <span class="value">Enabled</span></pre>
+        </div>
+        <div class="slide-number">04</div>
+        <aside class="speaker-copy">
+          <p>这套实验仍是三节点 Kind 和 Calico 3.30.0。DNS Service 地址来自 10.96.0.0/16，CoreDNS Pod 地址来自 192.168.0.0/16。</p>
+          <p>cluster.local 是集群 DNS 域。完整 Service 名称会形成 service.namespace.svc.cluster.local。</p>
+        </aside>
+      </section>
+
+      <section class="slide" data-section="测试工作负载" data-title="三个 DaemonSet 覆盖两个 Namespace">
+        <div class="slide-header"><div><p class="eyebrow">multitool-1 · multitool-2 · multitool-3</p><h2>三个 DaemonSet 覆盖两个 Namespace</h2><div class="rule"></div></div></div>
+        <div class="namespace-map">
+          <div class="namespace-band default"><h3>default</h3><div><strong>multitool-1</strong><span>每台节点 1 个</span></div><div><strong>multitool-2</strong><span>每台节点 1 个</span></div><div><strong>nginx-service</strong><span>2 个 nginx Pod</span></div></div>
+          <div class="namespace-band foo"><h3>foo</h3><div><strong>multitool-3</strong><span>每台节点 1 个</span></div><div class="namespace-purpose"><strong>跨 namespace 测试</strong><span>短名称与带 namespace 名称的差异</span></div></div>
+        </div>
+        <div class="grid-2" style="margin-top:28px; gap:24px;"><div class="flat-block green"><h3>同 namespace</h3><p class="body"><code>nginx-service</code> 可以通过 default search suffix 展开。</p></div><div class="flat-block orange"><h3>跨 namespace</h3><p class="body">foo 中要使用 <code>nginx-service.default</code> 或完整 FQDN。</p></div></div>
+        <div class="slide-number">05</div>
+        <aside class="speaker-copy">
+          <p>Lesson 05 比上一课多了一组 foo namespace 的 multitool-3。default namespace 用来验证短名称，foo namespace 用来证明短名称只在当前 namespace 内自动补全。</p>
+          <p>三个 DaemonSet 都容忍 control-plane taint，因此每台节点都有测试 Pod。nginx-service 仍位于 default。</p>
+        </aside>
+      </section>
+
+      <section class="slide" data-section="部署" data-title="部署链路与脚本提示">
+        <div class="slide-header"><div><p class="eyebrow">deploy.sh</p><h2>部署链路与脚本提示</h2><div class="rule"></div></div></div>
+        <div class="command-runway"><article class="runway-step"><span class="index">01</span><h3>创建 Kind</h3><p><span class="command">containerlab deploy -t k8s-dns.clab.yaml</span></p><p class="small muted">三节点、禁用默认 CNI。</p></article><div class="runway-arrow">›</div><article class="runway-step"><span class="index">02</span><h3>安装 Calico</h3><p><span class="command">kubectl apply -f custom-resources.yaml</span></p><p class="small muted">等待 TigeraStatus Available。</p></article><div class="runway-arrow">›</div><article class="runway-step"><span class="index">03</span><h3>部署 tools</h3><p><span class="command">kubectl apply -f tools/*.yaml</span></p><p class="small muted">两个 namespace 的客户端和 nginx。</p></article></div>
+        <div class="grid-2" style="margin-top:28px; gap:24px;"><div class="flat-block yellow"><h3>目录名称</h3><p class="small">仓库真实目录是 <code>containerlab/05-k8s-dns</code>，页面 kubeconfig 示例少了前导 0。</p></div><div class="flat-block orange"><h3>脚本状态查询</h3><p class="small"><code>-l app=multitool</code> 选不到 <code>multitool-1/2/3</code> 标签。使用 <code>kubectl get pods -A -o wide</code>。</p></div></div>
+        <div class="slide-number">06</div>
+        <aside class="speaker-copy">
+          <p>deploy.sh 负责重建 Kind、安装 Calico 和应用 tools 下所有 YAML。CoreDNS 是 Kind/Kubernetes DNS addon，不由 tools 清单单独创建。</p>
+          <p>脚本最后的标签选择器仍与实际标签不匹配，而且 multitool-3 在 foo namespace。验证时直接使用 kubectl get pods -A -o wide。</p>
+        </aside>
+      </section>
+
+      <section class="slide" data-section="环境验证" data-title="三节点 underlay 与工作负载就绪">
+        <div class="slide-header"><div><p class="eyebrow">ContainerLab and Kubernetes</p><h2>三节点 underlay 与工作负载就绪</h2><div class="rule"></div></div></div>
+        <div class="grid-2"><div><h3>ContainerLab</h3><pre class="code" style="margin-top:16px;">k8s-dns-control-plane  running  <span class="cool">172.18.0.3</span>
+k8s-dns-worker         running  <span class="cool">172.18.0.4</span>
+k8s-dns-worker2        running  <span class="cool">172.18.0.2</span></pre><div class="flat-block yellow" style="margin-top:20px;"><p class="small">Node underlay 是 Pod 到 CoreDNS Endpoint 的基础。</p></div></div><div><h3>Kubernetes</h3><pre class="code" style="margin-top:16px;">$ export KUBECONFIG=$(pwd)/k8s-dns.kubeconfig
+$ kubectl get pods -A -o wide
+
+multitool-1/2   default   Running
+multitool-3     foo       Running
+nginx           default   Running
+coredns         kube-system Running</pre><div class="flat-block green" style="margin-top:20px;"><p class="small">测试 Pod、nginx 与 CoreDNS 都应 Ready。</p></div></div></div>
+        <div class="slide-number">07</div>
+        <aside class="speaker-copy">
+          <p>先确认三台 Kind 节点 running，再确认所有 namespace 的测试 Pod 和 CoreDNS Ready。DNS 依赖底层 Pod 网络，Node 或 Calico 不健康时，DNS 现象通常只是上层症状。</p>
+        </aside>
+      </section>
+
+      <section class="slide" data-section="kube-dns" data-title="Pod 使用 kube-dns ClusterIP 作为 nameserver">
+        <div class="slide-header"><div><p class="eyebrow">kube-system/kube-dns</p><h2>Pod 使用 kube-dns ClusterIP 作为 nameserver</h2><div class="rule"></div></div></div>
+        <div class="route-focus" style="margin-top:48px;"><div class="route-command"><p class="tiny muted" style="color:#aab8c7;">$ kubectl get service -n kube-system kube-dns</p><p class="route-line"><strong>kube-dns</strong> ClusterIP <span class="cool">10.96.0.10</span></p><p class="route-line" style="font-size:21px;">53/UDP · 53/TCP · 9153/TCP</p></div><div class="gateway-explain"><div class="flat-block green"><h3>53/UDP</h3><p class="body">大多数普通 DNS 查询。</p></div><div class="flat-block orange"><h3>53/TCP</h3><p class="body">显式 TCP、截断重试和部分大应答。</p></div><div class="flat-block yellow"><h3>9153/TCP</h3><p class="body">CoreDNS Prometheus metrics。</p></div></div></div>
+        <div class="slide-number">08</div>
+        <aside class="speaker-copy">
+          <p>虽然实现是 CoreDNS，Service 名仍叫 kube-dns，以兼容过去依赖这个名称的工作负载。它的 ClusterIP 是 10.96.0.10，kubelet 把这个地址写入普通 Pod 的 resolv.conf。</p>
+          <p>DNS 同时暴露 UDP 和 TCP 53。9153 是 Prometheus 指标端口，不用于名称查询。</p>
+        </aside>
+      </section>
+
+      <section class="slide" data-section="kube-dns" data-title="ClusterIP 后面是两个 CoreDNS Endpoint">
+        <div class="slide-header"><div><p class="eyebrow">Service and Endpoints</p><h2>ClusterIP 后面是两个 CoreDNS Endpoint</h2><div class="rule"></div></div></div>
+        <div class="object-map dns-object-map"><div class="object-pods"><h3>CoreDNS Pods</h3><div><span>control-plane</span><code>192.168.206.6:53</code></div><div><span>control-plane</span><code>192.168.206.7:53</code></div></div><div class="object-service"><h3>kube-dns</h3><strong>10.96.0.10:53</strong><span>UDP + TCP</span></div><div class="object-slice"><h3>Endpoint readiness</h3><code>Ready: .206.6</code><code>Ready: .206.7</code><span>NotReadyAddresses: none</span></div></div>
+        <div class="flat-block orange" style="margin-top:28px;"><p class="body">查询先经过 kube-dns Service 数据面，再由 kube-proxy 选择一个 CoreDNS Pod。</p></div>
+        <div class="slide-number">09</div>
+        <aside class="speaker-copy">
+          <p>kube-dns 自己也是 ClusterIP Service，背后有两个 CoreDNS Pod。课程示例中两个 Endpoint 都在 control-plane，地址分别是 192.168.206.6 和 .7。</p>
+          <p>NotReadyAddresses 为空，说明两个 Endpoint 都可接收新查询。DNS 查询在这里会再次用到上一课的 Service 数据路径。</p>
+        </aside>
+      </section>
+
+      <section class="slide" data-section="课程原图" data-title="课程原图：Pod 到 CoreDNS">
+        <div class="slide-header compact-header"><div><p class="eyebrow">CoreDNS Pods behind kube-dns</p><h2>课程原图：Pod 到 CoreDNS</h2><div class="rule"></div></div></div>
+        <img class="course-image dns-course-image wide" src="assets/course-coredns-pods.png" alt="课程原图，Pod 查询 kube-dns ClusterIP 并由 Service 负载均衡到两个 CoreDNS Pod">
+        <p class="source-line">课程仓库：images/corednspods.png</p>
+        <div class="slide-number">10</div>
+        <aside class="speaker-copy">
+          <p>课程原图把 Pod resolver、kube-dns ClusterIP 和两个 CoreDNS Endpoint 放在一条路径上。Pod 始终把查询交给 10.96.0.10，Service 数据面再选择后端。</p>
+          <p class="note-source">图片来源：<a href="https://raw.githubusercontent.com/aadhilam/k8-networking-calico-containerlab/master/images/corednspods.png">corednspods.png</a></p>
+        </aside>
+      </section>
+
+      <section class="slide" data-section="CoreDNS" data-title="CoreDNS Pod 与 Service Endpoint 对齐">
+        <div class="slide-header"><div><p class="eyebrow">k8s-app=kube-dns</p><h2>CoreDNS Pod 与 Service Endpoint 对齐</h2><div class="rule"></div></div></div>
+        <pre class="code" style="margin-top:42px; font-size:18px; line-height:1.75;">$ kubectl get pods -n kube-system -l k8s-app=kube-dns -o wide
+
+coredns-5dd5756b68-bnd2k  1/1  Running  <span class="cool">192.168.206.6</span>  k8s-dns-control-plane
+coredns-5dd5756b68-m65p4  1/1  Running  <span class="cool">192.168.206.7</span>  k8s-dns-control-plane</pre>
+        <div class="grid-3" style="margin-top:34px;"><div class="flat-block green"><h3>Pod Ready</h3><p class="small">readiness endpoint 返回成功。</p></div><div class="flat-block yellow"><h3>Endpoint 一致</h3><p class="small">Service 后端地址与 Pod IP 对齐。</p></div><div class="flat-block orange"><h3>副本冗余</h3><p class="small">一个 CoreDNS 重启时仍有另一个后端。</p></div></div>
+        <div class="slide-number">11</div>
+        <aside class="speaker-copy">
+          <p>CoreDNS Deployment 运行两个副本。这里不仅看 Running，还要把 Pod IP 与 kube-dns Endpoint 对齐。</p>
+          <p>课程这一轮两个副本都调度到 control-plane。生产环境通常还会配合 topology spread 或 anti-affinity，减少同节点故障影响。</p>
+        </aside>
+      </section>
+
+      <section class="slide" data-section="Corefile" data-title="Corefile 定义查询处理链">
+        <div class="slide-header"><div><p class="eyebrow">kube-system/coredns ConfigMap</p><h2>Corefile 定义查询处理链</h2><div class="rule"></div></div></div>
+        <div class="grid-2"><pre class="code" style="height:560px; font-size:16px;"><span class="value">.:53</span> {
+    <span class="key">errors</span>
+    <span class="key">health</span> { lameduck 5s }
+    <span class="key">ready</span>
+    <span class="key">kubernetes</span> cluster.local in-addr.arpa ip6.arpa {
+       pods insecure
+       fallthrough in-addr.arpa ip6.arpa
+       ttl 30
+    }
+    <span class="key">prometheus</span> :9153
+    <span class="key">forward</span> . /etc/resolv.conf {
+       max_concurrent 1000
+    }
+    <span class="key">cache</span> 30
+    <span class="key">loop</span>
+    <span class="key">reload</span>
+    <span class="key">loadbalance</span>
+}</pre><div class="plugin-groups"><div><strong>权威区</strong><span>kubernetes plugin 处理 cluster.local</span></div><div><strong>外部域名</strong><span>forward plugin 交给上游 resolver</span></div><div><strong>性能</strong><span>cache 降低重复查询延迟与负载</span></div><div><strong>运行状态</strong><span>health、ready、prometheus、errors</span></div><div><strong>配置保护</strong><span>loop、reload、loadbalance</span></div></div></div>
+        <div class="slide-number">12</div>
+        <aside class="speaker-copy">
+          <p>CoreDNS 是插件链。.:53 表示在 53 端口处理所有 zone，kubernetes 插件对 cluster.local 权威，forward 处理其余名称，cache 放在查询链中减少重复工作。</p>
+          <p>后面的 health、ready、prometheus、loop、reload 和 loadbalance 分别负责可用性、监控、保护和应答顺序。</p>
+        </aside>
+      </section>
+
+      <section class="slide" data-section="Corefile" data-title="kubernetes 插件生成集群记录">
+        <div class="slide-header"><div><p class="eyebrow">Authoritative for cluster.local</p><h2>kubernetes 插件生成集群记录</h2><div class="rule"></div></div></div>
+        <div class="record-grid"><div><span>A / AAAA</span><strong>nginx-service.default.svc.cluster.local</strong><p>普通 Service 返回 ClusterIP。</p></div><div><span>Headless A / AAAA</span><strong>db.default.svc.cluster.local</strong><p>返回被选中 Pod IP 集合。</p></div><div><span>SRV</span><strong>_http._tcp.nginx-service.default...</strong><p>命名端口返回服务名与端口。</p></div><div><span>PTR</span><strong>in-addr.arpa / ip6.arpa</strong><p>匹配的反向记录由插件回答或 fallthrough。</p></div></div>
+        <div class="grid-2" style="margin-top:28px; gap:24px;"><div class="flat-block yellow"><h3>pods insecure</h3><p class="small">为兼容 kube-dns，可按请求中的 IP 形式返回 Pod A 记录，不验证对应 Pod 一定存在。</p></div><div class="flat-block green"><h3>ttl 30</h3><p class="small">kubernetes 插件回答记录的 TTL 为 30 秒。</p></div></div>
+        <div class="slide-number">13</div>
+        <aside class="speaker-copy">
+          <p>kubernetes 插件读取 Kubernetes API 数据并实现 DNS-Based Service Discovery 规范。普通 Service 名返回 ClusterIP，Headless Service 名返回后端 Pod IP 集合，命名端口还会生成 SRV。</p>
+          <p>pods insecure 是兼容模式。它可以为形如 10-1-2-3.namespace.pod.cluster.local 的名称返回 IP，而不验证这个 Pod 是否真实存在。需要验证时可以考虑 pods verified，但会增加内存与 API watch 成本。</p>
+        </aside>
+      </section>
+
+      <section class="slide" data-section="Corefile" data-title="外部查询经过 forward 与 cache">
+        <div class="slide-header"><div><p class="eyebrow">Non-cluster names</p><h2>外部查询经过 forward 与 cache</h2><div class="rule"></div></div></div>
+        <div class="grid-2" style="margin-top:36px;"><div class="flat-block orange" style="min-height:410px;"><h3>forward . /etc/resolv.conf</h3><pre class="code" style="margin-top:20px;">query: www.example.com.
+
+kubernetes plugin
+  no matching cluster.local zone
+
+forward plugin
+  use CoreDNS Pod /etc/resolv.conf</pre><p class="small" style="margin-top:18px;">上游来自 CoreDNS Pod 所见的 resolv.conf，不等于业务 Pod 的 10.96.0.10。</p></div><div class="flat-block green" style="min-height:410px;"><h3>cache 30</h3><pre class="code" style="margin-top:20px;">first query
+  upstream response
+  cache insert
+
+repeated query
+  cache hit
+  lower latency</pre><p class="small" style="margin-top:18px;">缓存行为受应答 TTL、插件配置与记录类型影响。</p></div></div>
+        <div class="slide-number">14</div>
+        <aside class="speaker-copy">
+          <p>外部域名不属于 cluster.local，kubernetes 插件不会权威回答，forward 插件把请求交给 /etc/resolv.conf 中的上游。</p>
+          <p>cache 30 启用前端缓存。重复查询可以直接命中 CoreDNS 缓存，不必每次访问上游。</p>
+        </aside>
+      </section>
+
+      <section class="slide" data-section="Corefile" data-title="运行插件的准确职责">
+        <div class="slide-header"><div><p class="eyebrow">Health, reload and protection</p><h2>运行插件的准确职责</h2><div class="rule"></div></div></div>
+        <table class="env-table plugin-table"><thead><tr><th>插件</th><th>职责</th><th>现场观察</th></tr></thead><tbody><tr><td>health</td><td>8080 health endpoint，lameduck 让退出更平滑</td><td>liveness</td></tr><tr><td>ready</td><td>8181 readiness endpoint，等待插件就绪</td><td>readiness</td></tr><tr><td>prometheus</td><td>在 9153 暴露查询指标</td><td><code>/metrics</code></td></tr><tr><td>reload</td><td>周期计算 Corefile 校验和并优雅 reload</td><td>ConfigMap 更新后生效</td></tr><tr><td>loop</td><td>启动时检测简单静态转发环路</td><td>检测到环路会退出</td></tr><tr><td>loadbalance</td><td>随机化 A、AAAA、MX 应答记录顺序</td><td>不负责轮换上游 DNS</td></tr></tbody></table>
+        <div class="flat-block red" style="margin-top:24px;"><p class="body"><strong>课程口径修正：</strong><code>loadbalance</code> 调整回答中的记录顺序；上游选择属于 <code>forward</code> 插件。</p></div>
+        <div class="slide-number">15</div>
+        <aside class="speaker-copy">
+          <p>这页把容易混淆的插件职责讲严谨。health 和 ready 不是 DNS 端口，prometheus 只提供指标，reload 周期检查 Corefile 并优雅重载。</p>
+          <p>loop 只能在启动阶段检测简单静态环路。loadbalance 随机化回答中的 A、AAAA、MX 顺序，不负责上游 resolver 的轮换。</p>
+          <p class="note-source">Kubernetes 官方：<a href="https://kubernetes.io/docs/tasks/administer-cluster/dns-custom-nameservers/">Customizing DNS Service</a>；CoreDNS：<a href="https://coredns.io/plugins/loadbalance/">loadbalance</a></p>
+        </aside>
+      </section>
+
+      <section class="slide" data-section="课程原图" data-title="课程原图：集群权威区与外部转发">
+        <div class="slide-header compact-header"><div><p class="eyebrow">DNS resolver path</p><h2>课程原图：集群权威区与外部转发</h2><div class="rule"></div></div></div>
+        <img class="course-image dns-course-image" src="assets/course-dns-resolver.png" alt="课程原图，Pod 通过 kube-dns 查询集群记录，外部域名转发到上游 DNS">
+        <p class="source-line">课程仓库：images/dnsresolver.png</p>
+        <div class="slide-number">16</div>
+        <aside class="speaker-copy">
+          <p>课程原图把两类查询放在一起。cluster.local 由 CoreDNS 的 kubernetes 插件权威回答，外部域名通过 forward 插件送往上游。</p>
+          <p>Pod 只配置 kube-dns ClusterIP，不需要知道具体 CoreDNS Pod 或外部 resolver 地址。</p>
+          <p class="note-source">图片来源：<a href="https://raw.githubusercontent.com/aadhilam/k8-networking-calico-containerlab/master/images/dnsresolver.png">dnsresolver.png</a></p>
+        </aside>
+      </section>
+
+      <section class="slide" data-section="Node resolver" data-title="Node resolv.conf 指向 Docker 上游">
+        <div class="slide-header"><div><p class="eyebrow">docker exec k8s-dns-worker</p><h2>Node resolv.conf 指向 Docker 上游</h2><div class="rule"></div></div></div>
+        <div class="route-focus" style="margin-top:52px;"><pre class="code" style="font-size:20px; line-height:1.7;"># cat /etc/resolv.conf
+
+nameserver <span class="hot">172.18.0.1</span>
+search <span class="cool">ec2.internal</span>
+options edns0 trust-ad <span class="value">ndots:0</span></pre><div class="gateway-explain"><div class="flat-block orange"><h3>172.18.0.1</h3><p class="body">Kind Node 容器使用 Docker bridge 的 DNS 转发路径。</p></div><div class="flat-block green"><h3>ndots:0</h3><p class="body">Node 短名称更快按绝对名称处理。</p></div><div class="flat-block yellow"><h3>CoreDNS 上游来源</h3><p class="body"><code>forward . /etc/resolv.conf</code> 读取 CoreDNS Pod 内该文件。</p></div></div></div>
+        <div class="slide-number">17</div>
+        <aside class="speaker-copy">
+          <p>进入 Kind worker 看 resolv.conf，可以看到 nameserver 172.18.0.1 和 ndots:0。这是 Node 容器自己的 DNS 路径。</p>
+          <p>CoreDNS 的 forward 插件读取 CoreDNS Pod 内的 /etc/resolv.conf。业务 Pod 的 resolv.conf 则由 kubelet重新生成，指向 10.96.0.10。两者不要混在一起。</p>
+        </aside>
+      </section>
+
+      <section class="slide" data-section="Pod resolver" data-title="kubelet 为 Pod 注入集群 DNS 配置">
+        <div class="slide-header"><div><p class="eyebrow">default namespace Pod</p><h2>kubelet 为 Pod 注入集群 DNS 配置</h2><div class="rule"></div></div></div>
+        <pre class="code" style="margin-top:36px; font-size:20px; line-height:1.75;">$ kubectl exec -it multitool-1-8c8fb -- cat /etc/resolv.conf
+
+search <span class="cool">default.svc.cluster.local</span> svc.cluster.local cluster.local ec2.internal
+nameserver <span class="hot">10.96.0.10</span>
+options <span class="value">ndots:5</span></pre>
+        <div class="grid-3" style="margin-top:34px;"><div class="flat-block green"><h3>第一 search suffix</h3><p class="small">由 Pod 所在 namespace 决定。</p></div><div class="flat-block orange"><h3>nameserver</h3><p class="small">kubelet 的 cluster-dns 指向 kube-dns Service IP。</p></div><div class="flat-block yellow"><h3>继承项</h3><p class="small"><code>ec2.internal</code> 来自 Node/环境。</p></div></div>
+        <div class="slide-number">18</div>
+        <aside class="speaker-copy">
+          <p>普通 Pod 默认使用 ClusterFirst DNS policy。kubelet 为它生成 resolv.conf，第一条 search suffix 包含当前 namespace，nameserver 指向 kube-dns ClusterIP。</p>
+          <p>最后的 ec2.internal 来自 Node 环境。它不是 Kubernetes 固定要求，其他平台可能完全不同。</p>
+        </aside>
+      </section>
+
+      <section class="slide" data-section="DNS Policy" data-title="DNS Policy 决定 Pod resolver 来源">
+        <div class="slide-header"><div><p class="eyebrow">ClusterFirst is the normal default</p><h2>DNS Policy 决定 Pod resolver 来源</h2><div class="rule"></div></div></div>
+        <table class="env-table policy-table"><thead><tr><th>dnsPolicy</th><th>resolver 行为</th><th>典型场景</th></tr></thead><tbody><tr><td><strong>ClusterFirst</strong></td><td>cluster.local 交给集群 DNS，其他查询由 CoreDNS 转发</td><td>普通 Pod 默认</td></tr><tr><td>Default</td><td>继承 Node 的 DNS 配置</td><td>需要与 Node 相同解析路径</td></tr><tr><td>ClusterFirstWithHostNet</td><td>hostNetwork Pod 仍使用集群 DNS</td><td>Node 级 agent</td></tr><tr><td>None</td><td>完全使用 spec.dnsConfig</td><td>自定义 nameserver/search/options</td></tr></tbody></table>
+        <div class="flat-block yellow" style="margin-top:28px;"><p class="body"><strong>排错先看 Pod spec：</strong>看到不同 resolv.conf 不一定是 kubelet 异常，可能是 dnsPolicy 或 dnsConfig 主动覆盖。</p></div>
+        <div class="slide-number">19</div>
+        <aside class="speaker-copy">
+          <p>ClusterFirst 是普通 Pod 的常见默认值。Default 表示继承 Node，hostNetwork Pod 如果仍需要集群解析，应使用 ClusterFirstWithHostNet。</p>
+          <p>None 会完全依赖 dnsConfig。排查 resolv.conf 与预期不一致时，先查看 Pod spec，而不是直接修改容器里的文件。</p>
+        </aside>
+      </section>
+
+      <section class="slide" data-section="ndots" data-title="ndots:5 决定候选名称顺序">
+        <div class="slide-header"><div><p class="eyebrow">Resolver search expansion</p><h2>ndots:5 决定候选名称顺序</h2><div class="rule"></div></div><button class="action-btn" id="replay-ndots" type="button">↻ 重放展开</button></div>
+        <div class="ndots-flow" id="ndots-flow">
+          <div class="ndots-query"><strong>nginx-service</strong><span>0 dots &lt; 5</span></div>
+          <div class="ndots-candidates"><div data-caption="先尝试当前 namespace"><span>01</span><code>nginx-service.default.svc.cluster.local</code></div><div data-caption="再尝试更宽的 Service zone"><span>02</span><code>nginx-service.svc.cluster.local</code></div><div data-caption="再尝试 cluster.local"><span>03</span><code>nginx-service.cluster.local</code></div><div data-caption="继续尝试环境 search suffix"><span>04</span><code>nginx-service.ec2.internal</code></div><div data-caption="最后尝试绝对名称"><span>05</span><code>nginx-service.</code></div></div>
+        </div>
+        <div class="ndots-caption" id="ndots-caption"></div>
+        <div class="slide-number">20</div>
+        <aside class="speaker-copy">
+          <p>ndots:5 表示名称中的点少于 5 个时，resolver 优先把 search suffix 逐个追加。nginx-service 没有点，所以先尝试当前 namespace 的完整 Service 名。</p>
+          <p>这能让短名称方便工作，也会让 api.example.com 这类短外部名称先产生多次集群内查询。对延迟敏感时可以使用带结尾点的 FQDN，或谨慎调整 Pod dnsConfig。</p>
+        </aside>
+      </section>
+
+      <section class="slide" data-section="dig" data-title="dig 默认不使用 search list">
+        <div class="slide-header"><div><p class="eyebrow">dig and libc resolver behave differently</p><h2>dig 默认不使用 search list</h2><div class="rule"></div></div></div>
+        <div class="grid-2" style="margin-top:34px;"><div class="flat-block red" style="min-height:420px;"><h3><code>dig nginx-service</code></h3><pre class="code" style="margin-top:18px;">QUESTION:
+nginx-service. IN A
+
+SERVER: 10.96.0.10#53
+status: <span class="hot">SERVFAIL</span></pre><p class="body" style="margin-top:18px;">dig 把 bare name 作为绝对名称查询，没有自动追加 Pod search suffix。</p></div><div class="flat-block green" style="min-height:420px;"><h3><code>dig +search nginx-service</code></h3><pre class="code" style="margin-top:18px;">QUESTION:
+nginx-service.default.svc.cluster.local. IN A
+
+ANSWER:
+30 IN A <span class="cool">10.96.169.109</span></pre><p class="body" style="margin-top:18px;"><code>+search</code> 明确要求 dig 使用 resolv.conf 的 search list。</p></div></div>
+        <div class="slide-number">21</div>
+        <aside class="speaker-copy">
+          <p>这一页非常关键。很多应用使用 libc resolver，会自动应用 search list。但 dig 默认不这样做。课程第一次执行 dig nginx-service，最终问题是带结尾点的 nginx-service.，因此不会命中 Kubernetes Service 记录。</p>
+          <p>加上 +search 后，dig 才按 resolv.conf 展开，得到 nginx-service.default.svc.cluster.local 和 Service VIP。</p>
+        </aside>
+      </section>
+
+      <section class="slide" data-section="default namespace" data-title="同 Namespace 短名称解析成功">
+        <div class="slide-header"><div><p class="eyebrow">default namespace</p><h2>同 Namespace 短名称解析成功</h2><div class="rule"></div></div></div>
+        <div class="dns-resolution"><div><strong>Query</strong><code>dig +search nginx-service</code></div><span class="dns-resolution-link"><b>search</b></span><div><strong>Expanded name</strong><code>nginx-service.default.svc.cluster.local.</code></div><span class="dns-resolution-link"><b>A</b></span><div><strong>Answer</strong><code>10.96.169.109</code></div></div>
+        <div class="grid-2" style="margin-top:34px; gap:24px;"><div class="flat-block green"><h3>名称来自当前 namespace</h3><p class="body">第一 search suffix 正好是 <code>default.svc.cluster.local</code>。</p></div><div class="flat-block yellow"><h3>答案是 Service VIP</h3><p class="body">普通 ClusterIP Service 不会直接返回 nginx Pod IP。</p></div></div>
+        <div class="slide-number">22</div>
+        <aside class="speaker-copy">
+          <p>default namespace 的 Pod 查询 nginx-service，第一条 search suffix 就能构造完整 Service 名。CoreDNS 返回当前 ClusterIP 10.96.169.109。</p>
+          <p>这个 VIP 与上一课示例不同，进一步说明 Service IP 是动态环境值。现场以 kubectl get svc 为准。</p>
+        </aside>
+      </section>
+
+      <section class="slide" data-section="foo namespace" data-title="foo Pod 的第一 search suffix 不同">
+        <div class="slide-header"><div><p class="eyebrow">foo namespace</p><h2>foo Pod 的第一 search suffix 不同</h2><div class="rule"></div></div></div>
+        <pre class="code" style="margin-top:38px; font-size:20px; line-height:1.75;">$ kubectl exec -it multitool-3-rbsdz -n foo -- cat /etc/resolv.conf
+
+search <span class="hot">foo.svc.cluster.local</span> svc.cluster.local cluster.local ec2.internal
+nameserver <span class="cool">10.96.0.10</span>
+options <span class="value">ndots:5</span></pre>
+        <div class="grid-2" style="margin-top:34px; gap:24px;"><div class="flat-block orange"><h3>短名称上下文改变</h3><p class="body"><code>nginx-service</code> 首先展开到 <code>nginx-service.foo.svc.cluster.local</code>。</p></div><div class="flat-block green"><h3>DNS Server 不变</h3><p class="body">所有普通 Pod 仍指向 10.96.0.10，变化的是 search list。</p></div></div>
+        <div class="slide-number">23</div>
+        <aside class="speaker-copy">
+          <p>进入 foo namespace 的 multitool-3，nameserver 仍是 10.96.0.10，ndots 仍是 5。真正变化的是第一条 search suffix 变成 foo.svc.cluster.local。</p>
+          <p>因此相同短名称在不同 namespace 会构造不同 FQDN，这就是短名称具有 namespace 上下文的原因。</p>
+        </aside>
+      </section>
+
+      <section class="slide" data-section="跨 Namespace" data-title="foo 中只写短名称会失败">
+        <div class="slide-header"><div><p class="eyebrow">Short name stays inside current namespace</p><h2>foo 中只写短名称会失败</h2><div class="rule"></div></div></div>
+        <div class="namespace-query bad"><div><strong>foo Pod</strong><code>dig +search nginx-service</code></div><div class="namespace-attempts"><span>nginx-service.foo.svc.cluster.local</span><span>nginx-service.svc.cluster.local</span><span>nginx-service.cluster.local</span><span>nginx-service.</span></div><div class="namespace-result"><strong>no matching Service</strong><span>课程输出：SERVFAIL</span></div></div>
+        <div class="flat-block yellow" style="margin-top:30px;"><p class="body">Service 在 default，不在 foo。Kubernetes 不会替短名称自动搜索所有 namespace。</p></div>
+        <div class="slide-number">24</div>
+        <aside class="speaker-copy">
+          <p>foo Pod 查询 nginx-service 时，resolver 不会自动尝试 default namespace。它只按自己的 search list 构造候选名称，因此找不到目标 Service。</p>
+          <p>课程环境最终显示 SERVFAIL。其他 resolver 或 CoreDNS 版本也可能显示 NXDOMAIN，关键是没有得到目标 A 记录，而不是死记状态码。</p>
+        </aside>
+      </section>
+
+      <section class="slide" data-section="跨 Namespace" data-title="带上 Namespace 后解析成功">
+        <div class="slide-header"><div><p class="eyebrow">service.namespace</p><h2>带上 Namespace 后解析成功</h2><div class="rule"></div></div></div>
+        <div class="namespace-query good"><div><strong>foo Pod</strong><code>dig +search nginx-service.default</code></div><div class="namespace-attempts"><span>nginx-service.default.foo.svc.cluster.local</span><span class="hit">nginx-service.default.svc.cluster.local</span></div><div class="namespace-result"><strong>10.96.169.109</strong><span>30 IN A</span></div></div>
+        <div class="grid-2" style="margin-top:30px; gap:24px;"><div class="flat-block green"><h3>推荐简写</h3><p class="body"><code>service.namespace</code> 足够让 search suffix 构造目标 FQDN。</p></div><div class="flat-block yellow"><h3>最确定写法</h3><p class="body"><code>service.namespace.svc.cluster.local.</code> 带结尾点，直接按绝对名称查询。</p></div></div>
+        <div class="slide-number">25</div>
+        <aside class="speaker-copy">
+          <p>在 foo 中写 nginx-service.default，resolver 能利用 svc.cluster.local 这条 search suffix 构造正确 FQDN。</p>
+          <p>需要完全可预测时，直接使用带结尾点的完整 FQDN，resolver 不再尝试其他 search suffix。</p>
+        </aside>
+      </section>
+
+      <section class="slide" data-section="FQDN" data-title="结尾点表示绝对 DNS 名称">
+        <div class="slide-header"><div><p class="eyebrow">Trailing dot bypasses search expansion</p><h2>结尾点表示绝对 DNS 名称</h2><div class="rule"></div></div></div>
+        <div class="grid-2" style="margin-top:52px;"><div class="flat-block orange" style="min-height:330px;"><h3>没有结尾点</h3><pre class="code" style="margin-top:22px; font-size:18px;">nginx-service.default.svc.cluster.local
+
+dots = 4 &lt; ndots:5
+
+resolver 仍可能先尝试 search suffix</pre></div><div class="flat-block green" style="min-height:330px;"><h3>带结尾点</h3><pre class="code" style="margin-top:22px; font-size:18px;">nginx-service.default.svc.cluster.local.
+
+absolute FQDN
+
+直接查询，不做 search expansion</pre></div></div>
+        <div class="flat-block yellow" style="margin-top:30px;"><p class="body">对延迟敏感的外部域名或明确 FQDN，结尾点可以避免额外 search 查询。</p></div>
+        <div class="slide-number">26</div>
+        <aside class="speaker-copy">
+          <p>很多人以为包含多个点就一定是 FQDN。在 ndots:5 下，一个有 4 个点但没有结尾点的名称仍可能先应用 search suffix。</p>
+          <p>DNS 语法中的结尾点明确表示从根开始的绝对名称。它是控制 resolver 行为最直接的方法。</p>
+        </aside>
+      </section>
+
+      <section class="slide" data-section="外部域名" data-title="外部查询转发到 Node 上游">
+        <div class="slide-header"><div><p class="eyebrow">forward . /etc/resolv.conf</p><h2>外部查询转发到 Node 上游</h2><div class="rule"></div></div><button class="action-btn" id="replay-external" type="button">↻ 重放外部查询</button></div>
+        <div class="external-dns-path" id="external-dns-path"><div><strong>Pod</strong><span>www.example.com.</span></div><span class="external-link"><b>Q</b></span><div><strong>kube-dns VIP</strong><span>10.96.0.10</span></div><span class="external-link"><b>Q</b></span><div><strong>CoreDNS forward</strong><span>/etc/resolv.conf</span></div><span class="external-link"><b>Q</b></span><div><strong>Upstream DNS</strong><span>172.18.0.1 path</span></div></div>
+        <div class="grid-2" style="margin-top:30px; gap:24px;"><div class="flat-block green"><h3>ClusterFirst</h3><p class="body">非 cluster.local 名称仍先到 CoreDNS，再由 forward 转发。</p></div><div class="flat-block red"><h3>环路风险</h3><p class="body">如果上游最终又指回 CoreDNS，loop 插件可能让 CoreDNS 退出并进入 CrashLoopBackOff。</p></div></div>
+        <div class="slide-number">27</div>
+        <aside class="speaker-copy">
+          <p>ClusterFirst 不表示外部查询绕过 CoreDNS。Pod 仍然把请求交给 10.96.0.10，CoreDNS 发现不属于 cluster.local 后再用 forward 插件访问上游。</p>
+          <p>如果 /etc/resolv.conf 指向一个最终又回到 CoreDNS 的本地 stub，就会形成转发环路。loop 插件检测到简单启动时环路后会让进程退出。</p>
+        </aside>
+      </section>
+
+      <section class="slide" data-section="UDP 与 TCP" data-title="DNS 不只有 UDP 53">
+        <div class="slide-header"><div><p class="eyebrow">Transport behavior</p><h2>DNS 不只有 UDP 53</h2><div class="rule"></div></div></div>
+        <div class="grid-2" style="margin-top:42px;"><div class="flat-block green" style="min-height:380px;"><h3>UDP 53</h3><p class="body" style="margin-top:22px;">普通查询通常先用 UDP，开销低，不需要建立连接。</p><pre class="code" style="margin-top:26px;">dig nginx-service.default.svc.cluster.local.
+;; SERVER: 10.96.0.10#53
+;; flags: qr rd ra</pre></div><div class="flat-block orange" style="min-height:380px;"><h3>TCP 53</h3><p class="body" style="margin-top:22px;">客户端可显式使用 TCP。UDP 应答带 TC 截断标志时，resolver 也可能重试 TCP。</p><pre class="code" style="margin-top:26px;">dig +tcp nginx-service.default.svc.cluster.local.
+
+tcpdump -ni any port 53</pre></div></div>
+        <div class="slide-number">28</div>
+        <aside class="speaker-copy">
+          <p>DNS 常被简化为 UDP 53，但 kube-dns Service 同时暴露 UDP 和 TCP。大应答、截断重试或显式 +tcp 都会使用 TCP。</p>
+          <p>网络策略和防火墙只放 UDP 53 时，普通查询可能正常，较大响应却失败，这是很典型的间歇性问题。</p>
+        </aside>
+      </section>
+
+      <section class="slide" data-section="可观测性" data-title="日志、指标与抓包形成证据链">
+        <div class="slide-header"><div><p class="eyebrow">Observe before changing Corefile</p><h2>日志、指标与抓包形成证据链</h2><div class="rule"></div></div></div>
+        <div class="capture-matrix dns-observe"><div><span>01</span><h3>Pod resolver</h3><code>cat /etc/resolv.conf</code><p>确认 nameserver、search、ndots 和 dnsPolicy。</p></div><div><span>02</span><h3>DNS query</h3><code>dig +search +stats name</code><p>观察问题名称、Server、status、TTL 与耗时。</p></div><div><span>03</span><h3>CoreDNS logs</h3><code>kubectl logs -n kube-system -l k8s-app=kube-dns</code><p>临时加 log 插件可记录每次查询。</p></div><div><span>04</span><h3>Metrics / capture</h3><code>curl :9153/metrics<br>tcpdump -ni any port 53</code><p>区分没有收到、处理失败、转发超时。</p></div></div>
+        <div class="slide-number">29</div>
+        <aside class="speaker-copy">
+          <p>排查 DNS 先收集证据。Pod resolv.conf 告诉我们客户端会问谁和如何展开名称。dig 输出告诉我们实际问题是什么，status 和 TTL 是多少。</p>
+          <p>CoreDNS logs 和 metrics 说明查询是否到达、由哪个插件处理。tcpdump 可以确认 UDP/TCP、请求重传和上游响应。</p>
+        </aside>
+      </section>
+
+      <section class="slide" data-section="排错" data-title="按查询路径定位 DNS 故障">
+        <div class="slide-header"><div><p class="eyebrow">Find the first broken stage</p><h2>按查询路径定位 DNS 故障</h2><div class="rule"></div></div></div>
+        <table class="trouble-table dns-trouble"><thead><tr><th>现象</th><th>优先检查</th><th>常见方向</th><th>命令</th></tr></thead><tbody><tr><td>Pod 没有 10.96.0.10</td><td>dnsPolicy 与 kubelet cluster-dns</td><td>Default/None、resolv-conf 配置</td><td><code>kubectl get pod -o yaml</code></td></tr><tr><td>直接查 VIP 超时</td><td>kube-dns Service 与 Endpoint</td><td>kube-proxy、CoreDNS NotReady、NetworkPolicy</td><td><code>kubectl get svc,ep -n kube-system</code></td></tr><tr><td>集群名失败，外部名正常</td><td>kubernetes plugin</td><td>Corefile、API watch、Service/namespace 拼写</td><td><code>dig @10.96.0.10 nginx-service.default.svc.cluster.local.</code></td></tr><tr><td>集群名正常，外部名失败</td><td>forward 与上游</td><td>Node resolver、环路、上游不可达</td><td><code>cat /etc/resolv.conf</code></td></tr><tr><td>短名称慢</td><td>ndots 与 search</td><td>多次 NXDOMAIN、外部名未带结尾点</td><td><code>dig +search +stats nginx-service</code> / tcpdump</td></tr></tbody></table>
+        <div class="flat-block yellow" style="margin-top:24px;"><p class="body"><strong>排错顺序：</strong>Pod 配置、kube-dns VIP、CoreDNS Endpoint、Corefile 插件、上游 resolver。</p></div>
+        <div class="slide-number">30</div>
+        <aside class="speaker-copy">
+          <p>排错沿查询路径找第一个断点。Pod 没指向 10.96.0.10，问题还没到 CoreDNS。直接向 VIP 查询超时，先看 Service 和 Endpoint。</p>
+          <p>集群名失败但外部名成功，重点看 kubernetes 插件和对象名称。反过来则重点看 forward、Node resolver 和转发环路。</p>
+        </aside>
+      </section>
+
+      <section class="slide" data-section="现场演示" data-title="十五分钟 DNS 演示顺序">
+        <div class="slide-header"><div><p class="eyebrow">From infrastructure to namespace behavior</p><h2>十五分钟 DNS 演示顺序</h2><div class="rule"></div></div></div>
+        <div class="demo-grid"><div><div class="demo-list compact-demo"><div class="demo-item"><div><code>containerlab inspect -t k8s-dns.clab.yaml</code><p>确认三节点 running。</p></div></div><div class="demo-item"><div><code>kubectl get pods -A -o wide</code><p>确认 CoreDNS 与测试 Pod。</p></div></div><div class="demo-item"><div><code>kubectl get svc,endpoints -n kube-system kube-dns</code><p>对齐 VIP 与 CoreDNS Endpoint。</p></div></div><div class="demo-item"><div><code>kubectl get cm -n kube-system coredns -o yaml</code><p>解释 Corefile。</p></div></div><div class="demo-item"><div><code>cat /etc/resolv.conf</code><p>对比 Node 与 Pod。</p></div></div></div></div><div><div class="demo-list" style="counter-reset:demo 5;"><div class="demo-item"><div><code>dig nginx-service</code><p>展示 dig 默认不使用 search。</p></div></div><div class="demo-item"><div><code>dig +search nginx-service</code><p>default namespace 成功。</p></div></div><div class="demo-item"><div><code>kubectl exec -n foo &lt;multitool-3&gt; -- dig +search nginx-service</code><p>从 foo 展示短名称失败。</p></div></div><div class="demo-item"><div><code>kubectl exec -n foo &lt;multitool-3&gt; -- dig +search nginx-service.default</code><p>带 namespace 成功。</p></div></div><div class="demo-item"><div><code>dig +tcp www.example.com.</code><p>演示外部转发与 TCP。</p></div></div></div></div></div>
+        <div class="flat-block red" style="margin-top:20px;"><p class="small"><strong>清理：</strong>运行 <code>./destroy.sh</code> 并输入 yes，移除本实验 topology、Kind cluster 与 kubeconfig。</p></div>
+        <div class="slide-number">31</div>
+        <aside class="speaker-copy">
+          <p>演示顺序先验证基础设施和 DNS Service，再读 Corefile，随后对比 Node 与 Pod resolv.conf。最后用 default 和 foo 两个 namespace 讲清 search 行为。</p>
+          <p>命令里的 Pod 后缀和 IP 都要替换成现场值。演示完成后运行 destroy.sh 清理本实验。</p>
+        </aside>
+      </section>
+
+      <section class="slide" data-section="总结与来源" data-title="Kubernetes DNS 的完整证据链">
+        <div class="slide-header"><div><p class="eyebrow">Summary and sources</p><h2>Kubernetes DNS 的完整证据链</h2><div class="rule"></div></div></div>
+        <div class="summary-stack dns-summary"><article class="summary-block"><span class="n">01</span><h3>Pod resolver</h3><p>kubelet 根据 dnsPolicy 注入 nameserver、search 与 ndots。</p></article><article class="summary-block"><span class="n">02</span><h3>CoreDNS</h3><p>kubernetes 插件权威回答 cluster.local，cache 加速，forward 处理外部域名。</p></article><article class="summary-block"><span class="n">03</span><h3>Namespace 语义</h3><p>短名称局限当前 namespace，跨 namespace 要带 namespace 或完整 FQDN。</p></article></div>
+        <div class="source-list compact-sources"><article class="source-item"><strong>Lesson 05</strong><a href="https://k8snetworking.com/lessons/05-k8s-dns">k8snetworking.com/lessons/05-k8s-dns</a></article><article class="source-item"><strong>课程仓库</strong><a href="https://github.com/aadhilam/k8-networking-calico-containerlab/tree/master/containerlab/05-k8s-dns">github.com/aadhilam/.../05-k8s-dns</a></article><article class="source-item"><strong>Kubernetes DNS</strong><a href="https://kubernetes.io/docs/concepts/services-networking/dns-pod-service/">kubernetes.io/docs/.../dns-pod-service</a></article><article class="source-item"><strong>CoreDNS Plugins</strong><a href="https://coredns.io/plugins/">coredns.io/plugins</a></article></div>
+        <div class="slide-number">32</div>
+        <aside class="speaker-copy">
+          <p>最后记住三层。kubelet 决定 Pod resolver 配置，CoreDNS 插件链决定怎样回答或转发，namespace 决定短名称的上下文。</p>
+          <p>排查时先看实际问题名称，再看它发给哪个 nameserver，最后判断 CoreDNS 走了 kubernetes、cache 还是 forward。不要只凭“能不能 ping 域名”猜原因。</p>
+          <p>课程中的 Pod 名称、IP、Service VIP 与环境 search suffix 都是示例，现场以当前集群输出为准。</p>
+        </aside>
+      </section>
+    </div>
+
+    <div class="progress-track" aria-hidden="true"><div id="progress-fill"></div></div>
+    <nav class="controls" aria-label="演示控制"><button class="tool-btn" id="prev" type="button" title="上一页" aria-label="上一页">‹</button><button class="tool-btn" id="next" type="button" title="下一页" aria-label="下一页">›</button><button class="tool-btn" id="notes-toggle" type="button" title="讲稿" aria-label="显示或隐藏讲稿" aria-pressed="false">N</button><button class="tool-btn" id="overview-toggle" type="button" title="总览" aria-label="显示或隐藏总览" aria-pressed="false">▦</button><button class="tool-btn" id="fullscreen" type="button" title="全屏" aria-label="切换全屏">⛶</button></nav>
+    <button class="notes-backdrop" id="notes-backdrop" type="button" aria-label="关闭讲稿" tabindex="-1"></button>
+    <aside class="notes-panel" id="notes-panel" aria-live="polite" aria-hidden="true"><div class="notes-header"><h2 id="notes-title">讲稿</h2><button class="notes-close" id="notes-close" type="button" title="关闭讲稿" aria-label="关闭讲稿">×</button></div><div id="notes-body"></div></aside>
+    <aside class="overview" id="overview" aria-label="幻灯片总览"></aside>
+  </main>
+  <script src="app.js?v=1"></script>
+</body>
+</html>
