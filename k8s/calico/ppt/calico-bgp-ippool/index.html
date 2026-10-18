@@ -1,0 +1,421 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Calico Advertise IPPool Using BGP</title>
+  <link rel="stylesheet" href="styles.css?v=1">
+</head>
+<body>
+  <main class="deck-shell">
+    <div id="deck-canvas">
+      <section class="slide cover-slide active" data-section="开场" data-title="Calico Advertise IPPool Using BGP">
+        <div class="cover-grid">
+          <div class="cover-copy">
+            <p class="eyebrow">Lesson 10 · Calico BGP · Native Pod Routing</p>
+            <h1>Advertise IPPool<br>Using <span class="yellow-mark">BGP</span></h1>
+            <p class="lead">让节点把自己的 Pod <code>/26</code> 路由通告给 ToR，再由路由反射器把远端路由送回各节点，实现跨 VLAN 的原生 IP 转发。</p>
+            <div class="cover-meta"><span>AS 65010</span><span>VLAN 10 / VLAN 20</span><span>No overlay · No SNAT</span></div>
+          </div>
+          <div class="bgp-cover" aria-label="四个 Kubernetes 节点向 cEOS ToR 通告 Pod block">
+            <div class="cover-tor"><strong>cEOS ToR</strong><span>Route Reflector · AS 65010</span></div>
+            <div class="cover-bgp-nodes"><div><strong>CP</strong><span>69.0/26</span></div><div><strong>W1</strong><span>42.192/26</span></div><div><strong>W2</strong><span>88.192/26</span></div><div><strong>W3</strong><span>46.128/26</span></div></div>
+            <div class="cover-bgp-bus"><span class="cover-bgp-stem"></span><span class="cover-bgp-line"></span><i class="cover-drop d1"></i><i class="cover-drop d2"></i><i class="cover-drop d3"></i><i class="cover-drop d4"></i><b class="bgp-route-packet p1">/26</b><b class="bgp-route-packet p2">/26</b><b class="bgp-route-packet p3">/26</b><b class="bgp-route-packet p4">/26</b></div>
+            <div class="cover-external"><strong>External network</strong><span>Pod IP directly routable</span></div>
+          </div>
+        </div>
+        <aside class="speaker-copy">
+          <p>大家好，这一节我们把 Calico 的 Pod 网络接入真实的三层路由。每个节点把自己的 IPAM <code>/26</code> block 通过 BGP 通告给 cEOS ToR，ToR 再把其他节点的路由反射回来。</p>
+          <p>和 Overlay 课程相比，这里没有 VXLAN 或 IP-in-IP，也关闭了 Pod 出站 SNAT。数据包携带真实 Pod IP，在节点与 ToR 之间原生路由。</p>
+          <p class="note-source">课程：<a href="https://k8snetworking.com/lessons/10-calico-bgp-ippool">Lesson 10 Advertise IPPool via BGP</a></p>
+        </aside>
+      </section>
+
+      <section class="slide" data-section="概念" data-title="BGP 让 underlay 学会 Pod block">
+        <div class="slide-header"><div><p class="eyebrow">Make workload routes first-class</p><h2>BGP 让 underlay 学会 Pod block</h2><div class="rule"></div></div></div>
+        <div class="grid-2 bgp-value"><div class="flat-block red"><h3>没有 Pod 路由</h3><p class="route-question">192.168.46.129 ?</p><p class="body">ToR 不知道目标 Pod 在 worker3 后面，外部网络也没有可靠回程。</p></div><div class="flat-block green"><h3>通过 BGP 学习</h3><p class="route-question">192.168.46.128/26<br>via 10.10.20.20</p><p class="body">ToR 把目标 block 关联到对应 Node IP，Pod 地址可以原生转发。</p></div></div>
+        <div class="flat-block yellow" style="margin-top:28px;"><p class="body">BGP 分发路由，不负责创建 Pod IP，也不会自动绕过 NetworkPolicy 或主机防火墙。</p></div>
+        <div class="slide-number">02</div>
+        <aside class="speaker-copy"><p>Calico IPAM 先把地址分给 Pod，BGP 再把这些地址块的可达性告诉网络。两者是前后相连的两个阶段。</p><p>ToR 学到 <code>/26</code> 路由后，不需要认识每个 Pod 的 /32。Block 聚合减少了外部路由表的规模。</p></aside>
+      </section>
+
+      <section class="slide" data-section="概念" data-title="一次路由通告经过四个阶段">
+        <div class="slide-header"><div><p class="eyebrow">From IPAM to FIB</p><h2>一次路由通告经过四个阶段</h2><div class="rule"></div></div><button class="action-btn" id="replay-advertise" type="button">↻ 重放通告</button></div>
+        <div class="advertise-flow" id="advertise-animation"><div><strong>IPAM Block</strong><span>192.168.42.192/26</span></div><span class="advertise-link"><b>route</b></span><div><strong>Node BIRD</strong><span>originates prefix</span></div><span class="advertise-link"><b>iBGP</b></span><div><strong>cEOS ToR</strong><span>route reflector</span></div><span class="advertise-link"><b>reflect</b></span><div><strong>Remote Node</strong><span>proto bird / FIB</span></div></div>
+        <div class="flat-block cyan" style="margin-top:28px;"><p class="body">ToR 同时是外部路由器与 iBGP route reflector。它既保存各节点 Pod block，也把这些前缀反射给其他节点。</p></div>
+        <div class="slide-number">03</div>
+        <aside class="speaker-copy"><p>一条 <code>/26</code> 路由从 IPAM block 开始。Calico BGP 组件在节点上发布前缀，ToR 接收后放入 BGP/RIB，再反射给其他客户端。</p><p>远端节点收到路由后，由 BIRD/Felix 把可用路径写进内核 FIB，最终在 <code>ip route</code> 中看到 <code>proto bird</code>。</p></aside>
+      </section>
+
+      <section class="slide" data-section="实验环境" data-title="Lesson 10 仓库文件">
+        <div class="slide-header"><div><p class="eyebrow">containerlab/10-calico-bgp-ippool</p><h2>Lesson 10 仓库文件</h2><div class="rule"></div></div></div>
+        <table class="course-table bgp-files"><thead><tr><th>目录</th><th>关键文件</th><th>用途</th></tr></thead><tbody><tr><td>ContainerLab</td><td><code>topology.clab.yaml</code></td><td>四节点跨 VLAN 10/20，eth1 MTU 9000</td></tr><tr><td>Kind</td><td><code>k01-no-cni.yaml</code></td><td>Node IP 与 vlan 标签</td></tr><tr><td>Calico</td><td><code>custom-resources.yaml</code></td><td>无封装、无 NAT、允许 BGP export</td></tr><tr><td>BGP</td><td><code>bgpconfiguration-lb.yaml</code>、<code>bgppeer-vlan-*.yaml</code></td><td>AS、RR peer 与 prefixAdvertisements</td></tr><tr><td>cEOS</td><td><code>ceos01-startup-config.config</code></td><td>SVI、RR client、next-hop-self</td></tr><tr><td>Tools</td><td><code>multitool-*.yaml</code>、<code>nginx-deployment.yaml</code></td><td>产生 Pod 与连通性测试</td></tr></tbody></table>
+        <div class="slide-number">04</div>
+        <aside class="speaker-copy"><p>课程目录继承了 BGP LB 拓扑，但增加了 worker3 与 VLAN 20，并将 Workload IPPool 改成原生 BGP 路由。</p><p>部署脚本仍会创建 LoadBalancer 池和 nginx LoadBalancer Service。本节重点是 Workload <code>/26</code>，需要把两类地址通告区分开。</p></aside>
+      </section>
+
+      <section class="slide" data-section="实验环境" data-title="四个节点跨两个 underlay VLAN">
+        <div class="slide-header"><div><p class="eyebrow">Node IP and labels</p><h2>四个节点跨两个 underlay VLAN</h2><div class="rule"></div></div></div>
+        <div class="bgp-lab-topology"><div class="bgp-vlan v10"><h3>VLAN 10 · 10.10.10.0/24</h3><div><span>control-plane</span><strong>10.10.10.10</strong><small>vlan=10</small></div><div><span>worker</span><strong>10.10.10.11</strong><small>vlan=10</small></div><div><span>worker2</span><strong>10.10.10.12</strong><small>vlan=10</small></div></div><div class="bgp-tor"><strong>cEOS ToR</strong><span>10.10.10.1</span><span>10.10.20.1</span></div><div class="bgp-vlan v20"><h3>VLAN 20 · 10.10.20.0/24</h3><div><span>worker3</span><strong>10.10.20.20</strong><small>vlan=20</small></div></div></div>
+        <div class="flat-block yellow" style="margin-top:24px;"><p class="body">BGPPeer 的 <code>nodeSelector</code> 使用 <code>vlan=10</code> 与 <code>vlan=20</code> 标签，为不同子网选择各自可达的 SVI peer IP。</p></div>
+        <div class="slide-number">05</div>
+        <aside class="speaker-copy"><p>前三个节点通过 10.10.10.1 建立会话，worker3 通过 10.10.20.1 建立会话。两个地址属于同一台 cEOS 的不同 SVI。</p><p>节点标签不是装饰。BGPPeer 的 nodeSelector 依赖这些标签决定哪些节点尝试连接哪个 peerIP。</p></aside>
+      </section>
+
+      <section class="slide image-slide" data-section="实验环境" data-title="课程拓扑中的双 VLAN 路由环境">
+        <div class="slide-header"><div><p class="eyebrow">Course topology reference</p><h2>课程拓扑中的双 VLAN 路由环境</h2><div class="rule"></div></div></div>
+        <img class="course-image bgp-course-topology" src="assets/overlay-topology.png" alt="四节点双 VLAN Calico 实验拓扑">
+        <p class="image-caption">本节沿用双子网物理拓扑，但 Workload IPPool 使用原生 BGP 路由，不再通过 VXLAN 穿越 VLAN。</p>
+        <div class="slide-number">06</div>
+        <aside class="speaker-copy"><p>这张图用于确认 underlay：VLAN 10、VLAN 20 和中间路由器。和 Lesson 06 的差异发生在数据面选择。</p><p>Lesson 06 让跨子网 Pod 流量进入 VXLAN。本节让交换机学习 Pod block，并直接转发原始 Pod 包。</p><p class="note-source">课程仓库基础拓扑图：<a href="https://raw.githubusercontent.com/aadhilam/k8-networking-calico-containerlab/master/images/overlay-topology.png">overlay-topology.png</a></p></aside>
+      </section>
+
+      <section class="slide" data-section="实验环境" data-title="Kind 同时固定 Node IP 与 vlan 标签">
+        <div class="slide-header"><div><p class="eyebrow">k01-no-cni.yaml</p><h2>Kind 同时固定 Node IP 与 vlan 标签</h2><div class="rule"></div></div></div>
+        <div class="grid-2"><pre class="terminal tall"><code>nodeRegistration:
+  kubeletExtraArgs:
+    node-ip: "10.10.10.11"
+    node-labels: "vlan=10"</code></pre><pre class="terminal tall"><code>nodeRegistration:
+  kubeletExtraArgs:
+    node-ip: "10.10.20.20"
+    node-labels: "vlan=20"</code></pre></div>
+        <div class="grid-2" style="margin-top:24px;gap:24px;"><div class="flat-block cyan"><h3>Node IP</h3><p class="body">BGP session source与路由下一跳。</p></div><div class="flat-block orange"><h3>Node label</h3><p class="body">BGPPeer selector 选择对应 VLAN 的节点。</p></div></div>
+        <div class="slide-number">07</div>
+        <aside class="speaker-copy"><p>kubelet 注册的 Node IP 与 Calico 自动检测范围都指向 10.10.0.0/16，避免使用 Docker 管理网地址建 BGP。</p><p>control-plane、worker、worker2 标记 vlan=10，worker3 标记 vlan=20。部署后用 <code>kubectl get nodes --show-labels</code> 可以核对。</p></aside>
+      </section>
+
+      <section class="slide" data-section="实验环境" data-title="Underlay 先提供两个节点子网的互通">
+        <div class="slide-header"><div><p class="eyebrow">Static node-subnet routes</p><h2>Underlay 先提供两个节点子网的互通</h2><div class="rule"></div></div></div>
+        <pre class="terminal wide-terminal"><code># VLAN 10 nodes
+ip addr add dev eth1 10.10.10.11/24
+ip route add 10.10.20.0/24 via 10.10.10.1 src 10.10.10.11
+
+# worker3 in VLAN 20
+ip addr add dev eth1 10.10.20.20/24
+ip route add 10.10.10.0/24 via 10.10.20.1 src 10.10.20.20</code></pre>
+        <div class="flat-block red" style="margin-top:28px;"><p class="body">BGP 依赖 TCP 179 的 Node-to-ToR 可达性。节点子网都不通时，Pod block 路由不可能正常交换。</p></div>
+        <div class="slide-number">08</div>
+        <aside class="speaker-copy"><p>先建立 underlay，再建立 BGP。拓扑文件给 VLAN 10 节点添加去 10.10.20.0/24 的静态路由，worker3 添加反向路由。</p><p>这些路由只解决 Node IP 与 BGP peer 可达，不包含任何 192.168 Pod block。</p></aside>
+      </section>
+
+      <section class="slide" data-section="实验环境" data-title="MTU 为原生大包路径预留空间">
+        <div class="slide-header"><div><p class="eyebrow">Jumbo underlay in the lab</p><h2>MTU 为原生大包路径预留空间</h2><div class="rule"></div></div></div>
+        <div class="mtu-compare"><div><strong>Kind eth1</strong><span>MTU 9000</span></div><span class="mtu-link"></span><div><strong>cEOS Ethernet</strong><span>MTU 9124</span></div><span class="mtu-link"></span><div><strong>cEOS SVI</strong><span>MTU 9124</span></div></div>
+        <div class="grid-2" style="margin-top:34px;gap:24px;"><div class="flat-block green"><h3>无封装</h3><p class="body">跨 VLAN 不增加 VXLAN/IP-in-IP 头。</p></div><div class="flat-block yellow"><h3>仍需端到端一致</h3><p class="body">实际可用 MTU 取决于路径最小值和 Pod veth 配置。</p></div></div>
+        <div class="slide-number">09</div>
+        <aside class="speaker-copy"><p>课程把 Node eth1 设为 9000，cEOS 端口和 SVI 设为 9124。这里没有 Overlay 头部，但大包仍要求整条路径 MTU 对齐。</p><p>演示中如果小包成功、大包失败，继续用 <code>ping -M do -s SIZE</code> 检查路径 MTU，不要把所有问题都归到 BGP。</p></aside>
+      </section>
+
+      <section class="slide" data-section="IPPool" data-title="Workload IPPool 开启原生 BGP 路由">
+        <div class="slide-header"><div><p class="eyebrow">custom-resources.yaml</p><h2>Workload IPPool 开启原生 BGP 路由</h2><div class="rule"></div></div></div>
+        <div class="grid-2"><pre class="terminal tall"><code>- name: default-ipv4-ippool
+  blockSize: 26
+  cidr: 192.168.0.0/17
+  encapsulation: None
+  natOutgoing: Disabled
+  nodeSelector: all()
+  disableBGPExport: false</code></pre><div class="stack-list"><div class="flat-block green"><h3>encapsulation: None</h3><p class="body">Pod 包以原始 IP 在 underlay 上路由。</p></div><div class="flat-block orange"><h3>natOutgoing: Disabled</h3><p class="body">出站保留 Pod 源地址，外部必须有回程路由。</p></div><div class="flat-block cyan"><h3>disableBGPExport: false</h3><p class="body">允许该 Workload 池路由经 BGP 导出。</p></div></div></div>
+        <div class="slide-number">10</div>
+        <aside class="speaker-copy"><p>这三个字段必须一起理解。无封装让 Pod IP 出现在物理网络，无 NAT 保留源 Pod IP，BGP export 提供返回路径。</p><p>如果关闭 NAT 却没有把 Pod 路由告诉外部，出站请求可能离开集群，但返回包找不到 Pod block。</p></aside>
+      </section>
+
+      <section class="slide" data-section="IPPool" data-title="Overlay、NAT 与 BGP Export 各管一层">
+        <div class="slide-header"><div><p class="eyebrow">Three independent decisions</p><h2>Overlay、NAT 与 BGP Export 各管一层</h2><div class="rule"></div></div></div>
+        <table class="course-table responsibility-table"><thead><tr><th>设置</th><th>本实验值</th><th>决定什么</th><th>看什么证据</th></tr></thead><tbody><tr><td>encapsulation</td><td>None</td><td>跨节点包是否加隧道外层</td><td>eth1 抓包没有 UDP 4789 / IPIP</td></tr><tr><td>natOutgoing</td><td>Disabled</td><td>离开 Calico 池时是否 SNAT</td><td>外部看到真实 Pod 源 IP</td></tr><tr><td>disableBGPExport</td><td>false</td><td>IPPool 路由能否对 BGP peer 导出</td><td>ToR 学到 Pod <code>/26</code></td></tr></tbody></table>
+        <div class="flat-block yellow" style="margin-top:28px;"><p class="body">三项设置互不替代。BGP 可达不代表关闭 NAT，关闭 NAT 也不会自动建立 BGP 会话。</p></div>
+        <div class="slide-number">11</div>
+        <aside class="speaker-copy"><p>这页适合纠正常见混淆。encapsulation 是数据包格式，natOutgoing 是源地址处理，disableBGPExport 是路由控制面。</p><p>排错时分别找证据：抓包看封装，连接跟踪或外部抓包看 NAT，ToR BGP/route 表看 export。</p></aside>
+      </section>
+
+      <section class="slide" data-section="IPAM" data-title="每个节点获得一个 /26 Workload block">
+        <div class="slide-header"><div><p class="eyebrow">Block affinities become route units</p><h2>每个节点获得一个 /26 Workload block</h2><div class="rule"></div></div></div>
+        <table class="course-table block-route-table"><thead><tr><th>节点</th><th>IPAM block</th><th>ToR 下一跳</th></tr></thead><tbody><tr><td>k01-control-plane</td><td>192.168.69.0/26</td><td>10.10.10.10 · Vlan10</td></tr><tr><td>k01-worker</td><td>192.168.42.192/26</td><td>10.10.10.11 · Vlan10</td></tr><tr><td>k01-worker2</td><td>192.168.88.192/26</td><td>10.10.10.12 · Vlan10</td></tr><tr><td>k01-worker3</td><td>192.168.46.128/26</td><td>10.10.20.20 · Vlan20</td></tr></tbody></table>
+        <pre class="terminal compact"><code>kubectl get blockaffinities</code></pre>
+        <div class="slide-number">12</div>
+        <aside class="speaker-copy"><p>Block Affinity 给出节点和 Pod CIDR block 的对应关系，ToR 路由表应该出现完全相同的四个 <code>/26</code>。</p><p>这就是验证链路：先从 Kubernetes/Calico 读取期望值，再去网络设备核对实际学到的前缀和下一跳。</p></aside>
+      </section>
+
+      <section class="slide" data-section="BGP" data-title="BGPConfiguration 定义集群 AS 与通告属性">
+        <div class="slide-header"><div><p class="eyebrow">bgpconfiguration-lb.yaml</p><h2>BGPConfiguration 定义集群 AS 与通告属性</h2><div class="rule"></div></div></div>
+        <pre class="terminal wide-terminal"><code>spec:
+  asNumber: 65010
+  nodeToNodeMeshEnabled: false
+  serviceLoadBalancerIPs:
+  - cidr: 172.16.0.240/28
+  prefixAdvertisements:
+  - cidr: 192.168.0.0/17
+    communities:
+    - 65010:100</code></pre>
+        <div class="bgp-config-row"><div><strong>AS 65010</strong><span>Calico 与 ToR 共用 iBGP AS</span></div><div><strong>Mesh false</strong><span>节点不建立全互联</span></div><div><strong>Community</strong><span>给匹配前缀附加 65010:100 属性</span></div></div>
+        <div class="slide-number">13</div>
+        <aside class="speaker-copy"><p>全局 BGPConfiguration 把集群 AS 设为 65010，并关闭节点 full mesh。替代拓扑是所有节点直接连接 ToR route reflector。</p><p>prefixAdvertisements 提供每前缀通告属性，例如 community。课程实际路由表仍以每节点 <code>/26</code> 为主证据，community 主要用于上游策略。</p><p class="note-source">Calico 官方：<a href="https://docs.tigera.io/calico/latest/reference/resources/bgpconfig">BGPConfiguration</a></p></aside>
+      </section>
+
+      <section class="slide" data-section="BGP" data-title="65010:100 是路由标签而不是下一跳">
+        <div class="slide-header"><div><p class="eyebrow">BGP community semantics</p><h2>65010:100 是路由标签而不是下一跳</h2><div class="rule"></div></div></div>
+        <div class="community-anatomy"><div><strong>65010</strong><span>管理员约定的高位值，通常与 AS 关联</span></div><i>:</i><div><strong>100</strong><span>本地策略标识</span></div></div>
+        <div class="grid-2" style="margin-top:36px;gap:24px;"><div class="flat-block green"><h3>可以做什么</h3><p class="body">上游按 community 做过滤、偏好、重分发或流量工程。</p></div><div class="flat-block red"><h3>不能替代什么</h3><p class="body">community 不提供可达性，仍需要合法 next-hop 和 BGP 会话。</p></div></div>
+        <div class="slide-number">14</div>
+        <aside class="speaker-copy"><p>BGP community 是附着在路由上的标签。65010:100 的具体业务含义由网络管理员定义。</p><p>它不会告诉路由器包该发给谁。真正转发仍依赖 NLRI、next-hop、路径属性和路由选择。</p></aside>
+      </section>
+
+      <section class="slide" data-section="BGP" data-title="两个 BGPPeer 覆盖不同 VLAN 节点">
+        <div class="slide-header"><div><p class="eyebrow">bgppeer-vlan-10 / vlan-20</p><h2>两个 BGPPeer 覆盖不同 VLAN 节点</h2><div class="rule"></div></div></div>
+        <div class="grid-2 peer-configs"><pre class="terminal tall"><code>kind: BGPPeer
+metadata:
+  name: bgppeer-vlan-10
+spec:
+  peerIP: 10.10.10.1
+  asNumber: 65010
+  nodeSelector: vlan == '10'</code></pre><pre class="terminal tall"><code>kind: BGPPeer
+metadata:
+  name: bgppeer-vlan-20
+spec:
+  peerIP: 10.10.20.1
+  asNumber: 65010
+  nodeSelector: vlan == '20'</code></pre></div>
+        <div class="flat-block yellow" style="margin-top:24px;"><p class="body">两个 peerIP 是同一台 cEOS 的两个 SVI。节点应连接本地 VLAN 网关，避免使用跨 VLAN 地址建立邻居。</p></div>
+        <div class="slide-number">15</div>
+        <aside class="speaker-copy"><p>VLAN 10 的三个节点与 10.10.10.1 建会话，worker3 与 10.10.20.1 建会话。两组 peer 使用相同 AS，所以都是 iBGP。</p><p>如果节点标签缺失或拼写不一致，对应 BGPPeer 不会选中节点，BGP 会话自然不会出现。</p></aside>
+      </section>
+
+      <section class="slide" data-section="BGP" data-title="iBGP 路由反射器替代节点全互联">
+        <div class="slide-header"><div><p class="eyebrow">One hub instead of a full mesh</p><h2>iBGP 路由反射器替代节点全互联</h2><div class="rule"></div></div></div>
+        <div class="mesh-compare">
+          <article>
+            <h3>Node-to-node full mesh</h3>
+            <div class="session-matrix" aria-label="四个节点两两建立六条 BGP 会话">
+              <span></span><strong>CP</strong><strong>W1</strong><strong>W2</strong><strong>W3</strong>
+              <strong>CP</strong><i>-</i><i class="peer">●</i><i class="peer">●</i><i class="peer">●</i>
+              <strong>W1</strong><i class="peer">●</i><i>-</i><i class="peer">●</i><i class="peer">●</i>
+              <strong>W2</strong><i class="peer">●</i><i class="peer">●</i><i>-</i><i class="peer">●</i>
+              <strong>W3</strong><i class="peer">●</i><i class="peer">●</i><i class="peer">●</i><i>-</i>
+            </div>
+            <div class="session-total"><strong>6</strong><span>条节点间会话</span></div>
+            <p>四个节点两两互联，会话数为 n(n-1)/2。</p>
+          </article>
+          <article>
+            <h3>ToR route reflector</h3>
+            <div class="rr-session-map" aria-label="四个节点分别连接一个 ToR 路由反射器">
+              <strong class="rr-hub">RR</strong>
+              <div class="rr-track-grid"><span></span><span></span><span></span><span></span></div>
+              <div class="rr-clients"><i>CP</i><i>W1</i><i>W2</i><i>W3</i></div>
+            </div>
+            <div class="session-total orange"><strong>4</strong><span>条 Node-to-ToR 会话</span></div>
+            <p>每个节点只连接 ToR，由 ToR 反射客户端路由。</p>
+          </article>
+        </div>
+        <div class="slide-number">16</div>
+        <aside class="speaker-copy"><p>默认 Calico BGP mesh 让所有节点互相 peering。课程关闭 mesh，并把外部 cEOS 作为 route reflector。</p><p>这样既让物理网络直接掌握 Pod 路由，也减少节点之间的 BGP 会话数量。切换拓扑时必须先准备替代 peer，避免短时路由中断。</p><p class="note-source">Calico 官方：<a href="https://docs.tigera.io/calico/latest/networking/configuring/bgp">Configure BGP peering</a></p></aside>
+      </section>
+
+      <section class="slide" data-section="ToR" data-title="cEOS 动态接收两个 VLAN 的 BGP 邻居">
+        <div class="slide-header"><div><p class="eyebrow">Arista listen ranges</p><h2>cEOS 动态接收两个 VLAN 的 BGP 邻居</h2><div class="rule"></div></div></div>
+        <pre class="terminal wide-terminal"><code>router bgp 65010
+  router-id 10.10.10.1
+  neighbor CALICO-K8S peer group
+  bgp listen range 10.10.10.0/24 peer-group CALICO-K8S remote-as 65010
+  bgp listen range 10.10.20.0/24 peer-group CALICO-K8S remote-as 65010
+  neighbor CALICO-K8S next-hop-self
+  neighbor CALICO-K8S route-reflector-client
+  address-family ipv4
+    neighbor CALICO-K8S activate</code></pre>
+        <div class="flat-block green" style="margin-top:26px;"><p class="body">listen range 允许 cEOS 根据来源地址动态创建邻居，peer group 统一应用 RR、next-hop 与 address-family 配置。</p></div>
+        <div class="slide-number">17</div>
+        <aside class="speaker-copy"><p>cEOS 不需要为四个节点逐个写 neighbor。两个 listen range 覆盖 VLAN 10 和 VLAN 20，匹配的连接进入 CALICO-K8S peer group。</p><p>route-reflector-client 允许 ToR 把一个 iBGP client 的路由反射给另一个 client。next-hop-self 则让远端节点把 ToR SVI 作为可达下一跳。</p></aside>
+      </section>
+
+      <section class="slide" data-section="ToR" data-title="next-hop-self 让反射路由指向本地 SVI">
+        <div class="slide-header"><div><p class="eyebrow">Reachable next hop across VLANs</p><h2>next-hop-self 让反射路由指向本地 SVI</h2><div class="rule"></div></div><button class="action-btn" id="replay-reflect" type="button">↻ 重放反射</button></div>
+        <div class="reflect-flow" id="reflect-animation"><div><strong>worker3</strong><span>advertise 46.128/26</span></div><span class="reflect-link"><b>NH 10.10.20.20</b></span><div><strong>cEOS RR</strong><span>reflect + next-hop-self</span></div><span class="reflect-link"><b>NH 10.10.10.1</b></span><div><strong>worker</strong><span>route via local SVI</span></div></div>
+        <div class="flat-block yellow" style="margin-top:28px;"><p class="body">worker 不需要直接解析 VLAN 20 的 worker3。它只需把远端 Pod 包交给本地网关 10.10.10.1。</p></div>
+        <div class="slide-number">18</div>
+        <aside class="speaker-copy"><p>worker3 原始通告的下一跳是 10.10.20.20。ToR 反射给 VLAN 10 节点时使用 next-hop-self，把下一跳改成 10.10.10.1。</p><p>因此 worker 路由表会显示远端 <code>/26</code> via 10.10.10.1 dev eth1，下一跳对本地节点是直接可达的。</p></aside>
+      </section>
+
+      <section class="slide" data-section="验证" data-title="ToR 上四条 BGP 会话应处于 Established">
+        <div class="slide-header"><div><p class="eyebrow">show ip bgp summary</p><h2>ToR 上四条 BGP 会话应处于 Established</h2><div class="rule"></div></div></div>
+        <table class="course-table session-table"><thead><tr><th>Neighbor</th><th>节点</th><th>AS</th><th>状态</th><th>PfxRcd</th></tr></thead><tbody><tr><td>10.10.10.10</td><td>control-plane</td><td>65010</td><td class="established">Estab</td><td>2</td></tr><tr><td>10.10.10.11</td><td>worker</td><td>65010</td><td class="established">Estab</td><td>2</td></tr><tr><td>10.10.10.12</td><td>worker2</td><td>65010</td><td class="established">Estab</td><td>2</td></tr><tr><td>10.10.20.20</td><td>worker3</td><td>65010</td><td class="established">Estab</td><td>2</td></tr></tbody></table>
+        <pre class="terminal compact"><code>docker exec -it clab-calico-bgp-lb-ceos01 Cli
+ceos&gt; enable
+ceos# show ip bgp summary</code></pre>
+        <div class="slide-number">19</div>
+        <aside class="speaker-copy"><p>先看会话，再看路由。State 是 Estab 才表示 BGP 正常交换更新。Idle、Active 或 Connect 都说明会话尚未建立。</p><p>课程示例每个节点收到两个前缀，这里同时包含 Workload 与其他配置通告。精确路由内容要继续看 BGP/route 表。</p></aside>
+      </section>
+
+      <section class="slide" data-section="验证" data-title="ToR 路由表把 /26 映射到四个节点">
+        <div class="slide-header"><div><p class="eyebrow">show ip route</p><h2>ToR 路由表把 /26 映射到四个节点</h2><div class="rule"></div></div></div>
+        <table class="course-table tor-routes"><thead><tr><th>路由</th><th>下一跳</th><th>接口</th><th>来源</th></tr></thead><tbody><tr><td>192.168.69.0/26</td><td>10.10.10.10</td><td>Vlan10</td><td>B I</td></tr><tr><td>192.168.42.192/26</td><td>10.10.10.11</td><td>Vlan10</td><td>B I</td></tr><tr><td>192.168.88.192/26</td><td>10.10.10.12</td><td>Vlan10</td><td>B I</td></tr><tr><td>192.168.46.128/26</td><td>10.10.20.20</td><td>Vlan20</td><td>B I</td></tr></tbody></table>
+        <div class="flat-block cyan" style="margin-top:26px;"><p class="body">四条前缀与 Block Affinity 一一对应。<code>B I</code> 表示 BGP 学习的内部路由，课程示例管理距离为 200。</p></div>
+        <div class="slide-number">20</div>
+        <aside class="speaker-copy"><p>这是最直接的成功证据。每个节点的 block 都出现在 ToR，下一跳等于该 block 所属节点的 Node IP。</p><p>如果会话 Established 但某个 <code>/26</code> 缺失，重点检查该节点的 block affinity、IPPool export 设置和节点 BGP 状态。</p></aside>
+      </section>
+
+      <section class="slide" data-section="验证" data-title="Workload 与 LoadBalancer 通告要分开识别">
+        <div class="slide-header"><div><p class="eyebrow">Two address families of purpose</p><h2>Workload 与 LoadBalancer 通告要分开识别</h2><div class="rule"></div></div></div>
+        <div class="grid-2 advertisement-types"><div class="flat-block cyan"><h3>Workload IPAM block</h3><p class="advertised-prefix">192.168.x.x/26</p><p class="body">下一跳是 block 所属节点，来自 Default Workload IPPool。</p></div><div class="flat-block orange"><h3>LoadBalancer range</h3><p class="advertised-prefix">172.16.0.240/28</p><p class="body">由 serviceLoadBalancerIPs 控制通告，可能从一个或多个节点出现。</p></div></div>
+        <div class="flat-block yellow" style="margin-top:26px;"><p class="body">课程 <code>show ip route</code> 同时出现两类 BGP 前缀。本节验证 Pod 直达时以四条 192.168 <code>/26</code> 为主。</p></div>
+        <div class="slide-number">21</div>
+        <aside class="speaker-copy"><p>LoadBalancer 前缀来自 Lesson 08 的配置，Workload 前缀来自本节的 IPPool export。两类路由都可能通过同一会话传播。</p><p>排错时按 CIDR 和 allowedUses 分类，避免拿 172.16 的 Service VIP 路由证明 Pod block 已经通告。</p></aside>
+      </section>
+
+      <section class="slide" data-section="控制面" data-title="ToR 汇总四个节点的 Pod 路由">
+        <div class="slide-header"><div><p class="eyebrow">Four clients, one routing view</p><h2>ToR 汇总四个节点的 Pod 路由</h2><div class="rule"></div></div><button class="action-btn" id="replay-collector" type="button">↻ 重放汇总</button></div>
+        <div class="collector-animation" id="collector-animation"><div class="collector-tor"><strong>cEOS RIB/FIB</strong><span>four Pod block routes</span></div><div class="collector-bus"><span class="collector-stem"></span><span class="collector-line"></span><i class="collector-drop d1"></i><i class="collector-drop d2"></i><i class="collector-drop d3"></i><i class="collector-drop d4"></i><b class="collector-packet p1">69/26</b><b class="collector-packet p2">42/26</b><b class="collector-packet p3">88/26</b><b class="collector-packet p4">46/26</b></div><div class="collector-nodes"><div>CP</div><div>W1</div><div>W2</div><div>W3</div></div></div>
+        <div class="slide-number">22</div>
+        <aside class="speaker-copy"><p>四个节点各自产生一个路由更新，ToR 汇总为统一的 RIB/FIB。数据面随后可以按目的 Pod IP 做最长前缀匹配。</p><p>动画中每个包沿自己的固定竖线进入公共总线，分别对应四个 block，不表示四条路由被合并成一条 <code>/17</code>。</p></aside>
+      </section>
+
+      <section class="slide" data-section="节点" data-title="CalicoNodeStatus 暴露节点学到的 BGP FIB">
+        <div class="slide-header"><div><p class="eyebrow">Agent, BGP and Routes</p><h2>CalicoNodeStatus 暴露节点学到的 BGP FIB</h2><div class="rule"></div></div></div>
+        <pre class="terminal wide-terminal"><code>apiVersion: projectcalico.org/v3
+kind: CalicoNodeStatus
+metadata:
+  name: k01-control-plane
+spec:
+  classes: [Agent, BGP, Routes]
+  node: k01-control-plane
+  updatePeriodSeconds: 10</code></pre>
+        <div class="flat-block red" style="margin-top:26px;"><p class="body">CalicoNodeStatus 会周期采集状态，适合临时排障。验证完成后应删除，避免在大集群长期增加状态采集负担。</p></div>
+        <div class="slide-number">23</div>
+        <aside class="speaker-copy"><p>CalicoNodeStatus 把节点 Agent、BGP 和路由状态写回 API，方便用 kubectl 和 jq 检查。</p><p>它是诊断资源，不是路由配置。创建它不会修复 BGP，也不会改变数据面。</p></aside>
+      </section>
+
+      <section class="slide" data-section="节点" data-title="control-plane 从 ToR 学到三个远端 block">
+        <div class="slide-header"><div><p class="eyebrow">learnedFrom BGPPeer and type FIB</p><h2>control-plane 从 ToR 学到三个远端 block</h2><div class="rule"></div></div></div>
+        <pre class="terminal wide-terminal"><code>kubectl get caliconodestatus k01-control-plane -o json |
+jq '.status.routes.routesV4[] |
+select(.learnedFrom.sourceType == "BGPPeer" and .type == "FIB")'
+
+destination: 192.168.42.192/26  gateway: 10.10.10.1  interface: eth1
+destination: 192.168.46.128/26  gateway: 10.10.10.1  interface: eth1
+destination: 192.168.88.192/26  gateway: 10.10.10.1  interface: eth1</code></pre>
+        <div class="flat-block green" style="margin-top:24px;"><p class="body">本地 192.168.69.0/26 不需要从 peer 学习，因此过滤结果只出现另外三个节点的 block。</p></div>
+        <div class="slide-number">24</div>
+        <aside class="speaker-copy"><p>三个对象的 learnedFrom.sourceType 都是 BGPPeer，gateway 都是 VLAN 10 SVI 10.10.10.1，type FIB 表示已经进入转发信息库。</p><p>本地 block 由本机路由管理，不会以“从 ToR 学到”的形式出现在这个过滤结果中。</p></aside>
+      </section>
+
+      <section class="slide" data-section="节点" data-title="Linux 路由表中的 proto bird 是最终转发证据">
+        <div class="slide-header"><div><p class="eyebrow">ip route grep bird</p><h2>Linux 路由表中的 proto bird 是最终转发证据</h2><div class="rule"></div></div></div>
+        <pre class="terminal wide-terminal"><code>root@k01-control-plane:/# ip route | grep bird
+
+192.168.42.192/26 via 10.10.10.1 dev eth1 proto bird
+192.168.46.128/26 via 10.10.10.1 dev eth1 proto bird
+blackhole 192.168.69.0/26 proto bird
+192.168.88.192/26 via 10.10.10.1 dev eth1 proto bird</code></pre>
+        <div class="grid-2" style="margin-top:26px;gap:24px;"><div class="flat-block cyan"><h3>远端 block</h3><p class="body">via ToR 本地 SVI，dev eth1。</p></div><div class="flat-block yellow"><h3>本地 block</h3><p class="body">blackhole 聚合路由由更具体 Pod 路由覆盖。</p></div></div>
+        <div class="slide-number">25</div>
+        <aside class="speaker-copy"><p>CalicoNodeStatus 是 API 视图，<code>ip route</code> 是 Linux 内核实际转发视图。两边一致时，控制面到 FIB 的链路成立。</p><p>blackhole 保护本地 block 未分配地址，具体 Pod /32 或 workload 路由比它更长，因此合法 Pod 流量不会被聚合 blackhole 吞掉。</p></aside>
+      </section>
+
+      <section class="slide" data-section="数据面" data-title="跨 VLAN Ping 经过 ToR 原生路由">
+        <div class="slide-header"><div><p class="eyebrow">Life of an ICMP echo request</p><h2>跨 VLAN Ping 经过 ToR 原生路由</h2><div class="rule"></div></div><button class="action-btn" id="replay-ping" type="button">↻ 重放 Ping</button></div>
+        <div class="native-ping" id="native-ping-animation"><div><strong>Pod A</strong><span>192.168.42.193</span></div><span class="native-link"><b>ICMP</b></span><div><strong>worker</strong><span>route via 10.10.10.1</span></div><span class="native-link"><b>Pod IP</b></span><div><strong>cEOS ToR</strong><span>lookup 46.128/26</span></div><span class="native-link"><b>Pod IP</b></span><div><strong>worker3</strong><span>local block</span></div><span class="native-link"><b>deliver</b></span><div><strong>Pod B</strong><span>192.168.46.129</span></div></div>
+        <div class="flat-block green" style="margin-top:26px;"><p class="body">整个路径没有 VXLAN/IP-in-IP，也没有把源 Pod IP 改成 Node IP。ToR 按 <code>/26</code> 直接转发。</p></div>
+        <div class="slide-number">26</div>
+        <aside class="speaker-copy"><p>Pod A 的包进入 worker，worker 根据 BGP 路由交给 10.10.10.1。ToR 查到目标 block 下一跳是 10.10.20.20，再转发给 worker3。</p><p>worker3 的本地具体路由把包交给 Pod B。Echo Reply 按对称的 BGP 路由返回。</p></aside>
+      </section>
+
+      <section class="slide" data-section="数据面" data-title="Echo Reply 按反向 BGP 路由返回">
+        <div class="slide-header"><div><p class="eyebrow">Return path is equally important</p><h2>Echo Reply 按反向 BGP 路由返回</h2><div class="rule"></div></div></div>
+        <div class="return-path"><div class="return-node left"><strong>worker</strong><span>42.192/26 local</span></div><div class="return-tor"><strong>cEOS ToR</strong><span>two VLAN routing tables</span></div><div class="return-node right"><strong>worker3</strong><span>46.128/26 local</span></div><span class="return-wire top">request</span><span class="return-wire bottom">reply</span></div>
+        <div class="grid-2" style="margin-top:26px;gap:24px;"><div class="flat-block orange"><h3>worker3 的远端路由</h3><p class="body">192.168.42.192/26 via 10.10.20.1。</p></div><div class="flat-block cyan"><h3>ToR 的回程路由</h3><p class="body">192.168.42.192/26 via 10.10.10.11。</p></div></div>
+        <div class="slide-number">27</div>
+        <aside class="speaker-copy"><p>请求能到达但回复失败时，要检查反向路径。worker3 从 ToR 学到 worker block，ToR 自己也必须有对应下一跳。</p><p>关闭 SNAT 后，目标看到真实源 Pod IP，这要求整个返回路径都认识源 Pod block。</p></aside>
+      </section>
+
+      <section class="slide" data-section="数据面" data-title="TTL 61 与课程路径一致">
+        <div class="slide-header"><div><p class="eyebrow">Ping output as secondary evidence</p><h2>TTL 61 与课程路径一致</h2><div class="rule"></div></div></div>
+        <pre class="terminal wide-terminal"><code>PING 192.168.46.129 (192.168.46.129) 56(84) bytes of data.
+64 bytes from 192.168.46.129: icmp_seq=1 ttl=61 time=1.97 ms
+64 bytes from 192.168.46.129: icmp_seq=2 ttl=61 time=1.49 ms
+64 bytes from 192.168.46.129: icmp_seq=3 ttl=61 time=1.56 ms</code></pre>
+        <div class="ttl-calc"><div><strong>64</strong><span>常见 Linux 初始 TTL</span></div><i>-</i><div><strong>3</strong><span>课程解释的三次 L3 转发</span></div><i>=</i><div><strong>61</strong><span>接收时 TTL</span></div></div>
+        <div class="slide-number">28</div>
+        <aside class="speaker-copy"><p>课程用 TTL 61 辅助解释 worker、ToR、worker3 与 Pod 交付路径。它是观察证据，不应代替路由表和抓包。</p><p>容器镜像初始 TTL、网络命名空间和实现细节可能不同，现场应结合 traceroute 或 tcpdump 验证实际跳数。</p></aside>
+      </section>
+
+      <section class="slide" data-section="外部访问" data-title="ToR 可以直接 Ping Pod IP">
+        <div class="slide-header"><div><p class="eyebrow">External reachability proof</p><h2>ToR 可以直接 Ping Pod IP</h2><div class="rule"></div></div></div>
+        <div class="grid-2 external-pings"><pre class="terminal tall"><code>ceos&gt; ping 192.168.42.193
+
+80 bytes from 192.168.42.193
+ttl=63 time=0.711 ms
+
+5 packets transmitted
+5 received
+0% packet loss</code></pre><pre class="terminal tall"><code>ceos&gt; ping 192.168.46.129
+
+80 bytes from 192.168.46.129
+ttl=63 time=0.480 ms
+
+5 packets transmitted
+5 received
+0% packet loss</code></pre></div>
+        <div class="flat-block green" style="margin-top:24px;"><p class="body">外部路由器直接使用 Pod IP 作为目的地址，证明 Pod 地址已经成为 underlay 可路由前缀。</p></div>
+        <div class="slide-number">29</div>
+        <aside class="speaker-copy"><p>从 ToR ping 两个 VLAN 后面的 Pod，是外部直达最直观的验证。ToR 根据 <code>/26</code> 路由选择对应 Node IP。</p><p>返回包保留 Pod 源地址，因为 natOutgoing Disabled。ToR 已经掌握该源 block，所以可以完成双向通信。</p></aside>
+      </section>
+
+      <section class="slide" data-section="外部访问" data-title="外部直达依赖完整的双向路由">
+        <div class="slide-header"><div><p class="eyebrow">No NAT means real return-path requirements</p><h2>外部直达依赖完整的双向路由</h2><div class="rule"></div></div></div>
+        <div class="bidirectional-chain"><div><strong>External host</strong><span>route Pod CIDR to ToR</span></div><span></span><div><strong>ToR</strong><span>/26 via Node IP</span></div><span></span><div><strong>Node</strong><span>local Pod route</span></div><span></span><div><strong>Pod</strong><span>real source/destination IP</span></div></div>
+        <div class="grid-2" style="margin-top:30px;gap:24px;"><div class="flat-block red"><h3>缺少上游路由</h3><p class="body">只有 ToR 本机能访问 Pod，更远网络不知道 Pod CIDR 下一跳。</p></div><div class="flat-block yellow"><h3>缺少回程</h3><p class="body">请求到达 Pod，但回复在外部路径丢失。</p></div></div>
+        <div class="slide-number">30</div>
+        <aside class="speaker-copy"><p>课程验证范围是 ToR 本机到 Pod。若要让更远的外部网络访问，还要把 Pod 前缀继续向上游传播，或者配置静态路由指向 ToR。</p><p>无 NAT 的好处是保留真实 Pod IP，代价是所有相关网络都必须具备正确回程和安全策略。</p></aside>
+      </section>
+
+      <section class="slide" data-section="抓包" data-title="抓包应看到原始 Pod IP 与 BGP TCP 179">
+        <div class="slide-header"><div><p class="eyebrow">Control plane and data plane evidence</p><h2>抓包应看到原始 Pod IP 与 BGP TCP 179</h2><div class="rule"></div></div></div>
+        <div class="capture-split bgp-capture"><article><h3>BGP 控制面</h3><pre class="terminal"><code>tcpdump -ni eth1 tcp port 179
+
+10.10.10.11 ↔ 10.10.10.1
+OPEN / KEEPALIVE / UPDATE</code></pre><p>验证会话与路由更新确实经过 Node underlay。</p></article><article><h3>Pod 数据面</h3><pre class="terminal"><code>tcpdump -ni eth1 host 192.168.46.129
+
+192.168.42.193 → 192.168.46.129
+ICMP echo request</code></pre><p>验证没有 VXLAN/IPIP，也没有 SNAT 成 Node IP。</p></article></div>
+        <div class="slide-number">31</div>
+        <aside class="speaker-copy"><p>控制面与数据面要分开抓。TCP 179 说明 BGP 会话，真实 Pod 源/目的地址说明数据包按原生路由转发。</p><p>如果看到 UDP 4789 或 IP 协议 4，需要重新检查实际 IPPool 的 vxlanMode/ipipMode，而不是只看 Installation 源文件。</p></aside>
+      </section>
+
+      <section class="slide" data-section="排错" data-title="BGP IPPool 常见故障边界">
+        <div class="slide-header"><div><p class="eyebrow">Separate session, route and packet problems</p><h2>BGP IPPool 常见故障边界</h2><div class="rule"></div></div></div>
+        <div class="mistake-grid bgp-mistakes"><article><span>01</span><h3>节点标签错误</h3><p>BGPPeer selector 不匹配，节点没有对 ToR 建会话。</p></article><article><span>02</span><h3>TCP 179 被拦</h3><p>会话停在 Active/Connect，路由不会交换。</p></article><article><span>03</span><h3>Export 被关闭</h3><p>会话正常，但 ToR 看不到 Workload <code>/26</code>。</p></article><article><span>04</span><h3>next-hop 不可达</h3><p>路由存在但无法安装或数据包无法转发。</p></article><article><span>05</span><h3>NAT 意外开启</h3><p>外部看到 Node IP，无法验证真实 Pod 地址直达。</p></article><article><span>06</span><h3>上游无回程</h3><p>ToR 能访问 Pod，更远客户端仍然失败。</p></article></div>
+        <div class="slide-number">32</div>
+        <aside class="speaker-copy"><p>故障范围先按会话、路由和数据包三层划分。会话没建立时不要先查 Pod 路由；ToR 有路由时再看节点 FIB 和抓包。</p><p>真实 Pod IP 外部直达还涉及防火墙、NetworkPolicy 和上游路由，这些不由 BGP 会话状态单独保证。</p></aside>
+      </section>
+
+      <section class="slide" data-section="排错" data-title="按控制面到数据面顺序定位问题">
+        <div class="slide-header"><div><p class="eyebrow">Find the first missing route fact</p><h2>按控制面到数据面顺序定位问题</h2><div class="rule"></div></div></div>
+        <table class="trouble-table bgp-trouble"><thead><tr><th>现象</th><th>优先检查</th><th>命令</th><th>判断</th></tr></thead><tbody><tr><td>缺少某节点邻居</td><td>Node label、BGPPeer、TCP 179</td><td><code>kubectl get nodes --show-labels; kubectl get bgppeers -o yaml; show ip bgp summary</code></td><td>selector 与 peerIP</td></tr><tr><td>会话正常但缺 <code>/26</code></td><td>IPPool export 与 Block Affinity</td><td><code>kubectl get ippool default-ipv4-ippool -o yaml; kubectl get blockaffinities</code></td><td>block 是否存在并允许导出</td></tr><tr><td>ToR 有路由，节点没有</td><td>RR、next-hop-self 与 Node BGP</td><td><code>show ip bgp; kubectl get caliconodestatus -o yaml</code></td><td>路由是否被反射和安装</td></tr><tr><td>双方有路由但 Ping 失败</td><td>内核 FIB、MTU、防火墙与策略</td><td><code>ip route get POD_IP; tcpdump -ni eth1; kubectl get networkpolicy -A</code></td><td>转入数据面排障</td></tr><tr><td>ToR 通，更远网络不通</td><td>上游路由传播与回程</td><td><code>show ip bgp PREFIX; traceroute POD_IP</code></td><td>Pod 前缀是否继续发布</td></tr></tbody></table>
+        <div class="flat-block yellow" style="margin-top:22px;"><p class="body"><strong>顺序：</strong>会话、ToR BGP/RIB、Node FIB、数据包、上游回程。</p></div>
+        <div class="slide-number">33</div>
+        <aside class="speaker-copy"><p>最有效的排错方法是找第一处缺失证据。ToR 没邻居时，后面的路由检查没有意义；ToR 有路由但 Node 没有，再看 RR 与 next-hop。</p><p>双方路由齐全后才进入数据面，检查 <code>ip route get</code>、抓包、MTU、主机防火墙和 NetworkPolicy。</p></aside>
+      </section>
+
+      <section class="slide" data-section="演示" data-title="十五分钟现场演示顺序">
+        <div class="slide-header"><div><p class="eyebrow">Topology, sessions, routes, packets</p><h2>十五分钟现场演示顺序</h2><div class="rule"></div></div></div>
+        <div class="demo-columns"><div class="demo-list"><div><span>01</span><code>containerlab inspect topology.clab.yaml</code><small>确认四节点与 cEOS。</small></div><div><span>02</span><code>kubectl get nodes -L vlan -o wide</code><small>核对 Node IP 与标签。</small></div><div><span>03</span><code>kubectl get ippool default-ipv4-ippool -o yaml</code><small>确认 None、NAT Disabled、Export false。</small></div><div><span>04</span><code>kubectl get blockaffinities</code><small>记录四个 <code>/26</code>。</small></div><div><span>05</span><code>kubectl get bgpconfiguration,bgppeer -o wide</code><small>核对 AS 与两个 peer。</small></div></div><div class="demo-list"><div><span>06</span><code>show ip bgp summary</code><small>确认四条 Estab。</small></div><div><span>07</span><code>show ip route</code><small>对齐四个 block。</small></div><div><span>08</span><code>kubectl apply -f caliconodestatus.yaml</code><small>查看节点学到的 FIB。</small></div><div><span>09</span><code>ip route | grep bird</code><small>验证内核转发路由。</small></div><div><span>10</span><code>ping POD_IP / tcpdump</code><small>验证跨 VLAN 与外部直达。</small></div></div></div>
+        <div class="flat-block red" style="margin-top:20px;"><p class="body"><strong>清理：</strong>删除临时 CalicoNodeStatus，然后运行 <code>./destroy.sh</code> 并确认删除范围。</p></div>
+        <div class="slide-number">34</div>
+        <aside class="speaker-copy"><p>演示按证据链推进：环境、IPPool、block、会话、ToR 路由、Node FIB、最后是实际包。</p><p>现场 IP 和时间戳会变化，block 前缀与下一跳应以当前输出为准。CalicoNodeStatus 用完后删除，避免持续轮询状态。</p></aside>
+      </section>
+
+      <section class="slide" data-section="总结" data-title="BGP IPPool 的完整证据链">
+        <div class="slide-header"><div><p class="eyebrow">Summary and sources</p><h2>BGP IPPool 的完整证据链</h2><div class="rule"></div></div></div>
+        <div class="summary-row bgp-summary"><article><span>01</span><h3>原生 Pod 地址</h3><p>IPPool 关闭封装与 NAT，并允许 Workload 路由导出。</p></article><article><span>02</span><h3>ToR 路由反射</h3><p>四个节点把 <code>/26</code> 上送 cEOS，cEOS 反射远端前缀。</p></article><article><span>03</span><h3>双向路由证据</h3><p>ToR RIB、Node FIB 与抓包共同证明跨 VLAN 和外部直达。</p></article></div>
+        <div class="source-list compact-sources"><article class="source-item"><strong>Lesson 10</strong><a href="https://k8snetworking.com/lessons/10-calico-bgp-ippool">k8snetworking.com/lessons/10-calico-bgp-ippool</a></article><article class="source-item"><strong>课程仓库</strong><a href="https://github.com/aadhilam/k8-networking-calico-containerlab/tree/master/containerlab/10-calico-bgp-ippool">github.com/aadhilam/.../10-calico-bgp-ippool</a></article><article class="source-item"><strong>Calico BGP</strong><a href="https://docs.tigera.io/calico/latest/networking/configuring/bgp">docs.tigera.io/.../configuring/bgp</a></article><article class="source-item"><strong>BGPConfiguration</strong><a href="https://docs.tigera.io/calico/latest/reference/resources/bgpconfig">docs.tigera.io/.../resources/bgpconfig</a></article></div>
+        <div class="slide-number">35</div>
+        <aside class="speaker-copy"><p>最后用三句话总结。第一，IPPool 让 Pod 地址保留原生身份。第二，节点把 block 路由交给 ToR RR。第三，ToR 与节点都安装路由后，包可以跨 VLAN 并从外部直接到达 Pod。</p><p>BGP 负责可达性，NetworkPolicy、主机防火墙和上游路由仍需要单独设计。</p></aside>
+      </section>
+    </div>
+
+    <div class="progress-track" aria-hidden="true"><div id="progress-fill"></div></div>
+    <nav class="controls" aria-label="演示控制"><button class="tool-btn" id="prev" type="button" title="上一页" aria-label="上一页">‹</button><button class="tool-btn" id="next" type="button" title="下一页" aria-label="下一页">›</button><button class="tool-btn" id="notes-toggle" type="button" title="讲稿" aria-label="显示或隐藏讲稿" aria-pressed="false">N</button><button class="tool-btn" id="overview-toggle" type="button" title="总览" aria-label="显示或隐藏总览" aria-pressed="false">▦</button><button class="tool-btn" id="fullscreen" type="button" title="全屏" aria-label="切换全屏">⛶</button></nav>
+    <button class="notes-backdrop" id="notes-backdrop" type="button" aria-label="关闭讲稿" tabindex="-1"></button>
+    <aside class="notes-panel" id="notes-panel" aria-live="polite" aria-hidden="true"><div class="notes-header"><h2 id="notes-title">讲稿</h2><button class="notes-close" id="notes-close" type="button" title="关闭讲稿" aria-label="关闭讲稿">×</button></div><div id="notes-body"></div></aside>
+    <aside class="overview" id="overview" aria-label="幻灯片总览"></aside>
+  </main>
+  <script src="app.js?v=1"></script>
+</body>
+</html>
