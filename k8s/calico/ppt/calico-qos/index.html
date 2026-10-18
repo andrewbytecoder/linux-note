@@ -1,0 +1,624 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="基于 Kubernetes Networking Labs Lesson 12 的 Calico Network QoS、Linux tc 与 iperf3 中文动态演示课件">
+  <title>Calico Network QoS：给 Pod 带宽装上限速器</title>
+  <link rel="stylesheet" href="styles.css?v=1">
+</head>
+<body>
+  <main class="deck-shell" aria-label="Calico Network QoS HTML 演示文稿">
+    <div id="deck-canvas">
+
+      <section class="slide cover active" data-section="Calico Network QoS" data-title="给 Pod 带宽装上限速器">
+        <div class="cover-layout">
+          <div class="cover-copy">
+            <p class="eyebrow">Lesson 12 · Pod annotations · Linux tc · iperf3</p>
+            <h1>Calico Network QoS<br><span class="yellow-mark">给 Pod 带宽装上限速器</span></h1>
+            <p class="lead">从无约束的 9.44 Gbit/s，到稳定在约 10 Mbit/s，沿着注解、veth 与 token bucket 看清每一步。</p>
+            <div class="cover-meta"><span>ingressBandwidth: 10M</span><span>egressBandwidth: 10M</span><span>per-Pod limit</span></div>
+          </div>
+          <div class="cover-stage is-playing" id="cover-flow" aria-label="流量从 iperf 客户端经过限速器到达服务端">
+            <article class="cover-endpoint client"><span>iperf3 client</span><strong>unrestricted sender</strong></article>
+            <div class="cover-track fast"><i class="packet">9.44G</i></div>
+            <div class="cover-shaper"><span>Linux tc</span><strong>10M</strong><small>token bucket</small></div>
+            <div class="cover-track shaped"><i class="packet">10M</i></div>
+            <article class="cover-endpoint server"><span>iperf3 server</span><strong>controlled receiver</strong></article>
+            <div class="cover-meter"><b></b><span>burst</span><b></b><span>sustained</span></div>
+            <p class="stage-caption">Pod 注解给出目标速率，节点数据面负责执行</p>
+          </div>
+        </div>
+        <aside class="speaker-copy">
+          <p>大家好，这一节我们给 Pod 的网络带宽装一个限速器。实验用 iperf3 做前后对照，没有 QoS 时能跑到每秒几个 Gbit，加上 10M 注解后，持续吞吐稳定在每秒大约 10 Mbit。</p>
+          <p>我们不会只看最后一个数字，还会解释 ingress、egress 的方向，token bucket 为什么允许首秒突发，以及 Linux tc 在 Pod 接口附近怎样执行限制。</p>
+          <p class="note-source">主课程：<a href="https://k8snetworking.com/lessons/12-calico-qos">https://k8snetworking.com/lessons/12-calico-qos</a></p>
+        </aside>
+      </section>
+
+      <section class="slide" data-section="问题背景" data-title="一个 Pod 可以占满共享链路">
+        <div class="slide-header"><div><p class="eyebrow">The noisy neighbor problem</p><h2>一个 Pod 可以占满共享链路</h2><div class="rule"></div></div><button class="action-btn" data-replay="#neighbor-flow" type="button" title="重放动画" aria-label="重放带宽竞争动画">↻</button></div>
+        <div class="neighbor-flow is-playing" id="neighbor-flow">
+          <div class="tenant-list"><article class="noisy"><span>Pod A</span><strong>large transfer</strong></article><article><span>Pod B</span><strong>API request</strong></article><article><span>Pod C</span><strong>metrics</strong></article></div>
+          <div class="lane-group"><div class="lane thick"><i></i></div><div class="lane thin"><i></i></div><div class="lane thin"><i></i></div></div>
+          <div class="shared-link"><strong>共享 NIC / underlay</strong><span>容量有限</span></div>
+        </div>
+        <div class="impact-row"><article><b>公平性</b><span>大流量工作负载挤压其他租户</span></article><article><b>时延</b><span>队列增长让短请求等待</span></article><article><b>成本</b><span>出口或跨区带宽不可控</span></article><article><b>SLA</b><span>不同服务等级难以执行</span></article></div>
+        <div class="slide-number">02</div>
+        <aside class="speaker-copy">
+          <p>多租户节点上的链路是共享资源。一个 Pod 持续大流量传输，会让同节点其他 Pod 的短请求进入更长队列，形成 noisy neighbor。</p>
+          <p>Calico QoS 在每个工作负载接口附近限制最大使用量。它解决的是上限和隔离，不是凭空增加网络容量。</p>
+        </aside>
+      </section>
+
+      <section class="slide" data-section="概念边界" data-title="网络 QoS 与 Kubernetes QoS Class">
+        <div class="slide-header"><div><p class="eyebrow">Two systems sharing one name</p><h2>网络 QoS 与 Kubernetes QoS Class</h2><div class="rule"></div></div></div>
+        <div class="concept-split">
+          <article class="compute"><span>CPU / MEMORY</span><h3>Kubernetes QoS Class</h3><p>根据 requests 和 limits 把 Pod 分为 Guaranteed、Burstable、BestEffort。</p><strong>影响资源调度与驱逐优先级</strong></article>
+          <div class="not-equal">≠</div>
+          <article class="network"><span>NETWORK</span><h3>Calico Network QoS</h3><p>根据 Pod annotation 限制 bit rate、packet rate 或连接数，还能设置 DSCP。</p><strong>影响网络数据面行为</strong></article>
+        </div>
+        <div class="callout"><strong>本课范围：</strong>只讨论 Calico 网络 QoS。CPU/内存 requests 与 limits 不会自动变成网络带宽保证。</div>
+        <div class="slide-number">03</div>
+        <aside class="speaker-copy">
+          <p>Kubernetes 里还有一个同名概念叫 QoS Class，它由 CPU 和内存的 requests、limits 决定。这个分类影响调度和驱逐，不会限制网络吞吐。</p>
+          <p>本课的 Calico Network QoS 通过 Pod annotation 配置，执行位置在网络数据面。演讲时一定先把这两个概念分开。</p>
+        </aside>
+      </section>
+
+      <section class="slide" data-section="使用价值" data-title="带宽限制解决的四类问题">
+        <div class="slide-header"><div><p class="eyebrow">Why cap network usage</p><h2>带宽限制解决的四类问题</h2><div class="rule"></div></div></div>
+        <div class="quad-layout">
+          <article><span>01</span><h3>资源公平</h3><p>限制单个 Pod 的最大速率，避免它长期独占共享链路。</p></article>
+          <article><span>02</span><h3>成本控制</h3><p>对备份、批处理或开发环境设置更低的出口上限。</p></article>
+          <article><span>03</span><h3>性能隔离</h3><p>给关键服务留下可用容量，降低突发大流量的干扰。</p></article>
+          <article><span>04</span><h3>租户等级</h3><p>不同租户或应用层级使用不同速率策略。</p></article>
+        </div>
+        <div class="flat-block orange"><p class="body"><strong>边界：</strong>限速是最大值约束，不等于保证最小带宽。物理链路拥塞时，配置 10M 也不承诺一定能达到 10M。</p></div>
+        <div class="slide-number">04</div>
+        <aside class="speaker-copy">
+          <p>限速最直接的价值是公平，防止一个任务把链路打满。它也常用于成本控制和租户套餐。</p>
+          <p>但要准确表述：这里配置的是最大平均速率，不是带宽预留。底层链路只有 5M 可用时，Pod 不会因为 annotation 就获得 10M。</p>
+        </aside>
+      </section>
+
+      <section class="slide" data-section="配置入口" data-title="两条注解控制两个方向">
+        <div class="slide-header"><div><p class="eyebrow">Pod metadata annotations</p><h2>两条注解控制两个方向</h2><div class="rule"></div></div></div>
+        <div class="annotation-map">
+          <div class="annotation-code"><pre class="code"><span class="key">metadata:</span>
+  <span class="key">annotations:</span>
+    <span class="hot">qos.projectcalico.org/ingressBandwidth:</span> <span class="value">"10M"</span>
+    <span class="hot">qos.projectcalico.org/egressBandwidth:</span>  <span class="value">"10M"</span></pre></div>
+          <div class="annotation-explain"><article><span>IN</span><div><h3>ingressBandwidth</h3><p>限制进入这个 Pod 的 bit rate。</p></div></article><article><span>OUT</span><div><h3>egressBandwidth</h3><p>限制离开这个 Pod 的 bit rate。</p></div></article></div>
+        </div>
+        <div class="unit-row"><article><strong>k</strong><span>kilobits/s</span></article><article><strong>M</strong><span>megabits/s</span></article><article><strong>G</strong><span>gigabits/s</span></article><article><strong>10M</strong><span>10,000,000 bit/s</span></article></div>
+        <div class="slide-number">05</div>
+        <aside class="speaker-copy">
+          <p>配置入口在 Pod metadata.annotations。ingress 是进入 Pod，egress 是离开 Pod，方向始终以这个 Pod 为参照。</p>
+          <p>课程使用 10M，也就是每秒一千万 bit。iperf3 默认也以 bit/s 展示吞吐，所以数字可以直接比较。</p>
+        </aside>
+      </section>
+
+      <section class="slide" data-section="流量方向" data-title="ingress 与 egress 都以 Pod 为中心">
+        <div class="slide-header"><div><p class="eyebrow">Direction is relative to the workload</p><h2>ingress 与 egress 都以 Pod 为中心</h2><div class="rule"></div></div><button class="action-btn" data-replay="#direction-flow" type="button" title="重放动画" aria-label="重放流量方向动画">↻</button></div>
+        <div class="direction-flow is-playing" id="direction-flow">
+          <article class="outside"><span>peer / Service / Internet</span><strong>外部网络</strong></article>
+          <div class="direction-tracks"><div class="dir-track ingress"><span>ingress</span><i>IN</i></div><div class="dir-track egress"><span>egress</span><i>OUT</i></div></div>
+          <article class="pod"><span>workload endpoint</span><strong>Pod</strong><code>eth0</code></article>
+        </div>
+        <div class="grid-2 compact-gap"><div class="flat-block green"><h3>正向 iperf3</h3><p class="body">client egress 与 server ingress 都在路径上。</p></div><div class="flat-block blue"><h3><code>iperf3 -R</code></h3><p class="body">server egress 与 client ingress 都在路径上。</p></div></div>
+        <div class="slide-number">06</div>
+        <aside class="speaker-copy">
+          <p>方向定义和 Pod 的角色无关。进入 Pod 的包是 ingress，离开 Pod 的包是 egress。</p>
+          <p>正向 iperf3 由 client 发流量，所以经过 client egress 和 server ingress。加 -R 后由 server 反向发送，经过 server egress 和 client ingress。</p>
+        </aside>
+      </section>
+
+      <section class="slide" data-section="课程原图" data-title="课程原图：限速位于 Pod 接口">
+        <div class="slide-header compact-header"><div><p class="eyebrow">Bandwidth limits at the workload interface</p><h2>课程原图：限速位于 Pod 接口</h2><div class="rule"></div></div></div>
+        <img class="course-image" src="assets/course-qos.png" alt="课程原图，Kubernetes Node 内通过 Pod interface 的带宽限制控制双向流量">
+        <p class="source-line">课程仓库：images/qos.png</p>
+        <div class="slide-number">07</div>
+        <aside class="speaker-copy">
+          <p>课程原图把关键位置画得很清楚：限制发生在 Kubernetes Node 上，与 Pod 的网络接口相关联。流量进出 Pod 都可以有独立限制。</p>
+          <p>真实节点上 Pod 的 eth0 与 host 侧 cali 接口组成 veth pair，Linux tc 在主机网络栈一侧执行队列规则。</p>
+          <p class="note-source">图片来源：<a href="https://raw.githubusercontent.com/aadhilam/k8-networking-calico-containerlab/master/images/qos.png">课程 qos.png</a></p>
+        </aside>
+      </section>
+
+      <section class="slide" data-section="实验环境" data-title="Lesson 12 的两节点拓扑">
+        <div class="slide-header"><div><p class="eyebrow">containerlab/12-calico-qos</p><h2>Lesson 12 的两节点拓扑</h2><div class="rule"></div></div><span class="command">Calico 3.30.0</span></div>
+        <div class="topology-two">
+          <article><span>control-plane</span><h3>calico-qos-control-plane</h3><p>Kubernetes API、CoreDNS、Calico 控制组件</p></article>
+          <div class="topology-link"><i></i><b>Docker underlay</b></div>
+          <article><span>worker</span><h3>calico-qos-worker</h3><p>课程示例中的 iperf3 Pod 都位于此节点</p></article>
+        </div>
+        <table class="data-table compact"><thead><tr><th>参数</th><th>课程值</th><th>说明</th></tr></thead><tbody><tr><td>Pod CIDR</td><td>192.168.0.0/16</td><td>Calico IPPool</td></tr><tr><td>Service CIDR</td><td>10.96.0.0/16</td><td>iperf Service VIP</td></tr><tr><td>blockSize</td><td>/26</td><td>节点 IPAM block</td></tr><tr><td>encapsulation</td><td>VXLANCrossSubnet</td><td>跨三层子网才封装</td></tr></tbody></table>
+        <div class="slide-number">08</div>
+        <aside class="speaker-copy">
+          <p>这节实验缩成两节点 Kind：一个 control-plane，一个 worker。课程输出里 client 和 server 都在 worker，因此基线主要测同节点 veth 和内核路径。</p>
+          <p>Pod CIDR、Service CIDR 和 Calico 的 VXLANCrossSubnet 配置与前面课程一致。现场调度结果可能不同，先看 kubectl get pods -o wide。</p>
+        </aside>
+      </section>
+
+      <section class="slide" data-section="Calico 配置" data-title="CNI 与 IPPool 配置保持不变">
+        <div class="slide-header"><div><p class="eyebrow">custom-resources.yaml</p><h2>CNI 与 IPPool 配置保持不变</h2><div class="rule"></div></div></div>
+        <div class="grid-2"><pre class="code manifest-code"><span class="key">apiVersion:</span> operator.tigera.io/v1
+<span class="key">kind:</span> Installation
+<span class="key">metadata:</span>
+  <span class="key">name:</span> default
+<span class="key">spec:</span>
+  <span class="key">calicoNetwork:</span>
+    <span class="key">ipPools:</span>
+    - <span class="key">blockSize:</span> <span class="value">26</span>
+      <span class="key">cidr:</span> <span class="value">192.168.0.0/16</span>
+      <span class="key">encapsulation:</span> <span class="hot">VXLANCrossSubnet</span>
+      <span class="key">natOutgoing:</span> <span class="value">Enabled</span>
+      <span class="key">nodeSelector:</span> all()</pre><div class="explain-stack"><article><h3>QoS 不需要单独 IPPool</h3><p>限速绑定 Workload Endpoint，不改变 Pod 地址分配。</p></article><article><h3>路由模式仍然生效</h3><p>限速前后，包仍沿 Calico 的正常 Pod 路径转发。</p></article><article><h3>数据面在节点内执行</h3><p>annotation 变成 Linux 接口上的执行规则。</p></article></div></div>
+        <div class="slide-number">09</div>
+        <aside class="speaker-copy">
+          <p>QoS 不要求创建新的 IPPool，也不改变路由协议。实验继续使用同一套 Calico 网络配置。</p>
+          <p>区别只在特定 Pod 带有 qos.projectcalico.org 注解。Calico 把这些期望值下沉到该工作负载的节点数据面。</p>
+        </aside>
+      </section>
+
+      <section class="slide" data-section="部署" data-title="deploy.sh 先创建无 QoS 对照组">
+        <div class="slide-header"><div><p class="eyebrow">Automated setup</p><h2>deploy.sh 先创建无 QoS 对照组</h2><div class="rule"></div></div></div>
+        <div class="runway">
+          <article><span>01</span><h3>重建 topology</h3><code>containerlab deploy</code></article><i>›</i>
+          <article><span>02</span><h3>导出 kubeconfig</h3><code>calico-qos.kubeconfig</code></article><i>›</i>
+          <article><span>03</span><h3>安装 Calico</h3><code>operator v3.30.0</code></article><i>›</i>
+          <article><span>04</span><h3>等待就绪</h3><code>TigeraStatus Available</code></article><i>›</i>
+          <article><span>05</span><h3>部署基线 Pod</h3><code>tools/01 + 02</code></article>
+        </div>
+        <pre class="code command-code">cd containerlab/12-calico-qos
+chmod +x deploy.sh
+./deploy.sh
+export KUBECONFIG=$(pwd)/calico-qos.kubeconfig</pre>
+        <div class="flat-block yellow"><p class="body">QoS Pod 不在 deploy.sh 的初始部署中，课程要求在完成基线测试后手动应用 tools/03 和 tools/04。</p></div>
+        <div class="slide-number">10</div>
+        <aside class="speaker-copy">
+          <p>deploy.sh 创建 Kind、安装 Calico 并等待可用，最后只部署 01 和 02，也就是没有 QoS 注解的 iperf server 和 client。</p>
+          <p>这样先得到基线，再手动创建 03、04 两个 QoS Pod，实验对照更加清楚。</p>
+        </aside>
+      </section>
+
+      <section class="slide" data-section="实验对象" data-title="四个 Pod 清单分成两组">
+        <div class="slide-header"><div><p class="eyebrow">Baseline pair and limited pair</p><h2>四个 Pod 清单分成两组</h2><div class="rule"></div></div></div>
+        <div class="pair-compare">
+          <article class="pair baseline"><header>基线组</header><div><h3>iperf-client</h3><span>sleep infinity</span></div><div><h3>iperf-server</h3><span>iperf3 -s · Service 5201</span></div><footer>无 QoS annotation</footer></article>
+          <article class="pair limited"><header>QoS 组</header><div><h3>iperf-client-qos</h3><span>ingress 10M · egress 10M</span></div><div><h3>iperf-server-qos</h3><span>ingress 10M · egress 10M</span></div><footer>两端双向限速</footer></article>
+        </div>
+        <div class="callout"><strong>服务名：</strong><code>iperf-server</code> 与 <code>iperf-server-qos</code> 都监听 TCP 5201，分别指向自己的 server Pod。</div>
+        <div class="slide-number">11</div>
+        <aside class="speaker-copy">
+          <p>实验不是在同一个 Pod 上反复修改，而是准备两组对象。基线组没有 annotation，QoS 组的 client 和 server 都配置 ingress、egress 10M。</p>
+          <p>两个 server 各有自己的 ClusterIP Service，客户端用服务名连接 TCP 5201。</p>
+        </aside>
+      </section>
+
+      <section class="slide" data-section="基线清单" data-title="无 QoS 的 iperf3 Server 与 Client">
+        <div class="slide-header"><div><p class="eyebrow">tools/01 and tools/02</p><h2>无 QoS 的 iperf3 Server 与 Client</h2><div class="rule"></div></div></div>
+        <div class="yaml-compare"><article><h3>iperf-server</h3><pre class="code"><span class="key">metadata:</span>
+  <span class="key">name:</span> iperf-server
+  <span class="key">labels:</span>
+    <span class="key">app:</span> iperf-server
+<span class="key">spec:</span>
+  <span class="key">containers:</span>
+  - <span class="key">image:</span> networkstatic/iperf3
+    <span class="key">command:</span> [<span class="value">"iperf3", "-s"</span>]
+    <span class="key">ports:</span>
+    - <span class="key">containerPort:</span> <span class="value">5201</span></pre></article><article><h3>iperf-client</h3><pre class="code"><span class="key">metadata:</span>
+  <span class="key">name:</span> iperf-client
+  <span class="key">labels:</span>
+    <span class="key">app:</span> iperf-client
+<span class="key">spec:</span>
+  <span class="key">containers:</span>
+  - <span class="key">image:</span> networkstatic/iperf3
+    <span class="key">command:</span> [<span class="value">"sleep", "infinity"</span>]
+
+<span class="comment"># no qos annotations</span></pre></article></div>
+        <div class="slide-number">12</div>
+        <aside class="speaker-copy">
+          <p>server 容器直接运行 iperf3 -s，监听 5201。client 只保持运行，之后通过 kubectl exec 启动测试。</p>
+          <p>这两个 Pod 完全没有 QoS annotation，因此数据面不会为它们配置课程中的 10M 限制。</p>
+        </aside>
+      </section>
+
+      <section class="slide" data-section="QoS 清单" data-title="QoS 组只增加 annotations">
+        <div class="slide-header"><div><p class="eyebrow">tools/03 and tools/04</p><h2>QoS 组只增加 annotations</h2><div class="rule"></div></div></div>
+        <div class="manifest-focus"><pre class="code manifest-code"><span class="key">apiVersion:</span> v1
+<span class="key">kind:</span> Pod
+<span class="key">metadata:</span>
+  <span class="key">name:</span> iperf-server-qos
+  <span class="key">labels:</span>
+    <span class="key">app:</span> iperf-server-qos
+  <span class="key">annotations:</span>
+    <span class="hot">qos.projectcalico.org/ingressBandwidth:</span> <span class="value">"10M"</span>
+    <span class="hot">qos.projectcalico.org/egressBandwidth:</span>  <span class="value">"10M"</span>
+<span class="key">spec:</span>
+  <span class="key">containers:</span>
+  - <span class="key">image:</span> networkstatic/iperf3
+    <span class="key">command:</span> [<span class="value">"iperf3", "-s"</span>]</pre><div class="manifest-notes"><article><span>1</span><p>仍是普通 Pod，无需 Calico CRD。</p></article><article><span>2</span><p>限速值写在 Pod metadata。</p></article><article><span>3</span><p>client-qos 使用完全相同的两条注解。</p></article><article><span>4</span><p>Service 仍只负责定位 server。</p></article></div></div>
+        <div class="slide-number">13</div>
+        <aside class="speaker-copy">
+          <p>QoS 组和基线组的容器镜像、命令都相同，主要差异就是两条 annotation。这样测出来的差异可以归因于限速配置。</p>
+          <p>Calico QoS 使用普通 Kubernetes Pod annotation，不需要另建 NetworkPolicy 或自定义资源。</p>
+        </aside>
+      </section>
+
+      <section class="slide" data-section="测试路径" data-title="iperf3 通过 Service 到达 Server Pod">
+        <div class="slide-header"><div><p class="eyebrow">The measured path</p><h2>iperf3 通过 Service 到达 Server Pod</h2><div class="rule"></div></div><button class="action-btn" data-replay="#service-flow" type="button" title="重放动画" aria-label="重放 iperf 流量动画">↻</button></div>
+        <div class="service-flow is-playing" id="service-flow">
+          <article><span>source</span><strong>iperf-client-qos</strong><code>client egress 10M</code></article><div class="service-track"><i>TCP</i></div><article class="vip"><span>Service</span><strong>iperf-server-qos:5201</strong><code>ClusterIP → DNAT</code></article><div class="service-track"><i>TCP</i></div><article><span>destination</span><strong>iperf-server-qos</strong><code>server ingress 10M</code></article>
+        </div>
+        <div class="grid-3 compact-gap"><div class="flat-block blue"><h3>DNS</h3><p class="small">把服务名解析到 ClusterIP。</p></div><div class="flat-block yellow"><h3>kube-proxy</h3><p class="small">把 VIP 连接 DNAT 到 Endpoint。</p></div><div class="flat-block green"><h3>Calico QoS</h3><p class="small">在工作负载接口执行速率上限。</p></div></div>
+        <div class="slide-number">14</div>
+        <aside class="speaker-copy">
+          <p>客户端命令连接的是 Service 名，不是直接写 Pod IP。DNS 返回 ClusterIP，kube-proxy 数据面把连接送到 server Pod。</p>
+          <p>QoS 的执行对象仍是 Pod 接口。正向测试里 client egress 和 server ingress 都设为 10M，因此路径上的最小上限就是 10M。</p>
+        </aside>
+      </section>
+
+      <section class="slide" data-section="环境验证" data-title="节点与基线 Pod 必须先就绪">
+        <div class="slide-header"><div><p class="eyebrow">Exercise 1</p><h2>节点与基线 Pod 必须先就绪</h2><div class="rule"></div></div></div>
+        <div class="grid-2"><div><pre class="code terminal"><span class="prompt">$</span> export KUBECONFIG=$(pwd)/calico-qos.kubeconfig
+<span class="prompt">$</span> kubectl get nodes -o wide
+
+calico-qos-control-plane   Ready
+calico-qos-worker          Ready</pre><div class="flat-block green"><p class="body">两台节点 Ready，Calico 组件 Available。</p></div></div><div><pre class="code terminal"><span class="prompt">$</span> kubectl get pods -o wide
+
+iperf-client  1/1 Running  <span class="cool">192.168.146.66</span>  calico-qos-worker
+iperf-server  1/1 Running  <span class="cool">192.168.146.65</span>  calico-qos-worker</pre><div class="flat-block yellow"><p class="body">课程示例两端同节点，现场 IP 与调度以实际输出为准。</p></div></div></div>
+        <div class="slide-number">15</div>
+        <aside class="speaker-copy">
+          <p>基线测试前先确认节点 Ready，再确认两个 Pod Running。课程示例地址是 192.168.146.66 和 .65，并且都在 worker。</p>
+          <p>如果现场 Pod 不在同一节点，基线会包含跨节点路径，结果与课程数字不同也很正常。QoS 的验证重点是前后持续速率差异。</p>
+        </aside>
+      </section>
+
+      <section class="slide" data-section="基线测试" data-title="先测没有限制时的最大吞吐">
+        <div class="slide-header"><div><p class="eyebrow">Exercise 2</p><h2>先测没有限制时的最大吞吐</h2><div class="rule"></div></div></div>
+        <div class="command-hero"><pre class="code"><span class="prompt">$</span> kubectl exec -it iperf-client -- \
+    iperf3 -c iperf-server -t 5</pre><div class="command-parts"><article><code>-c iperf-server</code><span>连接 Service DNS 名</span></article><article><code>-t 5</code><span>持续发送 5 秒</span></article><article><code>TCP</code><span>默认单流测试</span></article></div></div>
+        <div class="callout"><strong>基线意义：</strong>先测当前环境可达到的吞吐，再判断 10M 限制是否真正生效。不同主机的绝对值不能直接横向比较。</div>
+        <div class="slide-number">16</div>
+        <aside class="speaker-copy">
+          <p>基线命令从 iperf-client 里执行，连接 iperf-server 服务名，持续 5 秒。iperf3 默认做 TCP 单流测试。</p>
+          <p>这里不是追求一个标准答案，而是测这台机器、这个调度位置和这条路径的无约束上限。</p>
+        </aside>
+      </section>
+
+      <section class="slide" data-section="基线结果" data-title="课程基线达到 9.44 Gbit/s">
+        <div class="slide-header"><div><p class="eyebrow">No shaping on the workload</p><h2>课程基线达到 9.44 Gbit/s</h2><div class="rule"></div></div></div>
+        <div class="result-layout"><pre class="code terminal"><span class="prompt">$</span> iperf3 -c iperf-server -t 5
+
+Connecting to host iperf-server, port 5201
+[  5] local 192.168.146.66 connected to 192.168.146.65
+
+[ ID] Interval       Transfer     Bitrate        Retr
+[  5] 0.00-5.00 sec <span class="cool">5.50 GBytes</span>  <span class="hot">9.44 Gbits/sec</span>  0  sender
+[  5] 0.00-5.00 sec <span class="cool">5.50 GBytes</span>  <span class="hot">9.44 Gbits/sec</span>     receiver</pre><div class="big-result"><span>BASELINE</span><strong>9.44</strong><b>Gbit/s</b><p>课程示例，同节点容器路径</p></div></div>
+        <div class="slide-number">17</div>
+        <aside class="speaker-copy">
+          <p>课程输出在 5 秒内传输了 5.50 GByte，发送端和接收端都报告 9.44 Gbit/s，重传为 0。</p>
+          <p>这是容器化同节点路径的高吞吐，不代表物理网卡真实可提供 9.44 Gbit/s。我们只把它当作本实验的无约束对照。</p>
+        </aside>
+      </section>
+
+      <section class="slide" data-section="部署 QoS" data-title="手动创建带 10M 注解的 Pod">
+        <div class="slide-header"><div><p class="eyebrow">Exercise 3</p><h2>手动创建带 10M 注解的 Pod</h2><div class="rule"></div></div></div>
+        <div class="deploy-qos"><pre class="code command-code"><span class="prompt">$</span> kubectl apply -f tools/03-iperf-server-qos.yaml
+<span class="prompt">$</span> kubectl apply -f tools/04-iperf-client-qos.yaml
+
+<span class="prompt">$</span> kubectl wait --for=condition=ready pod/iperf-server-qos --timeout=60s
+<span class="prompt">$</span> kubectl wait --for=condition=ready pod/iperf-client-qos --timeout=60s</pre><div class="deploy-state"><article><span>server</span><strong>Ready</strong><code>Service: 5201</code></article><article><span>client</span><strong>Ready</strong><code>sleep infinity</code></article></div></div>
+        <div class="flat-block orange"><p class="body">等待 Ready 只能说明容器与探针状态正常，annotation 是否存在还要单独读取 metadata。</p></div>
+        <div class="slide-number">18</div>
+        <aside class="speaker-copy">
+          <p>基线完成后应用 03 和 04。两个 Pod 都 Ready 以后再测试，避免把镜像启动时间或 Service 尚未就绪误认为网络问题。</p>
+          <p>Ready 不等于限速已经按预期配置，所以下一步读取 annotation 作为控制面证据。</p>
+        </aside>
+      </section>
+
+      <section class="slide" data-section="配置验证" data-title="先证明注解确实存在">
+        <div class="slide-header"><div><p class="eyebrow">Exercise 4</p><h2>先证明注解确实存在</h2><div class="rule"></div></div></div>
+        <div class="verify-annotation"><pre class="code terminal"><span class="prompt">$</span> kubectl get pod iperf-server-qos \
+    -o jsonpath='{.metadata.annotations}' | jq .
+
+{
+  <span class="hot">"qos.projectcalico.org/egressBandwidth"</span>: <span class="value">"10M"</span>,
+  <span class="hot">"qos.projectcalico.org/ingressBandwidth"</span>: <span class="value">"10M"</span>
+}</pre><div class="evidence-ladder"><article><span>1</span><h3>YAML 期望</h3><p>清单写了什么</p></article><article><span>2</span><h3>Pod metadata</h3><p>API 实际保存了什么</p></article><article><span>3</span><h3>iperf / tc</h3><p>数据面实际执行了什么</p></article></div></div>
+        <div class="slide-number">19</div>
+        <aside class="speaker-copy">
+          <p>jsonpath 加 jq 可以直接看到两条 annotation。这里只证明 API 里存在目标配置，还不能证明内核已经执行。</p>
+          <p>完整证据链需要三层：清单、Pod metadata、最终的吞吐或 tc 统计。只检查其中一层容易误判。</p>
+        </aside>
+      </section>
+
+      <section class="slide" data-section="控制链" data-title="注解到 tc 的下沉路径">
+        <div class="slide-header"><div><p class="eyebrow">Desired state to kernel enforcement</p><h2>注解到 tc 的下沉路径</h2><div class="rule"></div></div><button class="action-btn" data-replay="#control-flow" type="button" title="重放动画" aria-label="重放 QoS 控制链动画">↻</button></div>
+        <div class="fixed-pipeline is-playing" id="control-flow">
+          <article><span>1</span><h3>Pod annotation</h3><p>ingress / egress 10M</p></article><div class="pipe"><i></i></div>
+          <article><span>2</span><h3>Kubernetes API</h3><p>保存期望状态</p></article><div class="pipe"><i></i></div>
+          <article><span>3</span><h3>Calico / CNI</h3><p>识别工作负载 QoS</p></article><div class="pipe"><i></i></div>
+          <article><span>4</span><h3>Linux tc</h3><p>配置 qdisc / filter</p></article><div class="pipe"><i></i></div>
+          <article><span>5</span><h3>Pod veth</h3><p>发送、排队或丢弃</p></article>
+        </div>
+        <div class="callout"><strong>数据面原则：</strong>控制器不逐包转发。它负责写入配置，后续每个包由节点内核执行。</div>
+        <div class="slide-number">20</div>
+        <aside class="speaker-copy">
+          <p>Pod annotation 是期望状态，Calico/CNI 把它转换为节点上的 Linux tc 配置。完成配置后，真正处理每个包的是内核。</p>
+          <p>这样不会把流量送到一个集中式限速服务，也不需要用户态代理逐包参与。</p>
+        </aside>
+      </section>
+
+      <section class="slide" data-section="Linux 数据面" data-title="Pod eth0 与 host 侧 cali 接口">
+        <div class="slide-header"><div><p class="eyebrow">Workload veth pair</p><h2>Pod eth0 与 host 侧 cali 接口</h2><div class="rule"></div></div></div>
+        <div class="veth-layout">
+          <article class="pod-space"><header>Pod network namespace</header><div><strong>eth0</strong><span>应用看到的接口</span></div></article>
+          <div class="veth-pair"><span>veth pair</span><i></i></div>
+          <article class="host-space"><header>Node network namespace</header><div><strong>cali*</strong><span>Calico workload interface</span></div><footer>tc qdisc / filters</footer></article>
+        </div>
+        <pre class="code command-code"># 在 Pod 所在节点确认接口与 qdisc
+ip -d link show | grep -A2 cali
+tc -s qdisc show dev &lt;cali-interface&gt;
+tc -s filter show dev &lt;cali-interface&gt; ingress</pre>
+        <div class="flat-block yellow"><p class="body">接口名由环境生成，不要把课程示例中的 cali 后缀写死。先关联 Pod、WorkloadEndpoint 与 Node。</p></div>
+        <div class="slide-number">21</div>
+        <aside class="speaker-copy">
+          <p>Pod 里看到 eth0，Node 里看到对应的 cali 接口，两端组成 veth pair。课程所说的 Pod virtual ethernet interface 指的就是这条工作负载链路。</p>
+          <p>现场看 tc 时先定位正确 Node 和接口，再查看 qdisc 与 filter。不同 Calico 版本和数据面模式的具体输出可能不同。</p>
+        </aside>
+      </section>
+
+      <section class="slide" data-section="Token Bucket" data-title="Token Bucket Filter 的三个量">
+        <div class="slide-header"><div><p class="eyebrow">Rate, tokens and burst</p><h2>Token Bucket Filter 的三个量</h2><div class="rule"></div></div></div>
+        <div class="bucket-model">
+          <div class="token-source"><span>补充速率</span><strong>10 Mbit/s</strong><i></i></div>
+          <div class="bucket"><span class="fill"></span><strong>tokens</strong><small>最大容量决定 burst</small></div>
+          <div class="packet-cost"><span>每个包消耗 token</span><strong>有 token：发送</strong><b>无 token：排队或丢弃</b></div>
+        </div>
+        <div class="formula-row"><article><span>长期平均速率</span><strong>≤ configured rate</strong></article><article><span>瞬时突发</span><strong>≤ available tokens</strong></article><article><span>队列效果</span><strong>平滑发送或触发 drop</strong></article></div>
+        <div class="slide-number">22</div>
+        <aside class="speaker-copy">
+          <p>可以把 token 理解成发送许可。系统按配置速率补 token，每个包发送时消耗对应数量。</p>
+          <p>桶里预先有 token，就允许短时间跑得比 10M 快。桶空以后只能按 token 补充速度继续发送，长期平均速率被限制。</p>
+        </aside>
+      </section>
+
+      <section class="slide" data-section="Token Bucket" data-title="突发消耗完后回到 10M">
+        <div class="slide-header"><div><p class="eyebrow">Burst then steady state</p><h2>突发消耗完后回到 10M</h2><div class="rule"></div></div><button class="action-btn" id="replay-bucket" type="button" title="重放动画" aria-label="重放 token bucket 动画">↻</button></div>
+        <div class="bucket-sim" id="bucket-sim">
+          <div class="bucket-timeline"><span>0s</span><span>1s</span><span>2s</span><span>3s</span><span>4s</span><span>5s</span></div>
+          <div class="bucket-bars"><i data-label="299"></i><i data-label="10.5"></i><i data-label="10.5"></i><i data-label="10.5"></i><i data-label="10.5"></i></div>
+          <div class="bucket-caption" id="bucket-caption">准备开始</div>
+        </div>
+        <div class="grid-2 compact-gap"><div class="flat-block orange"><h3>第 1 秒</h3><p class="body">桶中已有 token，允许较高突发，TCP 同时出现重传。</p></div><div class="flat-block green"><h3>第 2 秒起</h3><p class="body">token 消耗完，吞吐稳定在约 10.5 Mbit/s。</p></div></div>
+        <div class="slide-number">23</div>
+        <aside class="speaker-copy">
+          <p>课程结果第一秒大约 299 Mbit/s，后四秒稳定在 10.5 Mbit/s。动画按秒展示这个变化。</p>
+          <p>所以验证带宽上限不能只看第一秒，也不能只看包含突发的短测试平均值。应观察稳定区间，或者把测试时间拉长。</p>
+        </aside>
+      </section>
+
+      <section class="slide" data-section="QoS 测试" data-title="对 QoS 组执行同样的 5 秒测试">
+        <div class="slide-header"><div><p class="eyebrow">Exercise 5</p><h2>对 QoS 组执行同样的 5 秒测试</h2><div class="rule"></div></div></div>
+        <div class="command-hero"><pre class="code"><span class="prompt">$</span> kubectl exec -it iperf-client-qos -- \
+    iperf3 -c iperf-server-qos -t 5</pre><div class="command-parts"><article><code>same image</code><span>仍然是 networkstatic/iperf3</span></article><article><code>same duration</code><span>仍然测试 5 秒</span></article><article><code>changed variable</code><span>Pod 多了 10M annotation</span></article></div></div>
+        <div class="callout"><strong>实验设计：</strong>保持工具、协议和测试时间一致，把 QoS annotation 作为主要变量。</div>
+        <div class="slide-number">24</div>
+        <aside class="speaker-copy">
+          <p>QoS 测试命令和基线几乎相同，只是 client 与 server 名称换成 qos 组。工具、协议、测试时间保持一致。</p>
+          <p>这样前后差异主要来自 annotation 和相应的 tc 配置。</p>
+        </aside>
+      </section>
+
+      <section class="slide" data-section="QoS 结果" data-title="稳定区间落在约 10.5 Mbit/s">
+        <div class="slide-header"><div><p class="eyebrow">Measured output</p><h2>稳定区间落在约 10.5 Mbit/s</h2><div class="rule"></div></div></div>
+        <pre class="code terminal result-terminal">[ ID] Interval       Transfer      Bitrate        Retr   Cwnd
+[  5] 0.00-1.00 sec  35.6 MBytes   <span class="hot">299 Mbits/sec</span>   <span class="error">46</span>    754 KBytes
+[  5] 1.00-2.00 sec  1.25 MBytes   <span class="good">10.5 Mbits/sec</span>  0     754 KBytes
+[  5] 2.00-3.00 sec  1.25 MBytes   <span class="good">10.5 Mbits/sec</span>  0     754 KBytes
+[  5] 3.00-4.00 sec  1.25 MBytes   <span class="good">10.5 Mbits/sec</span>  0     754 KBytes
+[  5] 4.00-5.00 sec  1.25 MBytes   <span class="good">10.5 Mbits/sec</span>  0     754 KBytes
+
+[  5] 0.00-5.00 sec  39.4 MBytes   66.0 Mbits/sec   46  sender
+[  5] 0.00-5.00 sec  36.7 MBytes   60.4 Mbits/sec       receiver</pre>
+        <div class="reading-strip"><article><span>突发</span><strong>299 Mbit/s</strong></article><article><span>稳定值</span><strong>10.5 Mbit/s</strong></article><article><span>5 秒平均</span><strong>被首秒抬高</strong></article><article><span>结论</span><strong>10M 限制生效</strong></article></div>
+        <div class="slide-number">25</div>
+        <aside class="speaker-copy">
+          <p>第一秒很高，后四秒每秒 1.25 MByte，对应 10.5 Mbit/s，和 10M 配置一致。</p>
+          <p>底部 66 Mbit/s 的 sender 平均值被第一秒突发显著抬高。演示时要读分段结果，不要只念最后一行。</p>
+        </aside>
+      </section>
+
+      <section class="slide" data-section="突发分析" data-title="首秒高带宽不代表限速失效">
+        <div class="slide-header"><div><p class="eyebrow">Interpret the first interval correctly</p><h2>首秒高带宽不代表限速失效</h2><div class="rule"></div></div></div>
+        <div class="burst-analysis">
+          <div class="burst-chart"><div class="bar burst"><span>299</span><b>0–1s</b></div><div class="bar steady"><span>10.5</span><b>1–2s</b></div><div class="bar steady"><span>10.5</span><b>2–3s</b></div><div class="bar steady"><span>10.5</span><b>3–4s</b></div><div class="bar steady"><span>10.5</span><b>4–5s</b></div></div>
+          <div class="burst-notes"><article><span>1</span><p>开始时桶中有可用 token。</p></article><article><span>2</span><p>应用瞬间发得更快，消耗 burst。</p></article><article><span>3</span><p>桶空后只能按 10M 速率补充。</p></article><article><span>4</span><p>TCP 收敛，稳定区间接近配置值。</p></article></div>
+        </div>
+        <div class="slide-number">26</div>
+        <aside class="speaker-copy">
+          <p>首秒高带宽是 token bucket 的正常行为。它允许短突发，适合网页小对象和短请求快速完成。</p>
+          <p>判断限速是否生效要看 burst 之后的稳定区间。课程中从第二秒开始连续四个区间都在 10.5 Mbit/s。</p>
+        </aside>
+      </section>
+
+      <section class="slide" data-section="TCP 行为" data-title="46 次重传说明发送速度超过可用节奏">
+        <div class="slide-header"><div><p class="eyebrow">TCP adapts to shaping</p><h2>46 次重传说明发送速度超过可用节奏</h2><div class="rule"></div></div></div>
+        <div class="tcp-sequence">
+          <article><span>sender</span><strong>快速扩大拥塞窗口</strong></article><div class="tcp-track loss"><i>packets</i><b>DROP</b></div><article class="shaper"><span>tc</span><strong>token 不足</strong></article><div class="tcp-track feedback"><i>ACK</i></div><article><span>TCP</span><strong>检测丢包并收敛</strong></article>
+        </div>
+        <div class="grid-3 compact-gap"><div class="flat-block red"><h3>Retr = 46</h3><p class="small">首秒出现重传。</p></div><div class="flat-block yellow"><h3>Cwnd = 754 KB</h3><p class="small">课程输出中的拥塞窗口。</p></div><div class="flat-block green"><h3>后续 Retr = 0</h3><p class="small">发送节奏适应约 10M 上限。</p></div></div>
+        <div class="callout"><strong>注意：</strong>限速会影响延迟、丢包和 TCP 拥塞控制。生产值应结合业务流量模型与 SLO 测试。</div>
+        <div class="slide-number">27</div>
+        <aside class="speaker-copy">
+          <p>第一秒的 46 次重传说明 TCP 一开始发送得比数据面允许的节奏更快，部分包被丢弃或需要重传。</p>
+          <p>TCP 拥塞控制随后调整发送速度，后续区间稳定在 10.5 Mbit/s，重传回到 0。QoS 不只是改变吞吐，也可能改变延迟和丢包。</p>
+        </aside>
+      </section>
+
+      <section class="slide" data-section="测试方法" data-title="30 秒测试更接近持续速率">
+        <div class="slide-header"><div><p class="eyebrow">Reduce burst bias</p><h2>30 秒测试更接近持续速率</h2><div class="rule"></div></div></div>
+        <div class="duration-compare"><article><span>5s</span><h3>突发占 20% 时间</h3><div class="timebar"><b class="burst"></b><b class="steady"></b></div><p>平均值被第一秒明显抬高。</p></article><article><span>30s</span><h3>突发只占约 3%</h3><div class="timebar long"><b class="burst"></b><b class="steady"></b></div><p>整体平均更接近 10 Mbit/s。</p></article></div>
+        <pre class="code command-code">kubectl exec -it iperf-client-qos -- \
+  iperf3 -c iperf-server-qos -t 30</pre>
+        <div class="flat-block blue"><p class="body">正式验证还可以增加 <code>-i 1</code> 保留逐秒区间，必要时重复多轮并记录中位数。</p></div>
+        <div class="slide-number">28</div>
+        <aside class="speaker-copy">
+          <p>课程建议把测试时间改成 30 秒。第一秒 burst 仍然存在，但它在总时长中的占比从五分之一降到约三十分之一。</p>
+          <p>生产评估不要只跑一次。保持路径和并发一致，重复多轮并看稳定区间和分位数。</p>
+        </aside>
+      </section>
+
+      <section class="slide" data-section="结果对比" data-title="持续吞吐从 Gbit/s 降到约 10 Mbit/s">
+        <div class="slide-header"><div><p class="eyebrow">Baseline versus shaped traffic</p><h2>持续吞吐从 Gbit/s 降到约 10 Mbit/s</h2><div class="rule"></div></div><button class="action-btn" data-replay="#compare-meter" type="button" title="重放动画" aria-label="重放吞吐对比动画">↻</button></div>
+        <div class="compare-meter is-playing" id="compare-meter">
+          <div class="meter-row baseline"><span>无 QoS</span><div><i></i></div><strong>9.44 Gbit/s</strong></div>
+          <div class="meter-row limited"><span>QoS 10M</span><div><i></i></div><strong>≈ 10.5 Mbit/s</strong></div>
+        </div>
+        <table class="data-table"><thead><tr><th>测试</th><th>持续吞吐</th><th>执行方式</th><th>解读</th></tr></thead><tbody><tr><td>Baseline</td><td>约 9+ Gbit/s</td><td>无 QoS</td><td>当前容器路径的可用上限</td></tr><tr><td>QoS</td><td>约 10 Mbit/s</td><td>Pod annotation + Linux tc</td><td>burst 结束后的持续速率</td></tr></tbody></table>
+        <div class="flat-block orange"><p class="body">课程称约 1000 倍差距，这是示例环境的数量级对比，不应当作所有集群的固定倍率。</p></div>
+        <div class="slide-number">29</div>
+        <aside class="speaker-copy">
+          <p>基线 9.44 Gbit/s，稳定限速大约 10.5 Mbit/s，课程描述为约一千倍下降。</p>
+          <p>这个倍率取决于基线环境。真正可复用的结论是：持续速率从无约束上限下降到接近 10M 配置值。</p>
+        </aside>
+      </section>
+
+      <section class="slide" data-section="双向验证" data-title="反向测试覆盖另外两个方向">
+        <div class="slide-header"><div><p class="eyebrow">Validate server egress and client ingress</p><h2>反向测试覆盖另外两个方向</h2><div class="rule"></div></div><button class="action-btn" data-replay="#reverse-flow" type="button" title="重放动画" aria-label="重放反向流量动画">↻</button></div>
+        <div class="reverse-flow is-playing" id="reverse-flow">
+          <article><span>iperf-client-qos</span><strong>receiver</strong><code>ingress 10M</code></article><div class="reverse-track"><i>DATA</i><span>iperf3 -R</span></div><article><span>iperf-server-qos</span><strong>sender</strong><code>egress 10M</code></article>
+        </div>
+        <pre class="code command-code">kubectl exec -it iperf-client-qos -- \
+  iperf3 -c iperf-server-qos -t 30 -R</pre>
+        <div class="callout"><strong>覆盖矩阵：</strong>正向测试验证 client egress + server ingress，反向测试验证 server egress + client ingress。</div>
+        <div class="slide-number">30</div>
+        <aside class="speaker-copy">
+          <p>课程主步骤只展示正向测试。为了完整验证四条 annotation，可以再加 -R，让 server 发送、client 接收。</p>
+          <p>如果正向受限而反向不受限，优先检查对应方向的 annotation 和 tc 配置，而不是笼统地说 QoS 全部失效。</p>
+        </aside>
+      </section>
+
+      <section class="slide" data-section="粒度" data-title="每个 Pod 可以有不同上限">
+        <div class="slide-header"><div><p class="eyebrow">Per workload endpoint</p><h2>每个 Pod 可以有不同上限</h2><div class="rule"></div></div></div>
+        <div class="tier-lanes"><article><span>dev</span><strong>5M</strong><div class="tier-bar small"></div><p>开发环境与低优先级任务</p></article><article><span>standard</span><strong>50M</strong><div class="tier-bar medium"></div><p>普通业务副本</p></article><article><span>premium</span><strong>500M</strong><div class="tier-bar large"></div><p>高吞吐服务</p></article></div>
+        <div class="grid-2 compact-gap"><div class="flat-block green"><h3>精细控制</h3><p class="body">限制绑定 Pod/WorkloadEndpoint，不需要整节点统一一个值。</p></div><div class="flat-block yellow"><h3>模板化</h3><p class="body">在 Deployment/StatefulSet 的 Pod template annotations 中配置，重建副本自动继承。</p></div></div>
+        <div class="slide-number">31</div>
+        <aside class="speaker-copy">
+          <p>QoS 是 per-Pod 粒度，同一节点上的工作负载可以配置不同上限。</p>
+          <p>真实应用一般把 annotation 写在 Deployment 或 StatefulSet 的 spec.template.metadata.annotations 中，让新副本自动继承，而不是手工 patch 单个临时 Pod。</p>
+        </aside>
+      </section>
+
+      <section class="slide" data-section="移除限制" data-title="课程用删除 QoS 组恢复基线">
+        <div class="slide-header"><div><p class="eyebrow">Exercise 7</p><h2>课程用删除 QoS 组恢复基线</h2><div class="rule"></div></div></div>
+        <div class="remove-sequence"><article><span>1</span><h3>删除 QoS Pod 与 Service</h3><pre class="code mini-code">kubectl delete pod iperf-server-qos iperf-client-qos
+kubectl delete service iperf-server-qos</pre></article><i>›</i><article><span>2</span><h3>回到原始基线组</h3><pre class="code mini-code">kubectl exec -it iperf-client -- \
+  iperf3 -c iperf-server -t 5</pre></article><i>›</i><article><span>3</span><h3>吞吐恢复</h3><strong>约 Gbit/s</strong><p>再次证明基线 Pod 从未带 QoS 限制。</p></article></div>
+        <div class="flat-block orange"><p class="body">这一步删除的是独立 QoS 对照组，不会把 annotation 从原始基线 Pod 上“撤掉”，因为基线 Pod 本来就没有这些注解。</p></div>
+        <div class="slide-number">32</div>
+        <aside class="speaker-copy">
+          <p>课程删除 qos 两个 Pod 和对应 Service，然后重新测试原始基线组，吞吐回到 Gbit/s 级别。</p>
+          <p>要准确描述：这不是在同一个 Pod 上移除注解，而是删除 QoS 对照组，再回到从未限速的原始 Pod。</p>
+        </aside>
+      </section>
+
+      <section class="slide" data-section="版本差异" data-title="课程流程与新版 Calico 更新语义">
+        <div class="slide-header"><div><p class="eyebrow">Keep lab behavior and current docs separate</p><h2>课程流程与新版 Calico 更新语义</h2><div class="rule"></div></div></div>
+        <div class="version-compare"><article><span>Lesson 12 · v3.30</span><h3>课程按创建时注解演示</h3><p>独立创建 QoS Pod，移除时直接删除整组对象，再测试原始基线 Pod。</p><code>focus: reproducible lab comparison</code></article><article><span>Calico latest docs</span><h3>原生 Calico 限速支持即时更新</h3><p>最新官方文档说明 Calico 原生注解可立即生效，旧 Kubernetes bandwidth plugin 语义不同。</p><code>qos.projectcalico.org takes precedence</code></article></div>
+        <div class="callout"><strong>演示建议：</strong>本地环境按课程步骤执行；解释生产行为时同时核对正在运行的 Calico 版本与数据面模式。</div>
+        <div class="slide-number">33</div>
+        <aside class="speaker-copy">
+          <p>课程页面写的是 Pod 启动时应用 annotation，并通过删除 QoS Pod 完成恢复测试。我们保留这套可复现实验流程。</p>
+          <p>Calico 最新文档补充：Calico 原生 qos.projectcalico.org 带宽限制支持即时生效，旧 kubernetes.io bandwidth plugin 需要重建。生产环境要按实际版本验证。</p>
+          <p class="note-source">补充来源：<a href="https://docs.tigera.io/calico/latest/networking/configuring/qos-controls">Calico Configure QoS Controls</a></p>
+        </aside>
+      </section>
+
+      <section class="slide" data-section="扩展能力" data-title="新版 Calico QoS 不只限制带宽">
+        <div class="slide-header"><div><p class="eyebrow">Current official annotation set</p><h2>新版 Calico QoS 不只限制带宽</h2><div class="rule"></div></div></div>
+        <table class="data-table feature-table"><thead><tr><th>控制项</th><th>Ingress</th><th>Egress</th><th>用途</th></tr></thead><tbody><tr><td>Bandwidth</td><td><code>ingressBandwidth</code></td><td><code>egressBandwidth</code></td><td>限制平均 bit rate</td></tr><tr><td>Packet rate</td><td><code>ingressPacketRate</code></td><td><code>egressPacketRate</code></td><td>限制 packets/s</td></tr><tr><td>Connections</td><td><code>ingressMaxConnections</code></td><td><code>egressMaxConnections</code></td><td>限制已建立连接数</td></tr><tr><td>DiffServ</td><td>—</td><td><code>dscp</code></td><td>标记 DSCP，供上游设备分类</td></tr></tbody></table>
+        <div class="flat-block red"><p class="body"><strong>课程页面补充表中的 ingressPackets / egressPackets 名称不应直接照搬。</strong>当前官方文档使用 <code>ingressPacketRate</code> 与 <code>egressPacketRate</code>。</p></div>
+        <div class="slide-number">34</div>
+        <aside class="speaker-copy">
+          <p>最新官方文档把 QoS 扩展到 packet rate、连接数和 DSCP。这里使用当前文档中的准确 annotation 名称。</p>
+          <p>课程页面末尾写了 ingressPackets、egressPackets，这和当前官方名称不同。演示课程主实验不受影响，因为主实验只使用 ingressBandwidth、egressBandwidth。</p>
+        </aside>
+      </section>
+
+      <section class="slide" data-section="扩展能力" data-title="Burst 与 Peakrate 分别控制容量和峰值">
+        <div class="slide-header"><div><p class="eyebrow">Current bandwidth tuning knobs</p><h2>Burst 与 Peakrate 分别控制容量和峰值</h2><div class="rule"></div></div></div>
+        <div class="tuning-layout"><pre class="code manifest-code"><span class="key">metadata:</span>
+  <span class="key">annotations:</span>
+    <span class="hot">qos.projectcalico.org/egressBandwidth:</span> <span class="value">"100M"</span>
+    <span class="hot">qos.projectcalico.org/egressBurst:</span> <span class="value">"200M"</span>
+    <span class="hot">qos.projectcalico.org/egressPeakrate:</span> <span class="value">"300M"</span>
+    <span class="hot">qos.projectcalico.org/egressMinburst:</span> <span class="value">"1500"</span></pre><div class="knob-stack"><article><span>Bandwidth</span><strong>长期平均上限</strong></article><article><span>Burst</span><strong>可瞬时消耗的 token 容量</strong></article><article><span>Peakrate</span><strong>突发阶段也不能超过的速率</strong></article><article><span>Minburst</span><strong>peak rate 的最小突发单元</strong></article></div></div>
+        <div class="flat-block yellow"><p class="body">课程未显式配置 burst 或 peak rate。不要从一次 5 秒输出反推通用默认值；默认值与实现语义应按正在使用的版本文档确认。</p></div>
+        <div class="slide-number">35</div>
+        <aside class="speaker-copy">
+          <p>当前官方文档提供 burst、peakrate 和 minburst。Bandwidth 控制长期平均，Burst 控制桶容量，Peakrate 再限制突发阶段的最高速率。</p>
+          <p>课程只配置 10M，没有显式写这些项。生产调优不要把课程首秒结果当成所有版本的默认 burst 公式。</p>
+        </aside>
+      </section>
+
+      <section class="slide" data-section="排障" data-title="沿配置、接口与测量逐层排查">
+        <div class="slide-header"><div><p class="eyebrow">Find the first broken link</p><h2>沿配置、接口与测量逐层排查</h2><div class="rule"></div></div></div>
+        <div class="trouble-grid">
+          <article><span>1</span><h3>Pod annotation</h3><code>kubectl get pod -o yaml</code><p>名称、大小写、单位是否正确。</p></article>
+          <article><span>2</span><h3>Node 与接口</h3><code>kubectl get pod -o wide</code><p>进入正确节点，定位对应 cali 接口。</p></article>
+          <article><span>3</span><h3>tc 状态</h3><code>tc -s qdisc / filter</code><p>看规则、bytes、packets 与 drops。</p></article>
+          <article><span>4</span><h3>测试方向</h3><code>iperf3 / iperf3 -R</code><p>正向和反向对应不同 ingress/egress。</p></article>
+          <article><span>5</span><h3>测试时长</h3><code>-t 30 -i 1</code><p>避开只看首秒 burst 的误判。</p></article>
+          <article><span>6</span><h3>数据面版本</h3><code>calico-node logs</code><p>eBPF 模式还要确认内核与 tcx 支持。</p></article>
+        </div>
+        <div class="slide-number">36</div>
+        <aside class="speaker-copy">
+          <p>排障先看 API 里的 annotation，再看 Pod 在哪个 Node，随后定位接口和 tc 统计。最后才用 iperf 判断稳定速率。</p>
+          <p>当前 Calico 官方文档提醒：eBPF 数据面配置 bandwidth QoS 需要 Linux 6.6 以上的 tcx 支持。课程默认数据面按本地 v3.30 环境执行，不要混用结论。</p>
+        </aside>
+      </section>
+
+      <section class="slide" data-section="现场演示" data-title="十五分钟 QoS 演示顺序">
+        <div class="slide-header"><div><p class="eyebrow">Evidence from API to kernel</p><h2>十五分钟 QoS 演示顺序</h2><div class="rule"></div></div></div>
+        <div class="demo-columns"><ol><li><code>kubectl get nodes,pods -o wide</code><span>确认两节点和基线 Pod</span></li><li><code>iperf3 -c iperf-server -t 5</code><span>记录无约束基线</span></li><li><code>kubectl apply -f tools/03...</code><span>创建 QoS server</span></li><li><code>kubectl apply -f tools/04...</code><span>创建 QoS client</span></li><li><code>kubectl get pod ... | jq</code><span>确认两条 annotation</span></li></ol><ol start="6"><li><code>iperf3 -c iperf-server-qos -t 5</code><span>读逐秒结果</span></li><li><code>iperf3 ... -t 30</code><span>观察持续速率</span></li><li><code>iperf3 ... -t 30 -R</code><span>验证反向路径</span></li><li><code>tc -s qdisc / filter</code><span>查看内核统计</span></li><li><code>./destroy.sh</code><span>清理 topology</span></li></ol></div>
+        <div class="callout"><strong>讲解顺序：</strong>每次先说“正在验证哪条 annotation 和哪个方向”，再执行命令并读稳定区间。</div>
+        <div class="slide-number">37</div>
+        <aside class="speaker-copy">
+          <p>现场演示先跑基线，再创建 QoS 组，验证 annotation，然后运行 5 秒和 30 秒测试。补一个 -R 可以把另外两个方向也覆盖。</p>
+          <p>如果时间允许，在 Pod 所在 Node 查看 tc 统计，让观众看到配置确实落到内核。完成后运行 destroy.sh 清理实验。</p>
+        </aside>
+      </section>
+
+      <section class="slide" data-section="总结与来源" data-title="从 annotation 到稳定吞吐的证据链">
+        <div class="slide-header"><div><p class="eyebrow">Summary and sources</p><h2>从 annotation 到稳定吞吐的证据链</h2><div class="rule"></div></div></div>
+        <div class="summary-row"><article><span>01</span><h3>配置</h3><p>Pod annotation 分别描述 ingress 与 egress 上限。</p></article><article><span>02</span><h3>执行</h3><p>Calico/CNI 将期望状态下沉到 Linux tc 和工作负载接口。</p></article><article><span>03</span><h3>测量</h3><p>iperf3 逐秒结果显示 burst 后稳定在约 10.5 Mbit/s。</p></article><article><span>04</span><h3>边界</h3><p>最大速率限制不等于最小带宽保证，生产语义取决于版本。</p></article></div>
+        <div class="sources"><article><strong>Lesson 12</strong><a href="https://k8snetworking.com/lessons/12-calico-qos">k8snetworking.com/lessons/12-calico-qos</a></article><article><strong>课程仓库</strong><a href="https://github.com/aadhilam/k8-networking-calico-containerlab/tree/master/containerlab/12-calico-qos">github.com/aadhilam/.../12-calico-qos</a></article><article><strong>Calico QoS</strong><a href="https://docs.tigera.io/calico/latest/networking/configuring/qos-controls">docs.tigera.io/.../qos-controls</a></article><article><strong>Linux tc</strong><a href="https://man7.org/linux/man-pages/man8/tc.8.html">man7.org/linux/man-pages/man8/tc.8.html</a></article></div>
+        <div class="slide-number">38</div>
+        <aside class="speaker-copy">
+          <p>最后记住四层：Pod annotation 描述上限，Calico/CNI 下沉配置，Linux tc 处理数据包，iperf3 用逐秒吞吐验证稳定结果。</p>
+          <p>课程最重要的读数不是首秒 299，也不是五秒平均 66，而是突发结束后连续稳定在约 10.5 Mbit/s。</p>
+        </aside>
+      </section>
+    </div>
+
+    <div class="progress-track" aria-hidden="true"><div id="progress-fill"></div></div>
+    <nav class="controls" aria-label="演示控制">
+      <button class="tool-btn" id="prev" type="button" title="上一页" aria-label="上一页">‹</button>
+      <button class="tool-btn" id="next" type="button" title="下一页" aria-label="下一页">›</button>
+      <button class="tool-btn" id="notes-toggle" type="button" title="讲稿" aria-label="显示或隐藏讲稿" aria-pressed="false">N</button>
+      <button class="tool-btn" id="overview-toggle" type="button" title="总览" aria-label="显示或隐藏总览" aria-pressed="false">▦</button>
+      <button class="tool-btn" id="fullscreen" type="button" title="全屏" aria-label="切换全屏">⛶</button>
+    </nav>
+    <button class="notes-backdrop" id="notes-backdrop" type="button" aria-label="关闭讲稿" tabindex="-1"></button>
+    <aside class="notes-panel" id="notes-panel" aria-live="polite" aria-hidden="true"><div class="notes-header"><h2 id="notes-title">讲稿</h2><button class="notes-close" id="notes-close" type="button" title="关闭讲稿" aria-label="关闭讲稿">×</button></div><div id="notes-body"></div></aside>
+    <aside class="overview" id="overview" aria-label="幻灯片总览"></aside>
+  </main>
+  <script src="app.js?v=1"></script>
+</body>
+</html>

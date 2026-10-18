@@ -1,0 +1,672 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="基于 Kubernetes Networking Labs Lesson 11 的 Headless Service、EndpointSlice、CoreDNS 与 Redis StatefulSet 中文动态演示课件">
+  <title>Headless Service：DNS 直达 Pod</title>
+  <link rel="stylesheet" href="styles.css?v=1">
+</head>
+<body>
+  <main class="deck-shell" aria-label="Kubernetes Headless Service HTML 演示文稿">
+    <div id="deck-canvas">
+
+      <section class="slide cover active" data-section="Headless Services" data-title="DNS 直达 Pod">
+        <div class="cover-layout">
+          <div class="cover-copy">
+            <p class="eyebrow">Lesson 11 · CoreDNS · EndpointSlice · StatefulSet</p>
+            <h1>Headless Service<br><span class="yellow-mark">DNS 直达 Pod</span></h1>
+            <p class="lead">没有 Service VIP，也没有 kube-proxy 负载均衡；DNS 直接交付可访问的 Pod 地址。</p>
+            <div class="cover-meta"><span>clusterIP: None</span><span>redis-0.redis-headless</span><span>Calico Pod routing</span></div>
+          </div>
+          <div class="cover-stage is-playing" id="cover-flow" aria-label="客户端查询 Headless Service 并直接连接 Redis Pod">
+            <div class="cover-client"><strong>Client Pod</strong><span>dig redis-headless</span></div>
+            <div class="cover-track query"><i class="packet q">Q</i></div>
+            <div class="cover-dns"><strong>CoreDNS</strong><span>3 个 A 记录</span></div>
+            <div class="cover-track answer"><i class="packet a">A</i></div>
+            <div class="cover-answer"><strong>192.168.202.195</strong><strong>192.168.156.4</strong><strong>192.168.145.10</strong></div>
+            <div class="cover-pods"><article><b>redis-0</b><span>master</span></article><article><b>redis-1</b><span>replica</span></article><article><b>redis-2</b><span>replica</span></article></div>
+            <p class="stage-caption">DNS 负责发现，Calico 负责把流量送到选中的 Pod IP</p>
+          </div>
+        </div>
+        <aside class="speaker-copy">
+          <p>大家好，这一节我们讲 Headless Service。它最关键的变化只有一行：clusterIP: None，但这行配置会把服务发现和流量路径都改掉。</p>
+          <p>普通 ClusterIP 是 DNS 返回一个虚拟 IP，再由 kube-proxy 选后端；Headless Service 是 DNS 直接返回 Pod IP，由客户端决定连谁。拿到 Pod IP 后，真正承载流量的仍然是 Calico 的 Pod 网络。</p>
+          <p class="note-source">主课程：<a href="https://k8snetworking.com/lessons/11-headless-services">https://k8snetworking.com/lessons/11-headless-services</a></p>
+        </aside>
+      </section>
+
+      <section class="slide" data-section="核心概念" data-title="Headless 到底省掉了什么">
+        <div class="slide-header"><div><p class="eyebrow">No VIP, direct discovery</p><h2>Headless 到底省掉了什么</h2><div class="rule"></div></div><span class="command">spec.clusterIP: None</span></div>
+        <div class="three-pillars">
+          <article class="pillar red"><span class="big-symbol">∅</span><h3>没有 Service VIP</h3><p>API 不为它分配 ClusterIP，客户端不会把业务流量发往一个虚拟地址。</p></article>
+          <article class="pillar yellow"><span class="big-symbol">DNS</span><h3>返回 Endpoint 地址</h3><p>CoreDNS 根据 EndpointSlice 返回一组 Pod IP，而不是一个 Service IP。</p></article>
+          <article class="pillar green"><span class="big-symbol">↗</span><h3>客户端直接连接</h3><p>选中地址后直接走 Pod 路由；负载选择留给客户端或上层系统。</p></article>
+        </div>
+        <div class="callout"><strong>一句话：</strong>Headless Service 不是“没有 Service 对象”，而是“这个 Service 不提供 VIP 代理入口”。</div>
+        <div class="slide-number">02</div>
+        <aside class="speaker-copy">
+          <p>Headless 不是把 Service 删除了。Service 对象仍然存在，selector、port、DNS 名称也都存在，只是没有 ClusterIP。</p>
+          <p>因此它仍然能驱动 EndpointSlice 和 DNS 服务发现，但业务流量不再经过 Service VIP。客户端从 DNS 结果里选一个 Pod IP，然后直接连接。</p>
+        </aside>
+      </section>
+
+      <section class="slide" data-section="核心概念" data-title="ClusterIP 与 Headless 的两条路径">
+        <div class="slide-header"><div><p class="eyebrow">Same selector, different datapath</p><h2>ClusterIP 与 Headless 的两条路径</h2><div class="rule"></div></div><button class="action-btn" data-replay="#compare-flow" type="button" title="重放动画" aria-label="重放路径对比">↻</button></div>
+        <div class="compare-flow is-playing" id="compare-flow">
+          <div class="flow-label cluster"><strong>ClusterIP</strong><span>平台侧选后端</span></div><div class="flow-box">DNS</div><div class="flow-link"><i></i></div><div class="flow-box vip">10.96.204.67</div><div class="flow-link"><i></i></div><div class="flow-box pods">Pod A / Pod B</div>
+          <div class="flow-label headless"><strong>Headless</strong><span>客户端拿到所有地址</span></div><div class="flow-box">DNS</div><div class="flow-link"><i></i></div><div class="flow-box records">A: .156.5<br>A: .202.196</div><div class="flow-link"><i></i></div><div class="flow-box pods">Pod A / Pod B</div>
+        </div>
+        <div class="grid-2 compact-gap"><div class="flat-block blue"><h3>ClusterIP</h3><p class="body">kube-proxy 编程 iptables/IPVS，把 VIP 流量 DNAT 到 Endpoint。</p></div><div class="flat-block green"><h3>Headless</h3><p class="body">没有 VIP 和对应 NAT 规则，连接直接命中 Pod IP。</p></div></div>
+        <div class="slide-number">03</div>
+        <aside class="speaker-copy">
+          <p>这两条路径使用相同的 selector，后端甚至可以是同一组 Pod，但前半段完全不同。</p>
+          <p>ClusterIP 的客户端只看到 VIP，后端选择由 kube-proxy 数据面完成。Headless 的客户端看到一组地址，自己选择后端；所以这里没有免费的平台侧负载均衡。</p>
+        </aside>
+      </section>
+
+      <section class="slide" data-section="适用场景" data-title="什么时候需要看见具体 Pod">
+        <div class="slide-header"><div><p class="eyebrow">Identity matters</p><h2>什么时候需要看见具体 Pod</h2><div class="rule"></div></div></div>
+        <div class="use-case-grid">
+          <article><span class="case-icon">DB</span><div><h3>有状态数据库</h3><p>客户端要区分 primary、replica 或 shard。</p><small>Redis · MySQL · PostgreSQL · Cassandra</small></div></article>
+          <article><span class="case-icon">P2P</span><div><h3>成员发现</h3><p>节点要建立固定的对等关系和集群拓扑。</p><small>Kafka · etcd · Elasticsearch · ZooKeeper</small></div></article>
+          <article><span class="case-icon">LB</span><div><h3>客户端负载均衡</h3><p>SDK 自己做健康检查、重试和地址选择。</p><small>gRPC client-side balancing</small></div></article>
+          <article><span class="case-icon">MESH</span><div><h3>精细流量控制</h3><p>代理或控制面需要直接识别每个工作负载实例。</p><small>部分 Service Mesh 场景</small></div></article>
+        </div>
+        <div class="flat-block orange"><p class="body"><strong>不适合默认套用：</strong>普通无状态 Web 服务通常更适合 ClusterIP，因为平台侧负载均衡更简单。</p></div>
+        <div class="slide-number">04</div>
+        <aside class="speaker-copy">
+          <p>当“连接哪个实例”本身有业务含义时，就需要看见具体 Pod。数据库主从、分片、成员发现都是典型场景。</p>
+          <p>如果应用只想访问任意一个健康副本，ClusterIP 通常更省心。Headless 是把地址选择权交给客户端，同时也把重解析、重试和故障处理责任交给客户端。</p>
+        </aside>
+      </section>
+
+      <section class="slide" data-section="实验环境" data-title="Lesson 11 的本地拓扑">
+        <div class="slide-header"><div><p class="eyebrow">containerlab/11-headless-services</p><h2>Lesson 11 的本地拓扑</h2><div class="rule"></div></div><span class="command">kindest/node:v1.28.0</span></div>
+        <div class="grid-2">
+          <table class="data-table"><thead><tr><th>对象</th><th>课程值</th><th>用途</th></tr></thead><tbody><tr><td>Kind 节点</td><td>3</td><td>control-plane + 2 workers</td></tr><tr><td>Pod CIDR</td><td>192.168.0.0/16</td><td>Calico IPPool</td></tr><tr><td>Service CIDR</td><td>10.96.0.0/16</td><td>ClusterIP 地址段</td></tr><tr><td>Calico</td><td>3.30.0</td><td>Pod 路由与策略</td></tr><tr><td>封装</td><td>VXLANCrossSubnet</td><td>跨三层子网时封装</td></tr><tr><td>IPAM block</td><td>/26</td><td>按节点分配地址块</td></tr></tbody></table>
+          <pre class="code"><span class="comment"># headless-services-no-cni.yaml</span>
+<span class="key">networking:</span>
+  <span class="key">disableDefaultCNI:</span> <span class="hot">true</span>
+  <span class="key">podSubnet:</span> <span class="value">"192.168.0.0/16"</span>
+  <span class="key">serviceSubnet:</span> <span class="value">"10.96.0.0/16"</span>
+
+<span class="comment"># custom-resources.yaml</span>
+<span class="key">cidr:</span> <span class="value">192.168.0.0/16</span>
+<span class="key">blockSize:</span> <span class="value">26</span>
+<span class="key">encapsulation:</span> <span class="hot">VXLANCrossSubnet</span>
+<span class="key">natOutgoing:</span> <span class="value">Enabled</span></pre>
+        </div>
+        <div class="slide-number">05</div>
+        <aside class="speaker-copy">
+          <p>实验仍然是三节点 Kind，禁用默认 CNI，再安装 Calico 3.30.0。Pod 地址来自 192.168.0.0/16，Service 地址来自 10.96.0.0/16。</p>
+          <p>Headless Service 不用 Service CIDR，但对照组 nginx-clusterip 会从 10.96.0.0/16 获得 VIP。拿到 Pod IP 之后，跨节点访问仍由 Calico 完成。</p>
+        </aside>
+      </section>
+
+      <section class="slide" data-section="部署" data-title="deploy.sh 做了什么">
+        <div class="slide-header"><div><p class="eyebrow">Build the lab in five stages</p><h2>deploy.sh 做了什么</h2><div class="rule"></div></div></div>
+        <div class="runway five">
+          <article><span>01</span><h3>重建 topology</h3><code>containerlab deploy</code></article><i>›</i>
+          <article><span>02</span><h3>导出 kubeconfig</h3><code>kind get kubeconfig</code></article><i>›</i>
+          <article><span>03</span><h3>安装 Calico</h3><code>v3.30.0 operator</code></article><i>›</i>
+          <article><span>04</span><h3>等待可用</h3><code>tigerastatus</code></article><i>›</i>
+          <article><span>05</span><h3>部署工具</h3><code>tools/*.yaml</code></article>
+        </div>
+        <pre class="code command-code">cd containerlab/11-headless-services
+chmod +x deploy.sh
+./deploy.sh
+
+export KUBECONFIG=$(pwd)/headless-services.kubeconfig</pre>
+        <div class="grid-3 compact-gap"><div class="flat-block blue"><h3>Redis</h3><p class="small">StatefulSet + Headless Service</p></div><div class="flat-block yellow"><h3>Nginx</h3><p class="small">Deployment + 两种 Service</p></div><div class="flat-block green"><h3>Multitool</h3><p class="small">每个 Node 一个测试 Pod</p></div></div>
+        <div class="slide-number">06</div>
+        <aside class="speaker-copy">
+          <p>deploy.sh 会先清理旧 topology，再创建 Kind，导出独立 kubeconfig，安装 operator、Calico 自定义资源和 calicoctl，最后应用 tools 目录的三个清单。</p>
+          <p>这套脚本会等待 TigeraStatus 中 apiserver 和 calico 都 Available。演示前不要只看脚本结束，要继续核对节点、Pod、Service 和 EndpointSlice。</p>
+        </aside>
+      </section>
+
+      <section class="slide" data-section="环境验证" data-title="三台 Kind 节点先全部 Running">
+        <div class="slide-header"><div><p class="eyebrow">Step 1 · ContainerLab</p><h2>三台 Kind 节点先全部 Running</h2><div class="rule"></div></div></div>
+        <div class="node-row">
+          <article><span class="node-role">control-plane</span><h3>172.18.0.3</h3><code>headless-services-control-plane</code><b>running</b></article>
+          <article><span class="node-role">worker</span><h3>172.18.0.2</h3><code>headless-services-worker</code><b>running</b></article>
+          <article><span class="node-role">worker</span><h3>172.18.0.4</h3><code>headless-services-worker2</code><b>running</b></article>
+        </div>
+        <pre class="code command-code">containerlab inspect -t headless-services.clab.yaml</pre>
+        <div class="callout"><strong>先验证 underlay：</strong>Node 不通时，后续 DNS、Redis 复制与跨节点 Pod 访问都会同时表现异常。</div>
+        <div class="slide-number">07</div>
+        <aside class="speaker-copy">
+          <p>第一步照课程先看 ContainerLab。示例地址分别是 172.18.0.3、.2 和 .4，现场地址可能不同，以 inspect 输出为准。</p>
+          <p>这一步确认的是容器节点和 underlay。后面的 Headless DNS 能给出正确 Pod IP，并不代表网络一定可达，所以底层健康要先确认。</p>
+        </aside>
+      </section>
+
+      <section class="slide" data-section="环境验证" data-title="工作负载与 Service 对齐">
+        <div class="slide-header"><div><p class="eyebrow">Step 2 · Pods and Services</p><h2>工作负载与 Service 对齐</h2><div class="rule"></div></div></div>
+        <div class="grid-2 wide-gap">
+          <div><h3>Pod 分布</h3><table class="data-table compact"><thead><tr><th>工作负载</th><th>副本</th><th>身份</th></tr></thead><tbody><tr><td>multitool</td><td>3</td><td>每节点一个</td></tr><tr><td>nginx Deployment</td><td>2</td><td>随机后缀</td></tr><tr><td>redis StatefulSet</td><td>3</td><td>redis-0/1/2</td></tr></tbody></table><pre class="code mini-code">kubectl get pods -o wide
+kubectl get statefulset</pre></div>
+          <div><h3>Service 结果</h3><table class="data-table compact"><thead><tr><th>名称</th><th>CLUSTER-IP</th><th>端口</th></tr></thead><tbody><tr><td>nginx-clusterip</td><td>10.96.204.67</td><td>80</td></tr><tr><td>nginx-headless</td><td class="hot">None</td><td>80</td></tr><tr><td>redis-headless</td><td class="hot">None</td><td>6379</td></tr></tbody></table><pre class="code mini-code">kubectl get services</pre></div>
+        </div>
+        <div class="flat-block yellow"><p class="body">课程中的 Pod IP、Service VIP 和随机 Pod 后缀是示例值；现场必须以自己的输出为准。</p></div>
+        <div class="slide-number">08</div>
+        <aside class="speaker-copy">
+          <p>这里同时看 Pod 和 Service。Nginx Deployment 是两个随机后缀 Pod，Redis StatefulSet 是 redis-0、redis-1、redis-2 三个固定序号。</p>
+          <p>Service 列表里最直观的证据是 CLUSTER-IP：nginx-clusterip 有 10.96.204.67，两个 headless 都显示 None。</p>
+        </aside>
+      </section>
+
+      <section class="slide" data-section="清单" data-title="Headless Service 只改关键一行">
+        <div class="slide-header"><div><p class="eyebrow">Service manifest</p><h2>Headless Service 只改关键一行</h2><div class="rule"></div></div><span class="command">redis-headless</span></div>
+        <div class="split-55">
+          <pre class="code manifest-code"><span class="key">apiVersion:</span> v1
+<span class="key">kind:</span> Service
+<span class="key">metadata:</span>
+  <span class="key">name:</span> redis-headless
+  <span class="key">namespace:</span> default
+<span class="key">spec:</span>
+  <span class="key">ports:</span>
+  - <span class="key">name:</span> redis
+    <span class="key">port:</span> <span class="value">6379</span>
+  <span class="key">clusterIP:</span> <span class="hot">None</span>
+  <span class="key">selector:</span>
+    <span class="key">app:</span> redis</pre>
+          <div class="annotation-stack"><article><span>1</span><div><h3>selector 仍然重要</h3><p>它决定 EndpointSlice 收录哪些 Pod。</p></div></article><article><span>2</span><div><h3>port 仍然存在</h3><p>命名端口还可生成 SRV 记录。</p></div></article><article class="highlight"><span>3</span><div><h3>clusterIP: None</h3><p>告诉 Kubernetes 不分配 VIP。</p></div></article></div>
+        </div>
+        <div class="slide-number">09</div>
+        <aside class="speaker-copy">
+          <p>Headless Service 的清单并不神秘，关键就是 clusterIP: None。selector 仍然选择 Redis Pod，port 仍然描述服务端口。</p>
+          <p>Service controller 根据 selector 维护 EndpointSlice，CoreDNS再根据这个对象生成记录。也就是说，省掉的是 VIP 数据面，不是服务发现控制面。</p>
+        </aside>
+      </section>
+
+      <section class="slide" data-section="对照组" data-title="同一组 Nginx，两种入口">
+        <div class="slide-header"><div><p class="eyebrow">Deployment with two Services</p><h2>同一组 Nginx，两种入口</h2><div class="rule"></div></div></div>
+        <div class="selector-lab">
+          <div class="selector-source"><h3>Deployment</h3><code>app: nginx</code><span>replicas: 2</span></div>
+          <div class="selector-arrow">selector</div>
+          <div class="selector-services"><article class="blue"><h3>nginx-clusterip</h3><strong>10.96.204.67</strong><span>type: ClusterIP</span></article><article class="green"><h3>nginx-headless</h3><strong>None</strong><span>clusterIP: None</span></article></div>
+          <div class="selector-arrow">same endpoints</div>
+          <div class="selector-pods"><article><h3>Nginx Pod A</h3><code>192.168.156.5</code></article><article><h3>Nginx Pod B</h3><code>192.168.202.196</code></article></div>
+        </div>
+        <div class="callout"><strong>实验价值：</strong>后端完全相同，所以 DNS 和 iptables 的差异只来自 Service 模式。</div>
+        <div class="slide-number">10</div>
+        <aside class="speaker-copy">
+          <p>课程特意让两个 Service 使用同一个 app: nginx selector，因此后端 Pod 完全一样。</p>
+          <p>nginx-clusterip 有 VIP，nginx-headless 没有 VIP。这样我们对比 DNS 输出和 iptables 时，变量只有 Service 模式，不会混入不同工作负载的影响。</p>
+        </aside>
+      </section>
+
+      <section class="slide" data-section="StatefulSet" data-title="稳定身份来自 serviceName 与 ordinal">
+        <div class="slide-header"><div><p class="eyebrow">Redis StatefulSet</p><h2>稳定身份来自 serviceName 与 ordinal</h2><div class="rule"></div></div></div>
+        <div class="grid-2">
+          <pre class="code manifest-code"><span class="key">apiVersion:</span> apps/v1
+<span class="key">kind:</span> StatefulSet
+<span class="key">metadata:</span>
+  <span class="key">name:</span> redis
+<span class="key">spec:</span>
+  <span class="key">serviceName:</span> <span class="hot">"redis-headless"</span>
+  <span class="key">replicas:</span> <span class="value">3</span>
+  <span class="key">selector:</span>
+    <span class="key">matchLabels:</span>
+      <span class="key">app:</span> redis</pre>
+          <div class="identity-formula"><p class="formula"><span>Pod 名</span><b>redis-0</b></p><p class="plus">+</p><p class="formula"><span>Service 域</span><b>redis-headless.default.svc.cluster.local</b></p><p class="equals">=</p><p class="formula result"><span>稳定 FQDN</span><b>redis-0.redis-headless.default.svc.cluster.local</b></p></div>
+        </div>
+        <div class="flat-block green"><p class="body">Pod 被重新调度后 IP 可以变化，但 ordinal、hostname 和 DNS 名称继续保持稳定。</p></div>
+        <div class="slide-number">11</div>
+        <aside class="speaker-copy">
+          <p>StatefulSet 的 serviceName 必须指向治理它网络域的 Headless Service。这里 serviceName 是 redis-headless，和前面的 Service 名称一致。</p>
+          <p>StatefulSet 名 redis 加 ordinal 形成 Pod 名 redis-0。再拼上治理 Service 的域名，就得到稳定的 Pod FQDN。IP 可以换，名字不换。</p>
+        </aside>
+      </section>
+
+      <section class="slide" data-section="DNS 名称" data-title="三个层级，回答三个问题">
+        <div class="slide-header"><div><p class="eyebrow">Service, namespace, pod identity</p><h2>三个层级，回答三个问题</h2><div class="rule"></div></div></div>
+        <div class="name-ladder">
+          <article><span class="ladder-index">01</span><div><h3><code>redis-headless</code></h3><p>同 namespace 下，Redis 这一组有哪些 Endpoint？</p></div><b>多条 A 记录</b></article>
+          <article><span class="ladder-index">02</span><div><h3><code>redis-headless.default</code></h3><p>明确指定 default namespace 中的 Redis 组。</p></div><b>多条 A 记录</b></article>
+          <article><span class="ladder-index">03</span><div><h3><code>redis-0.redis-headless</code></h3><p>明确指定这个 StatefulSet 中序号 0 的 Pod。</p></div><b>单个 Pod IP</b></article>
+        </div>
+        <div class="callout"><strong>完整形式：</strong><code>&lt;pod&gt;.&lt;service&gt;.&lt;namespace&gt;.svc.cluster.local</code></div>
+        <div class="slide-number">12</div>
+        <aside class="speaker-copy">
+          <p>服务名查询回答“这一组有哪些实例”，Pod 加服务名查询回答“我要哪一个实例”。</p>
+          <p>同 namespace 可以省略后缀，跨 namespace 至少要带 namespace。正式配置里常用完整 FQDN，能减少 search list 和 ndots 带来的歧义。</p>
+        </aside>
+      </section>
+
+      <section class="slide" data-section="EndpointSlice" data-title="DNS 的事实来源是 EndpointSlice">
+        <div class="slide-header"><div><p class="eyebrow">discovery.k8s.io/v1</p><h2>DNS 的事实来源是 EndpointSlice</h2><div class="rule"></div></div></div>
+        <div class="object-chain">
+          <article><span>1</span><h3>Pod labels</h3><code>app: redis</code></article><i>›</i><article><span>2</span><h3>Service selector</h3><code>app: redis</code></article><i>›</i><article><span>3</span><h3>EndpointSlice</h3><code>addresses + hostname</code></article><i>›</i><article><span>4</span><h3>CoreDNS</h3><code>A / AAAA / SRV</code></article>
+        </div>
+        <div class="grid-2"><pre class="code mini-code">kubectl get endpointslice \
+  -l kubernetes.io/service-name=redis-headless \
+  -o yaml</pre><div class="flat-block yellow"><h3>为什么可扩展</h3><p class="body">大量 Endpoint 可以拆分到多个 Slice；每个 Endpoint 还包含 readiness、hostname、nodeName、zone 等元数据。</p></div></div>
+        <div class="callout"><strong>精确表述：</strong>EndpointSlice controller 根据 Service selector 维护后端；CoreDNS watch EndpointSlice 并组织 DNS 应答。</div>
+        <div class="slide-number">13</div>
+        <aside class="speaker-copy">
+          <p>DNS 不是直接扫描 Pod。控制器先把符合 selector 的 Pod 写进 EndpointSlice，CoreDNS watch 这些 Slice。</p>
+          <p>对 Headless Service，CoreDNS 从 EndpointSlice 读取地址，返回 Pod IP。对 StatefulSet，Slice 中的 hostname 还让 CoreDNS 能构造每个 Pod 的稳定 DNS 记录。</p>
+        </aside>
+      </section>
+
+      <section class="slide" data-section="EndpointSlice" data-title="StatefulSet 多了关键的 hostname">
+        <div class="slide-header"><div><p class="eyebrow">Compare the endpoint metadata</p><h2>StatefulSet 多了关键的 hostname</h2><div class="rule"></div></div></div>
+        <div class="yaml-compare">
+          <article><h3>Redis StatefulSet</h3><pre class="code"><span class="key">addresses:</span>
+- <span class="value">192.168.202.195</span>
+<span class="key">conditions:</span>
+  <span class="key">ready:</span> true
+<span class="key">hostname:</span> <span class="hot">redis-0</span>
+<span class="key">nodeName:</span> headless-services-worker
+<span class="key">targetRef:</span>
+  <span class="key">name:</span> redis-0</pre><p>可生成 <code>redis-0.redis-headless...</code></p></article>
+          <article><h3>Nginx Deployment</h3><pre class="code"><span class="key">addresses:</span>
+- <span class="value">192.168.156.5</span>
+<span class="key">conditions:</span>
+  <span class="key">ready:</span> true
+<span class="comment"># no hostname field</span>
+<span class="key">nodeName:</span> headless-services-worker2
+<span class="key">targetRef:</span>
+  <span class="key">name:</span> nginx-deployment-...</pre><p>服务名可返回 Pod IP，但没有固定 ordinal 名称。</p></article>
+        </div>
+        <div class="slide-number">14</div>
+        <aside class="speaker-copy">
+          <p>这页是整节的关键证据。Redis Endpoint 中有 hostname: redis-0，Nginx Deployment 的 Endpoint 没有稳定 hostname。</p>
+          <p>所以两种 Headless Service 都能让服务名返回 Pod IP，但 StatefulSet 还能得到 redis-0.redis-headless 这种稳定、可预测的单 Pod 名称。</p>
+        </aside>
+      </section>
+
+      <section class="slide" data-section="控制面" data-title="从 Pod 到 DNS 记录的完整链路">
+        <div class="slide-header"><div><p class="eyebrow">Five-stage reconciliation</p><h2>从 Pod 到 DNS 记录的完整链路</h2><div class="rule"></div></div><button class="action-btn" data-replay="#control-flow" type="button" title="重放动画" aria-label="重放控制面动画">↻</button></div>
+        <div class="fixed-pipeline is-playing" id="control-flow">
+          <article><span>1</span><h3>StatefulSet</h3><p>创建 redis-0/1/2</p></article><div class="pipe"><i></i></div>
+          <article><span>2</span><h3>Headless Service</h3><p>selector + clusterIP None</p></article><div class="pipe"><i></i></div>
+          <article><span>3</span><h3>EndpointSlice</h3><p>IP + hostname + ready</p></article><div class="pipe"><i></i></div>
+          <article><span>4</span><h3>CoreDNS</h3><p>watch 并生成应答</p></article><div class="pipe"><i></i></div>
+          <article><span>5</span><h3>Client</h3><p>拿到 Pod 地址集合</p></article>
+        </div>
+        <div class="evidence-strip"><span>对象期望</span><span>持续 reconcile</span><span>动态发现</span><span>没有静态 hosts 表</span></div>
+        <div class="slide-number">15</div>
+        <aside class="speaker-copy">
+          <p>把完整链路串起来：StatefulSet 先创建带 ordinal 的 Pod，Service 用 selector 定义后端，控制器把地址和 hostname 写入 EndpointSlice，CoreDNS 再 watch 这个对象。</p>
+          <p>整个过程是控制器持续 reconcile，不是创建时写死一张 hosts 表。Pod 变化会推动 EndpointSlice 和 DNS 答案变化。</p>
+        </aside>
+      </section>
+
+      <section class="slide" data-section="DNS 对比" data-title="普通 ClusterIP 只返回一个 VIP">
+        <div class="slide-header"><div><p class="eyebrow">Exercise 3.1</p><h2>普通 ClusterIP 只返回一个 VIP</h2><div class="rule"></div></div></div>
+        <div class="terminal-layout"><pre class="code terminal"><span class="prompt">$</span> dig +search nginx-clusterip
+
+;; QUESTION SECTION:
+;nginx-clusterip.default.svc.cluster.local. IN A
+
+;; ANSWER SECTION:
+nginx-clusterip.default.svc.cluster.local. 30 IN A <span class="hot">10.96.204.67</span></pre><div class="answer-explain"><span class="answer-count">1</span><h3>客户端只看到 Service VIP</h3><p class="body">后面有多少 Pod 都不会改变这个 DNS 答案。</p><div class="flat-block blue"><p class="small">kube-proxy 再把到 VIP 的连接转发到一个后端。</p></div></div></div>
+        <div class="slide-number">16</div>
+        <aside class="speaker-copy">
+          <p>先做对照组。dig +search nginx-clusterip 返回 10.96.204.67，TTL 示例是 30 秒。</p>
+          <p>客户端只知道一个 VIP，不知道后面是两个 Nginx Pod。之后的后端选择由 kube-proxy 编程的 Service 数据面处理。</p>
+        </aside>
+      </section>
+
+      <section class="slide" data-section="DNS 对比" data-title="Deployment Headless 返回全部 Pod IP">
+        <div class="slide-header"><div><p class="eyebrow">Exercise 3.2</p><h2>Deployment Headless 返回全部 Pod IP</h2><div class="rule"></div></div></div>
+        <div class="terminal-layout"><pre class="code terminal"><span class="prompt">$</span> dig +search nginx-headless
+
+;; QUESTION SECTION:
+;nginx-headless.default.svc.cluster.local. IN A
+
+;; ANSWER SECTION:
+nginx-headless.default.svc.cluster.local. 30 IN A <span class="cool">192.168.156.5</span>
+nginx-headless.default.svc.cluster.local. 30 IN A <span class="cool">192.168.202.196</span></pre><div class="answer-explain"><span class="answer-count two">2</span><h3>客户端看见两个实例</h3><p class="body">没有 VIP。客户端、SDK 或代理必须决定连接哪一个。</p><div class="flat-block green"><p class="small">Deployment Pod 地址会随重建变化，服务名答案会随 EndpointSlice 更新。</p></div></div></div>
+        <div class="slide-number">17</div>
+        <aside class="speaker-copy">
+          <p>换成 nginx-headless，DNS 答案变成两个 Pod IP：192.168.156.5 和 192.168.202.196。现场 IP 会不同。</p>
+          <p>这里没有稳定的单 Pod 名称。Deployment Pod 名包含随机后缀，适合展示“服务名返回所有地址”，不适合作为稳定成员标识。</p>
+        </aside>
+      </section>
+
+      <section class="slide" data-section="DNS 对比" data-title="Redis 服务名返回三个 StatefulSet Pod">
+        <div class="slide-header"><div><p class="eyebrow">Exercise 3.3</p><h2>Redis 服务名返回三个 StatefulSet Pod</h2><div class="rule"></div></div></div>
+        <div class="terminal-layout"><pre class="code terminal"><span class="prompt">$</span> dig +search redis-headless
+
+;; ANSWER SECTION:
+redis-headless.default.svc.cluster.local. 30 IN A <span class="cool">192.168.202.195</span>
+redis-headless.default.svc.cluster.local. 30 IN A <span class="cool">192.168.156.4</span>
+redis-headless.default.svc.cluster.local. 30 IN A <span class="cool">192.168.145.10</span></pre><div class="answer-explain"><span class="answer-count three">3</span><h3>一个组名，三个成员</h3><p class="body">用于发现全集；精确角色访问还要使用 pod-specific DNS。</p><div class="flat-block yellow"><p class="small">DNS 返回顺序不应被当作主从角色或永久排序。</p></div></div></div>
+        <div class="slide-number">18</div>
+        <aside class="speaker-copy">
+          <p>查询 redis-headless 会得到三个 Redis Pod IP。这个名称适合发现整个成员集合。</p>
+          <p>不要把 DNS 返回的第一条地址当成 master。角色应该由稳定 Pod 名、应用协议或专门的发现机制决定，这个实验用 redis-0 约定为 master。</p>
+        </aside>
+      </section>
+
+      <section class="slide" data-section="单 Pod DNS" data-title="Pod-specific DNS 精确落到一个实例">
+        <div class="slide-header"><div><p class="eyebrow">Exercise 4.1</p><h2>Pod-specific DNS 精确落到一个实例</h2><div class="rule"></div></div></div>
+        <div class="pod-dns-grid">
+          <article><span class="ordinal">0</span><h3>redis-0.redis-headless</h3><code>192.168.202.195</code><b>master</b></article>
+          <article><span class="ordinal">1</span><h3>redis-1.redis-headless</h3><code>192.168.156.4</code><b>replica</b></article>
+          <article><span class="ordinal">2</span><h3>redis-2.redis-headless</h3><code>192.168.145.10</code><b>replica</b></article>
+        </div>
+        <pre class="code command-code">dig +search redis-0.redis-headless
+dig +search redis-1.redis-headless
+dig +search redis-2.redis-headless</pre>
+        <div class="callout"><strong>稳定的是 DNS 身份，不是 IP：</strong>Pod 重建后地址可变，名称仍指向新的当前地址。</div>
+        <div class="slide-number">19</div>
+        <aside class="speaker-copy">
+          <p>这里从组级发现切换到成员级寻址。redis-0.redis-headless 只返回 redis-0 当前的 Pod IP，其他两个名称同理。</p>
+          <p>需要强调：稳定的是名称和 ordinal，不是这个示例 IP。Pod 重建后 CoreDNS 会根据更新后的 EndpointSlice 返回新地址。</p>
+        </aside>
+      </section>
+
+      <section class="slide" data-section="DNS 记录" data-title="Deployment 与 StatefulSet 的记录矩阵">
+        <div class="slide-header"><div><p class="eyebrow">What names are guaranteed here</p><h2>Deployment 与 StatefulSet 的记录矩阵</h2><div class="rule"></div></div></div>
+        <table class="data-table matrix"><thead><tr><th>查询名称</th><th>ClusterIP Service</th><th>Headless + Deployment</th><th>Headless + StatefulSet</th></tr></thead><tbody><tr><td><code>&lt;service&gt;.&lt;ns&gt;</code></td><td>Service VIP</td><td>全部 Pod IP</td><td>全部 Pod IP</td></tr><tr><td><code>&lt;pod&gt;.&lt;service&gt;.&lt;ns&gt;</code></td><td>不提供此稳定身份</td><td>无固定 ordinal 身份</td><td class="good-cell">特定 Pod IP</td></tr><tr><td>稳定实例名称</td><td>否</td><td>否</td><td class="good-cell">是</td></tr><tr><td>平台侧流量选择</td><td class="blue-cell">kube-proxy</td><td>客户端</td><td>客户端/应用协议</td></tr></tbody></table>
+        <div class="flat-block orange"><p class="body">“Headless 一定有单 Pod DNS”并不准确；课程中单 Pod 稳定记录依赖 StatefulSet 写入的 hostname/subdomain 身份。</p></div>
+        <div class="slide-number">20</div>
+        <aside class="speaker-copy">
+          <p>这一页把最容易混淆的点放在一起。Headless Service 一定能让服务名解析到 Endpoint 地址，但稳定的 pod-specific 名称还需要稳定 hostname 身份。</p>
+          <p>在本实验里，StatefulSet 自动提供 ordinal hostname；Deployment 没有这个稳定身份，因此不要照搬 redis-0 这种用法。</p>
+        </aside>
+      </section>
+
+      <section class="slide" data-section="DNS 记录" data-title="A、AAAA 与 SRV 分别告诉你什么">
+        <div class="slide-header"><div><p class="eyebrow">Address and service records</p><h2>A、AAAA 与 SRV 分别告诉你什么</h2><div class="rule"></div></div></div>
+        <div class="record-cards">
+          <article><span>A</span><h3>IPv4 地址</h3><code>redis-headless → 192.168.x.x</code><p>课程实验主要看到这一类。</p></article>
+          <article><span>AAAA</span><h3>IPv6 地址</h3><code>service → Pod IPv6</code><p>双栈/IPv6 集群按地址族返回。</p></article>
+          <article><span>SRV</span><h3>端口 + 主机名</h3><code>_redis._tcp.redis-headless...</code><p>命名端口会生成 SRV 记录；Headless 可返回每个 Pod 目标。</p></article>
+        </div>
+        <pre class="code command-code">dig SRV _redis._tcp.redis-headless.default.svc.cluster.local</pre>
+        <div class="slide-number">21</div>
+        <aside class="speaker-copy">
+          <p>A 记录返回 IPv4，AAAA 返回 IPv6。SRV 记录同时携带端口和目标主机名，前提是 Service port 有名称，这里端口名就是 redis。</p>
+          <p>应用是否真正使用 SRV 取决于客户端库。不能因为 DNS 存在 SRV 记录，就假设普通 Redis 客户端会自动发现整个集群。</p>
+        </aside>
+      </section>
+
+      <section class="slide" data-section="StatefulSet" data-title="ordinal 让生命周期可预测">
+        <div class="slide-header"><div><p class="eyebrow">Ordered identity</p><h2>ordinal 让生命周期可预测</h2><div class="rule"></div></div><button class="action-btn" data-replay="#ordinal-flow" type="button" title="重放动画" aria-label="重放序号动画">↻</button></div>
+        <div class="ordinal-flow is-playing" id="ordinal-flow">
+          <div class="ordinal-row create"><strong>创建</strong><article><span>0</span>redis-0</article><i>›</i><article><span>1</span>redis-1</article><i>›</i><article><span>2</span>redis-2</article></div>
+          <div class="ordinal-row delete"><strong>缩容</strong><article><span>2</span>redis-2</article><i>›</i><article><span>1</span>redis-1</article><i>›</i><article><span>0</span>redis-0</article></div>
+        </div>
+        <div class="grid-3 compact-gap"><div class="flat-block green"><h3>hostname</h3><p class="small">Pod 名与主机名一致。</p></div><div class="flat-block yellow"><h3>role convention</h3><p class="small">实验约定 0 为 master。</p></div><div class="flat-block blue"><h3>stable storage</h3><p class="small">真实 StatefulSet 常与 PVC 组合。</p></div></div>
+        <div class="slide-number">22</div>
+        <aside class="speaker-copy">
+          <p>默认 OrderedReady 策略下，StatefulSet 按 0、1、2 创建，缩容时从最高序号开始删除。课程用这个序号直接决定 Redis 角色。</p>
+          <p>redis-0 当 master 是这份实验清单的约定，不是 Kubernetes 自动选主。生产 Redis 高可用还需要 Sentinel、Cluster 或其他选举机制。</p>
+        </aside>
+      </section>
+
+      <section class="slide" data-section="Redis 启动" data-title="同一份脚本按 ordinal 分支">
+        <div class="slide-header"><div><p class="eyebrow">${HOSTNAME##*-}</p><h2>同一份脚本按 ordinal 分支</h2><div class="rule"></div></div></div>
+        <div class="branch-diagram">
+          <div class="branch-start"><code>ORDINAL=${HOSTNAME##*-}</code></div>
+          <div class="branch-choice"><strong>ORDINAL == 0 ?</strong></div>
+          <div class="branch-results"><article class="master"><span>YES</span><h3>启动 MASTER</h3><code>redis-server</code><p>接受写入并对外公布自己的稳定 DNS 名。</p></article><article class="replica"><span>NO</span><h3>启动 REPLICA</h3><code>--replicaof redis-0.redis-headless... 6379</code><p>先等待 master DNS 可解析且 ping 成功。</p></article></div>
+        </div>
+        <div class="flat-block yellow"><p class="body">initContainer 避免 replica 在 redis-0 可达前启动主容器，但仍要考虑 DNS 负缓存与就绪发布策略。</p></div>
+        <div class="slide-number">23</div>
+        <aside class="speaker-copy">
+          <p>脚本从 HOSTNAME 最后一个短横线后取 ordinal。0 直接启动 master，其他序号先在 initContainer 里 ping redis-0.redis-headless，成功后再以 replicaof 模式启动。</p>
+          <p>这个设计演示了稳定 DNS 如何参与启动依赖。它没有实现自动故障转移，redis-0 长期不可用时，副本不会自动变成新的 master。</p>
+        </aside>
+      </section>
+
+      <section class="slide" data-section="成员发现" data-title="副本通过稳定名称找到主节点">
+        <div class="slide-header"><div><p class="eyebrow">Peer discovery in action</p><h2>副本通过稳定名称找到主节点</h2><div class="rule"></div></div><button class="action-btn" data-replay="#peer-flow" type="button" title="重放动画" aria-label="重放成员发现动画">↻</button></div>
+        <div class="peer-flow is-playing" id="peer-flow">
+          <article class="peer replica"><span>redis-1</span><strong>replica</strong><code>192.168.156.4</code></article>
+          <div class="peer-track left"><i>DNS</i></div>
+          <article class="peer master"><span>redis-0</span><strong>MASTER</strong><code>redis-0.redis-headless</code></article>
+          <div class="peer-track right"><i>DNS</i></div>
+          <article class="peer replica"><span>redis-2</span><strong>replica</strong><code>192.168.145.10</code></article>
+        </div>
+        <div class="callout"><strong>连接目标：</strong><code>redis-0.redis-headless.default.svc.cluster.local:6379</code></div>
+        <div class="flat-block green"><p class="body">IP 变化时，副本继续使用同一个名称；重新解析即可获得 master 的当前地址。</p></div>
+        <div class="slide-number">24</div>
+        <aside class="speaker-copy">
+          <p>redis-1 和 redis-2 不把 master IP 写死在配置里，而是连接 redis-0.redis-headless 的稳定名称。</p>
+          <p>图里的 DNS 是发现阶段。解析完成后 TCP 连接直接从副本 Pod 发往 redis-0 的 Pod IP，路径由 Calico 路由，不经过 redis-headless VIP，因为根本没有 VIP。</p>
+        </aside>
+      </section>
+
+      <section class="slide" data-section="连接验证" data-title="直接连接指定 Redis 实例">
+        <div class="slide-header"><div><p class="eyebrow">Exercise 4.2</p><h2>直接连接指定 Redis 实例</h2><div class="rule"></div></div></div>
+        <div class="command-result"><pre class="code terminal"><span class="prompt">$</span> redis-cli -h redis-0.redis-headless ping
+
+<span class="good">PONG</span></pre><div class="result-card"><span class="status-dot"></span><h3>名称解析 + TCP 连接 + Redis 应答</h3><p>这一条命令同时验证三个层次，不只是 DNS。</p></div></div>
+        <div class="layer-checks"><article><b>1</b><span>CoreDNS</span><p>名称返回 redis-0 Pod IP</p></article><article><b>2</b><span>Calico</span><p>客户端到 Pod IP 路由可达</p></article><article><b>3</b><span>Redis</span><p>6379 端口处理 PING</p></article></div>
+        <div class="slide-number">25</div>
+        <aside class="speaker-copy">
+          <p>redis-cli 返回 PONG 是端到端证据：名字解析成功，网络路径可达，Redis 也正常响应。</p>
+          <p>排错时不要把这三个层次混在一起。dig 成功但 redis-cli 超时，问题就不在 DNS，应继续看 Calico 路由、NetworkPolicy、端口和进程。</p>
+        </aside>
+      </section>
+
+      <section class="slide" data-section="复制验证" data-title="Master 看到两个在线副本">
+        <div class="slide-header"><div><p class="eyebrow">Exercise 5.1</p><h2>Master 看到两个在线副本</h2><div class="rule"></div></div></div>
+        <pre class="code terminal tall"><span class="prompt">$</span> redis-cli -h redis-0.redis-headless INFO replication
+
+# Replication
+role:<span class="hot">master</span>
+connected_slaves:<span class="good">2</span>
+slave0:ip=192.168.156.4,port=6379,state=<span class="good">online</span>,offset=420,lag=0
+slave1:ip=192.168.145.10,port=6379,state=<span class="good">online</span>,offset=420,lag=0
+master_failover_state:no-failover</pre>
+        <div class="metric-row"><article><span>role</span><strong>master</strong></article><article><span>connected_slaves</span><strong>2</strong></article><article><span>state</span><strong>online</strong></article><article><span>lag</span><strong>0</strong></article></div>
+        <div class="slide-number">26</div>
+        <aside class="speaker-copy">
+          <p>在 redis-0 上看 INFO replication，role 是 master，connected_slaves 是 2，两条 slave 记录都是 online。</p>
+          <p>offset 和 lag 用来观察复制进度。课程输出是示例，不要要求现场数字完全一致，关键是角色、连接数和状态。</p>
+        </aside>
+      </section>
+
+      <section class="slide" data-section="复制验证" data-title="Replica 记录的是 master 的 DNS 名">
+        <div class="slide-header"><div><p class="eyebrow">Exercise 5.2</p><h2>Replica 记录的是 master 的 DNS 名</h2><div class="rule"></div></div></div>
+        <div class="grid-2">
+          <pre class="code terminal tall"><span class="prompt">$</span> redis-cli -h redis-1.redis-headless INFO replication
+
+role:<span class="hot">slave</span>
+master_host:
+  <span class="cool">redis-0.redis-headless.default.svc.cluster.local</span>
+master_port:6379
+master_link_status:<span class="good">up</span>
+master_sync_in_progress:0
+slave_read_only:1</pre>
+          <div class="proof-stack"><article><span>发现</span><h3>master_host 是 DNS 名称</h3><p>没有把 192.168.x.x 固化进配置。</p></article><article><span>连接</span><h3>master_link_status: up</h3><p>复制链路已经建立。</p></article><article><span>角色</span><h3>slave_read_only: 1</h3><p>副本拒绝普通写入。</p></article></div>
+        </div>
+        <div class="slide-number">27</div>
+        <aside class="speaker-copy">
+          <p>副本侧最值得看的字段是 master_host，它保存的是 redis-0 的完整 DNS 名，而不是当前 Pod IP。</p>
+          <p>master_link_status: up 说明链路正常，slave_read_only: 1 表示它只读。redis-2 可以用课程给的 grep 命令快速核对同样三个字段。</p>
+        </aside>
+      </section>
+
+      <section class="slide" data-section="数据复制" data-title="一次写入，两个副本可读">
+        <div class="slide-header"><div><p class="eyebrow">Exercise 5.3</p><h2>一次写入，两个副本可读</h2><div class="rule"></div></div><button class="action-btn" data-replay="#replication-flow" type="button" title="重放动画" aria-label="重放复制动画">↻</button></div>
+        <div class="replication-flow is-playing" id="replication-flow">
+          <article class="writer"><span>Client</span><code>SET mykey</code></article><div class="rep-track write"><i>SET</i></div><article class="master"><span>redis-0</span><strong>Hello from master</strong></article><div class="rep-split"><div class="rep-track top"><i>REPL</i></div><div class="rep-track bottom"><i>REPL</i></div></div><div class="replicas"><article><span>redis-1</span><code>GET → value</code></article><article><span>redis-2</span><code>GET → value</code></article></div>
+        </div>
+        <pre class="code command-code">redis-cli -h redis-0.redis-headless SET mykey "Hello from master"
+redis-cli -h redis-1.redis-headless GET mykey
+redis-cli -h redis-2.redis-headless GET mykey</pre>
+        <div class="slide-number">28</div>
+        <aside class="speaker-copy">
+          <p>先对 redis-0 写入 mykey，再分别从 redis-1 和 redis-2 读取，都应得到 Hello from master。</p>
+          <p>这证明的不只是成员发现，还证明实际复制链路工作。图中的复制线完全限定在固定网格轨道内，不会随窗口缩放偏离目标。</p>
+        </aside>
+      </section>
+
+      <section class="slide" data-section="只读验证" data-title="写副本应该明确失败">
+        <div class="slide-header"><div><p class="eyebrow">Exercise 5.4</p><h2>写副本应该明确失败</h2><div class="rule"></div></div></div>
+        <div class="failure-proof"><pre class="code terminal"><span class="prompt">$</span> redis-cli -h redis-1.redis-headless \
+    SET anotherkey "test"
+
+<span class="error">(error) READONLY You can't write against a read only replica.</span></pre><div class="failure-explain"><span>EXPECTED</span><h3>这是正确结果</h3><p class="body">DNS 让我们准确连到 redis-1；Redis 角色规则再拒绝这次写入。</p><div class="flat-block red"><p class="small">如果意外成功，要检查角色配置和启动脚本，而不是 DNS。</p></div></div></div>
+        <div class="slide-number">29</div>
+        <aside class="speaker-copy">
+          <p>这一步故意对 redis-1 写入，预期得到 READONLY。失败是正确结果，它证明 pod-specific DNS 确实把连接送到了指定副本。</p>
+          <p>DNS 只负责找到目标，不决定目标能做什么。读写权限、主从角色和一致性仍由 Redis 自己负责。</p>
+        </aside>
+      </section>
+
+      <section class="slide" data-section="启动日志" data-title="日志还原成员发现时序">
+        <div class="slide-header"><div><p class="eyebrow">Exercise 5.5</p><h2>日志还原成员发现时序</h2><div class="rule"></div></div></div>
+        <div class="log-timeline">
+          <article><span>01</span><div><h3>识别角色</h3><code>This is replica redis-1</code></div></article>
+          <article><span>02</span><div><h3>等待稳定名称</h3><code>Waiting for redis-0.redis-headless...</code></div></article>
+          <article><span>03</span><div><h3>master 可达</h3><code>Master redis-0 is ready!</code></div></article>
+          <article><span>04</span><div><h3>启动复制</h3><code>Connecting to MASTER ...:6379</code></div></article>
+          <article><span>05</span><div><h3>全量同步</h3><code>MASTER &lt;-&gt; REPLICA sync started</code></div></article>
+        </div>
+        <pre class="code command-code">kubectl logs redis-1 | head -20</pre>
+        <div class="slide-number">30</div>
+        <aside class="speaker-copy">
+          <p>日志把启动顺序讲得很清楚：先判断自己是副本，再等待 redis-0 的稳定名称可达，最后启动 replicaof 并开始同步。</p>
+          <p>如果副本卡在第二步，先用 dig 检查 DNS，再检查 EndpointSlice readiness、负缓存和 redis-0 自身状态。</p>
+        </aside>
+      </section>
+
+      <section class="slide" data-section="iptables" data-title="ClusterIP 会留下 KUBE-SERVICES 规则">
+        <div class="slide-header"><div><p class="eyebrow">Exercise 6.1</p><h2>ClusterIP 会留下 KUBE-SERVICES 规则</h2><div class="rule"></div></div></div>
+        <pre class="code terminal tall"><span class="prompt">#</span> docker exec -it headless-services-worker /bin/bash
+
+<span class="prompt">#</span> iptables -t nat -S KUBE-SERVICES | grep nginx-clusterip
+
+-A KUBE-SERVICES -d <span class="hot">10.96.204.67/32</span> -p tcp \
+  -m comment --comment "default/nginx-clusterip:http cluster IP" \
+  -m tcp --dport 80 -j <span class="cool">KUBE-SVC-XXXXXXXX</span></pre>
+        <div class="rule-anatomy"><article><span>匹配</span><strong>VIP + TCP/80</strong></article><article><span>跳转</span><strong>KUBE-SVC chain</strong></article><article><span>结果</span><strong>DNAT 到 Endpoint</strong></article></div>
+        <div class="slide-number">31</div>
+        <aside class="speaker-copy">
+          <p>进入 worker 节点查看 nat 表，nginx-clusterip 会出现匹配 10.96.204.67 和 80 端口的 KUBE-SERVICES 规则。</p>
+          <p>具体 chain 后缀会不同。我们关心的是 VIP 被 kube-proxy 编程进 Service 数据面，并继续跳到选择 Endpoint 的链。</p>
+        </aside>
+      </section>
+
+      <section class="slide" data-section="iptables" data-title="Headless Service 没有 VIP 规则">
+        <div class="slide-header"><div><p class="eyebrow">Exercise 6.2</p><h2>Headless Service 没有 VIP 规则</h2><div class="rule"></div></div></div>
+        <div class="no-rule-layout"><div><pre class="code terminal"><span class="prompt">#</span> iptables -t nat -S KUBE-SERVICES | grep nginx-headless
+
+<span class="muted">(no output)</span>
+
+<span class="prompt">#</span> iptables -t nat -S KUBE-SERVICES | grep redis-headless
+
+<span class="muted">(no output)</span></pre></div><div class="zero-rule"><span>0</span><h3>VIP NAT rules</h3><p>没有 ClusterIP，就没有可匹配和 DNAT 的 Service VIP。</p></div></div>
+        <div class="flat-block green"><p class="body">“绕过 kube-proxy”指业务连接不经过 Headless Service VIP；它仍然依赖 Kubernetes 控制面和 CoreDNS 完成发现。</p></div>
+        <div class="slide-number">32</div>
+        <aside class="speaker-copy">
+          <p>同样 grep 两个 Headless Service，预期没有输出，因为没有 VIP，也就没有针对 VIP 的 NAT 规则。</p>
+          <p>这里要避免过度简化：Headless 仍然依赖 Service、EndpointSlice 和 CoreDNS；绕过的是业务流量的 Service VIP 转发，不是绕过整个 Kubernetes。</p>
+        </aside>
+      </section>
+
+      <section class="slide" data-section="Calico 数据面" data-title="拿到 Pod IP 后，Calico 接管转发">
+        <div class="slide-header"><div><p class="eyebrow">DNS ends, packet routing begins</p><h2>拿到 Pod IP 后，Calico 接管转发</h2><div class="rule"></div></div><button class="action-btn" data-replay="#calico-flow" type="button" title="重放动画" aria-label="重放跨节点路径">↻</button></div>
+        <div class="calico-flow is-playing" id="calico-flow">
+          <div class="calico-node source"><header>worker2</header><article><b>redis-1</b><code>192.168.156.4</code></article><footer>cali* → host route</footer></div>
+          <div class="calico-track"><span>underlay / VXLAN CrossSubnet</span><i>TCP 6379</i></div>
+          <div class="calico-node target"><header>worker</header><article><b>redis-0</b><code>192.168.202.195</code></article><footer>host route → cali*</footer></div>
+        </div>
+        <div class="path-facts"><article><strong>目的地址</strong><span>redis-0 Pod IP</span></article><article><strong>不经过</strong><span>redis-headless VIP</span></article><article><strong>可能封装</strong><span>仅跨三层子网时 VXLAN</span></article></div>
+        <div class="slide-number">33</div>
+        <aside class="speaker-copy">
+          <p>DNS 返回地址以后，后半段就回到 Calico Pod 网络。源 Pod 发往 redis-0 的 Pod IP，节点查路由，把包送到目标节点和目标 cali 接口。</p>
+          <p>课程配置是 VXLANCrossSubnet：同一二层/子网的节点之间可以原生路由，跨子网时才使用 VXLAN。具体是否封装取决于实际 underlay，而不是因为 Headless Service。</p>
+        </aside>
+      </section>
+
+      <section class="slide" data-section="生产注意" data-title="Headless 交还给客户端的四个责任">
+        <div class="slide-header"><div><p class="eyebrow">Operational gotchas</p><h2>Headless 交还给客户端的四个责任</h2><div class="rule"></div></div></div>
+        <div class="risk-grid">
+          <article><span>01</span><h3>地址选择</h3><p>DNS 返回多地址，不代表客户端会均匀使用全部地址。</p></article>
+          <article><span>02</span><h3>缓存与 TTL</h3><p>课程示例 TTL 30 秒；客户端缓存策略可能让旧地址停留更久。</p></article>
+          <article><span>03</span><h3>Pod churn</h3><p>Pod IP 会变化，客户端必须重解析、重试并丢弃失败连接。</p></article>
+          <article><span>04</span><h3>就绪语义</h3><p>默认 DNS 发布 Ready Endpoint；成员启动互相依赖时评估 publishNotReadyAddresses。</p></article>
+        </div>
+        <div class="flat-block red"><p class="body"><strong>负缓存：</strong>Pod 出现前查询失败，NXDOMAIN 可能被缓存；StatefulSet 官方文档提醒新 Pod 的名称不一定立刻可查。</p></div>
+        <div class="slide-number">34</div>
+        <aside class="speaker-copy">
+          <p>Headless 把选择权交给客户端，也把四个责任交回客户端：选地址、处理缓存、应对 Pod 地址变化、理解 Endpoint readiness。</p>
+          <p>如果多个成员必须先互相发现才能 Ready，可以评估 publishNotReadyAddresses，但这会让未就绪地址也进入发现结果，需要应用自己能处理连接失败。</p>
+        </aside>
+      </section>
+
+      <section class="slide" data-section="现场演示" data-title="十五分钟完整演示顺序">
+        <div class="slide-header"><div><p class="eyebrow">From topology to packet path</p><h2>十五分钟完整演示顺序</h2><div class="rule"></div></div></div>
+        <div class="demo-columns">
+          <ol><li><code>containerlab inspect -t headless-services.clab.yaml</code><span>三节点 running</span></li><li><code>kubectl get pods -o wide</code><span>记录现场 Pod IP</span></li><li><code>kubectl get services</code><span>VIP 与 None 对比</span></li><li><code>dig +search nginx-clusterip</code><span>单个 Service VIP</span></li><li><code>dig +search nginx-headless</code><span>两个 Nginx Pod IP</span></li></ol>
+          <ol start="6"><li><code>dig +search redis-headless</code><span>三个 Redis Pod IP</span></li><li><code>dig +search redis-0.redis-headless</code><span>精确 Pod 地址</span></li><li><code>kubectl get endpointslice ... -o yaml</code><span>hostname 证据</span></li><li><code>redis-cli ... INFO replication</code><span>主从链路</span></li><li><code>iptables -t nat -S KUBE-SERVICES</code><span>有 VIP 才有规则</span></li></ol>
+        </div>
+        <div class="callout"><strong>演示技巧：</strong>每一步先问观众“预期看到几个地址、谁负责选择”，再执行命令。<strong>清理：</strong>回到实验目录运行 <code>./destroy.sh</code>。</div>
+        <div class="slide-number">35</div>
+        <aside class="speaker-copy">
+          <p>演示从环境到控制面，再到 DNS 和数据面。每一步都先说预期：ClusterIP 一条 VIP，Nginx Headless 两条 Pod IP，Redis Headless 三条，单 Pod 名一条。</p>
+          <p>最后用 EndpointSlice 解释记录从哪里来，用 Redis 状态证明真实业务链路，再用 iptables 证明 Headless 没有 VIP 数据面。演示完成后运行 destroy.sh 清理本实验。</p>
+        </aside>
+      </section>
+
+      <section class="slide" data-section="排障" data-title="沿证据链找第一个断点">
+        <div class="slide-header"><div><p class="eyebrow">Troubleshooting ladder</p><h2>沿证据链找第一个断点</h2><div class="rule"></div></div></div>
+        <div class="trouble-grid">
+          <article><span>1</span><h3>对象存在吗</h3><code>kubectl get svc,sts,deploy</code><p>先核对名称、namespace、selector。</p></article>
+          <article><span>2</span><h3>Endpoint 正确吗</h3><code>kubectl get endpointslice -o yaml</code><p>看地址、ready、hostname、targetRef。</p></article>
+          <article><span>3</span><h3>DNS 怎样回答</h3><code>dig +search / dig FQDN</code><p>区分 NXDOMAIN、无答案和超时。</p></article>
+          <article><span>4</span><h3>Pod IP 可达吗</h3><code>nc / redis-cli / curl</code><p>验证 Calico 路由、策略与端口。</p></article>
+          <article><span>5</span><h3>应用角色正确吗</h3><code>INFO replication / logs</code><p>DNS 正确不代表应用状态正确。</p></article>
+          <article><span>6</span><h3>缓存过期了吗</h3><code>TTL / client cache</code><p>重建后旧连接和旧解析可能仍存在。</p></article>
+        </div>
+        <div class="slide-number">36</div>
+        <aside class="speaker-copy">
+          <p>排障从 Kubernetes 对象开始，沿 EndpointSlice、DNS、网络和应用逐层推进。第一个不符合预期的层就是当前重点。</p>
+          <p>最常见的错误是 selector 不匹配、Endpoint not ready、serviceName 拼错、客户端缓存旧地址，或者 DNS 正确但 NetworkPolicy 和应用端口阻断连接。</p>
+        </aside>
+      </section>
+
+      <section class="slide" data-section="选型" data-title="选 ClusterIP 还是 Headless">
+        <div class="slide-header"><div><p class="eyebrow">A practical decision tree</p><h2>选 ClusterIP 还是 Headless</h2><div class="rule"></div></div></div>
+        <div class="decision-tree">
+          <div class="decision-question"><h3>客户端需要指定具体实例或发现所有成员吗？</h3></div>
+          <div class="decision-branches"><article class="no"><span>否</span><h3>优先 ClusterIP</h3><p>让 kube-proxy/数据面负责透明后端选择。</p><code>普通 Web / API</code></article><article class="yes"><span>是</span><h3>考虑 Headless</h3><p>客户端直接消费 Endpoint 地址集合。</p><code>数据库 / P2P / 自定义 LB</code></article></div>
+          <div class="decision-follow"><h3>还需要稳定单实例名称？</h3><p>搭配 StatefulSet，并让 <code>spec.serviceName</code> 指向 Headless Service。</p></div>
+        </div>
+        <div class="flat-block yellow"><p class="body">常见组合不是二选一：同一 StatefulSet 可以同时提供 Headless Service 做成员发现，再提供普通 Service 做统一读写入口。</p></div>
+        <div class="slide-number">37</div>
+        <aside class="speaker-copy">
+          <p>判断标准不是“有状态就一定 Headless”，而是客户端是否需要知道具体成员。只想访问任意健康实例时，ClusterIP 更合适。</p>
+          <p>实际系统经常同时使用两种 Service：Headless 负责成员发现和集群内部通信，普通 Service 负责面向应用的统一入口。</p>
+        </aside>
+      </section>
+
+      <section class="slide" data-section="总结与来源" data-title="把四条证据链串起来">
+        <div class="slide-header"><div><p class="eyebrow">Summary and sources</p><h2>把四条证据链串起来</h2><div class="rule"></div></div></div>
+        <div class="summary-row"><article><span>01</span><h3>对象</h3><p><code>clusterIP: None</code> 保留 Service 发现语义，去掉 VIP。</p></article><article><span>02</span><h3>DNS</h3><p>CoreDNS 从 EndpointSlice 返回 Pod IP 与稳定 hostname。</p></article><article><span>03</span><h3>流量</h3><p>客户端选地址，Calico 把包直接路由到 Pod。</p></article><article><span>04</span><h3>应用</h3><p>Redis 用稳定名称建立主从复制，但高可用仍由应用负责。</p></article></div>
+        <div class="sources"><article><strong>Lesson 11</strong><a href="https://k8snetworking.com/lessons/11-headless-services">k8snetworking.com/lessons/11-headless-services</a></article><article><strong>课程仓库</strong><a href="https://github.com/aadhilam/k8-networking-calico-containerlab/tree/master/containerlab/11-headless-services">github.com/aadhilam/.../11-headless-services</a></article><article><strong>Kubernetes Service</strong><a href="https://kubernetes.io/docs/concepts/services-networking/service/#headless-services">kubernetes.io/.../service/#headless-services</a></article><article><strong>DNS 规范</strong><a href="https://kubernetes.io/docs/concepts/services-networking/dns-pod-service/">kubernetes.io/.../dns-pod-service</a></article><article><strong>StatefulSet</strong><a href="https://kubernetes.io/docs/concepts/workloads/controllers/statefulset/#stable-network-id">kubernetes.io/.../statefulset/#stable-network-id</a></article></div>
+        <div class="slide-number">38</div>
+        <aside class="speaker-copy">
+          <p>最后记住四条证据链：Service 对象用 clusterIP None 表达没有 VIP；EndpointSlice 和 CoreDNS负责发现；客户端选地址，Calico 负责直达 Pod；应用自己负责角色、复制和故障处理。</p>
+          <p>课程里的 IP、随机后缀和 chain 名称都是示例。现场演示时以本地集群输出为准，解释对象之间的关系比背具体数字更重要。</p>
+        </aside>
+      </section>
+    </div>
+
+    <div class="progress-track" aria-hidden="true"><div id="progress-fill"></div></div>
+    <nav class="controls" aria-label="演示控制">
+      <button class="tool-btn" id="prev" type="button" title="上一页" aria-label="上一页">‹</button>
+      <button class="tool-btn" id="next" type="button" title="下一页" aria-label="下一页">›</button>
+      <button class="tool-btn" id="notes-toggle" type="button" title="讲稿" aria-label="显示或隐藏讲稿" aria-pressed="false">N</button>
+      <button class="tool-btn" id="overview-toggle" type="button" title="总览" aria-label="显示或隐藏总览" aria-pressed="false">▦</button>
+      <button class="tool-btn" id="fullscreen" type="button" title="全屏" aria-label="切换全屏">⛶</button>
+    </nav>
+    <button class="notes-backdrop" id="notes-backdrop" type="button" aria-label="关闭讲稿" tabindex="-1"></button>
+    <aside class="notes-panel" id="notes-panel" aria-live="polite" aria-hidden="true"><div class="notes-header"><h2 id="notes-title">讲稿</h2><button class="notes-close" id="notes-close" type="button" title="关闭讲稿" aria-label="关闭讲稿">×</button></div><div id="notes-body"></div></aside>
+    <aside class="overview" id="overview" aria-label="幻灯片总览"></aside>
+  </main>
+  <script src="app.js?v=1"></script>
+</body>
+</html>
