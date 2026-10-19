@@ -339,18 +339,183 @@ kind: List
 - `asNumber: 65001`: 上游交换机的AS编号
 如果没有这个选择器，所有节点都会尝试与ToR进行对等连接，而这种情况正式我们需要在大型集群中避免的。
 
+## 配置负载均衡 IP地址池和负载均衡服务
+### 使用负载均衡IP地址池
+```bash
+> kubectl get ippools
+NAME                   CREATED AT
+default-ipv4-ippool    2026-10-19T01:54:39Z
+loadbalancer-ip-pool   2026-10-19T02:01:14Z
+```
 
+### 创建 LoadBalancer服务
+```bash
+> kubectl apply -f lb-nginx-service.yaml
+service/lb-nginx-service unchanged
+```
 
+确认服务是否可用
 
+```bash
+> kubectl get service -n default
+NAME               TYPE           CLUSTER-IP      EXTERNAL-IP    PORT(S)        AGE
+kubernetes         ClusterIP      10.96.0.1       <none>         443/TCP        5h15m
+lb-nginx-service   LoadBalancer   10.96.142.179   172.16.0.241   80:30897/TCP   4h57m
+nginx-service      ClusterIP      10.96.56.99     <none>         80/TCP         4h57m
+```
 
+### 创建BGP Configuration用来发布负载均衡ip地址
+```bash
+> kubectl apply -f bgpconfiguration-lb.yaml
+```
 
+确认calico已经将bgp路由发布到了cEOS
+```bash
+ceos(config-router-bgp)#show ip bgp summary
+BGP summary information for VRF default
+Router identifier 10.10.10.1, local AS number 65001
+Neighbor Status Codes: m - Under maintenance
+  Description              Neighbor    V AS           MsgRcvd   MsgSent  InQ OutQ  Up/Down State   PfxRcd PfxAcc
+  "Calico Kubernetes Nodes 10.10.10.11 4 65010            351       357    0    0 05:00:43 Estab   1      1
+  "Calico Kubernetes Nodes 10.10.10.12 4 65010            350       360    0    0 05:00:43 Estab   1      1
+```
 
+## 验证选择性BGP介入功能是否生效
+### 检查cEOS上的BGP会话状态
+```bash
+> docker exec -it clab-selective-bgp-peering-ceos01 Cli
+ceos>enable
+ceos#show ip bgp summary
+BGP summary information for VRF default
+Router identifier 10.10.10.1, local AS number 65001
+Neighbor Status Codes: m - Under maintenance
+  Description              Neighbor    V AS           MsgRcvd   MsgSent  InQ OutQ  Up/Down State   PfxRcd PfxAcc
+  "Calico Kubernetes Nodes 10.10.10.11 4 65010            364       370    0    0 05:12:20 Estab   1      1
+  "Calico Kubernetes Nodes 10.10.10.12 4 65010            363       374    0    0 05:12:20 Estab   1      1
+```
 
+可以看到，目前只建立了两个BGP会话(分别是work 和 work2)，而不是五个。这就是选择性互联的优势所在。
+- work(10.10.10.11): BGP会话已建立
+- work(10.10.10.12): BGP会话已建立
+- control-plane,work3,work4:没有BGP会话，符合预期
 
+### 验证路由表
 
+```bash
+ceos#show ip route
 
+VRF: default
+Source Codes:
+       C - connected, S - static, K - kernel,
+       O - OSPF, O IA - OSPF inter area, O E1 - OSPF external type 1,
+       O E2 - OSPF external type 2, O N1 - OSPF NSSA external type 1,
+       O N2 - OSPF NSSA external type2, O3 - OSPFv3,
+       O3 IA - OSPFv3 inter area, O3 E1 - OSPFv3 external type 1,
+       O3 E2 - OSPFv3 external type 2,
+       O3 N1 - OSPFv3 NSSA external type 1,
+       O3 N2 - OSPFv3 NSSA external type2, B - Other BGP Routes,
+       B I - iBGP, B E - eBGP, R - RIP, I L1 - IS-IS level 1,
+       I L2 - IS-IS level 2, A B - BGP Aggregate,
+       A O - OSPF Summary, NG - Nexthop Group Static Route,
+       V - VXLAN Control Service, M - Martian,
+       DH - DHCP client installed default route,
+       DP - Dynamic Policy Route, L - VRF Leaked,
+       G  - gRIBI, RC - Route Cache Route,
+       CL - CBF Leaked Route
 
+Gateway of last resort:
+ K        0.0.0.0/0 [40/0]
+           via 172.20.20.1, Management0
 
+ C        10.10.10.0/24
+           directly connected, Vlan10
+ B E      172.16.0.240/28 [200/0]
+           via 10.10.10.11, Vlan10
+           via 10.10.10.12, Vlan10
+ C        172.20.20.0/24
+           directly connected, Management0
+```
+
+负载均衡器CIDR `172.16.0.240/28` 正字啊通过BGP进行路由通告。
+
+## 确认连接是否正常
+1. 先查看nginx服务负载均衡地址
+```bash
+> kubectl get svc lb-nginx-service -o jsonpath='{.status.loadBalancer.ingress[0].ip}'
+172.16.0.241
+```
+2. 进入到cEOS容器验证对应ip是否能访问服务
+```bash
+> docker exec -it clab-selective-bgp-peering-ceos01 -- bash
+OCI runtime exec failed: exec failed: unable to start container process: exec: "--": executable file not found in $PATH: unknown
+> docker exec -it clab-selective-bgp-peering-ceos01 bash
+bash-5.1# curl 
+curl: try 'curl --help' for more information
+bash-5.1# curl http://172.16.0.241:80
+<!DOCTYPE html>
+<html>
+<head>
+<title>Welcome to nginx!</title>
+<style>
+html { color-scheme: light dark; }
+body { width: 35em; margin: 0 auto;
+font-family: Tahoma, Verdana, Arial, sans-serif; }
+</style>
+</head>
+<body>
+<h1>Welcome to nginx!</h1>
+<p>If you see this page, nginx is successfully installed and working.
+Further configuration is required for the web server, reverse proxy, 
+API gateway, load balancer, content cache, or other features.</p>
+
+<p>For online documentation and support please refer to
+<a href="https://nginx.org/">nginx.org</a>.<br/>
+To engage with the community please visit
+<a href="https://community.nginx.org/">community.nginx.org</a>.<br/>
+For enterprise grade support, professional services, additional 
+security features and capabilities please refer to
+<a href="https://f5.com/nginx">f5.com/nginx</a>.</p>
+
+<p><em>Thank you for using nginx.</em></p>
+</body>
+</html>
+```
+
+这证实了通过选择性连接的BGP节点实现了端到端的连通性
+
+## 扩充BGP对等体
+如果想要添加更多的BGP对等节点，只需要为这些节点添加标签即可：
+```bash
+# Add a node to the BGP peer group 
+kubectl label node k01-worker3 bgp-peer=true 
+# Remove a node from the BGP peer group 
+kubectl label node k01-worker3 bgp-peer-
+```
+
+根据标签变化，Calico会自动建立或终止会话。
+
+## 总结
+这个实验展示了如何利用 Calico 的 `nodeSelector` 功能实现选择性地建立 BGP 连接。虽然所有五个节点都与 ToR 交换机进行连接，但实际上只有两个指定节点（标记为 `bgp-peer=true` ）建立了 BGP 会话。
+- Node Labels: 节点标签，使用kubernetes标签 (bgp-peer=true)来表示担任BGP发言的节点。
+- Selective BGPPeer: 选择性BGP对等体，已经使用 `nodeSelector` 配置BGPPeer，仅针对标记过的节点进行治理
+- Reduced BGP Sessions: 减少BGP会话数量，现在只有两个BGP会话，而不是之前的五个会话，能降低60%
+- LoadBalancer Advertisement: 负载均衡公告，通过选定的对等体成功发布服务IP地址信息。
+
+优势：
+
+| Benefit                 | Description                                                     |
+| ----------------------- | --------------------------------------------------------------- |
+| **Scalability**         | Cluster can grow without proportionally increasing BGP sessions |
+| **Resource Efficiency** | ToR switches handle fewer BGP peers and route updates           |
+| **Flexibility**         | BGP speakers can be added/removed via label changes             |
+| **Predictability**      | Network team knows exactly which nodes participate in BGP       |
+| **High Availability**   | Multiple BGP speakers provide redundancy                        |
+
+*生产建议：*
+- 每个机架配置2-4个 speaker 节点，以实现冗余备份
+- 在各个故障区域之间战略性地放置BGP speaker
+- 监控BGP Speaker的健康状况，必要时自动进行故障转移
+- 可以考虑使用节点亲和性机制，以确保每个Pod都能够连接到能接收BGP消息的节点
 
 
 

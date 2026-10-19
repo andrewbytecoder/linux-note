@@ -1,0 +1,1 @@
+calico支持使用 IPAM组件为kubernetes中的Pod分配静态IP地址
