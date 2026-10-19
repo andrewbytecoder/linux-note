@@ -1,0 +1,629 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="基于 Kubernetes Networking Labs Lesson 19 的 Calico Ingress Gateway、Gateway API、BGP 与金丝雀发布中文动态演示课件">
+  <title>Calico Ingress Gateway：BGP 入口与金丝雀发布</title>
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="styles.css?v=1">
+</head>
+<body>
+  <main class="deck-shell" aria-label="Calico Ingress Gateway HTML 演示文稿">
+    <div id="deck-canvas">
+
+      <section class="slide cover active" data-section="Calico Ingress Gateway" data-title="BGP 入口与金丝雀发布">
+        <div class="cover-layout ingress-cover-layout">
+          <div class="cover-copy">
+            <p class="eyebrow">Lesson 19 · Gateway API · Envoy · BGP · Canary</p>
+            <h1>Calico Ingress Gateway<br><span class="yellow-mark">BGP 入口与金丝雀发布</span></h1>
+            <p class="lead">外部流量先通过 BGP 到达 Gateway 节点，再由 Envoy 按 HTTPRoute 权重分配给稳定版与金丝雀版本。</p>
+            <div class="cover-meta"><span>172.16.0.241</span><span>ECMP</span><span>Host: app.demo.lab</span><span>80 / 20</span></div>
+          </div>
+          <div class="ingress-cover-flow is-playing" id="cover-flow">
+            <article><span>VLAN 30</span><strong>External User</strong><code>10.30.30.100</code></article><div class="cover-ingress-lane"><i>HTTP</i></div><article class="envoy"><span>GATEWAY</span><strong>Envoy Proxy</strong><code>172.16.0.241:80</code></article><div class="cover-split"><div class="split-lane stable"><i>80%</i></div><div class="split-lane canary"><i>20%</i></div></div><div class="cover-backends"><article><span>STABLE</span><strong>app-v1</strong></article><article><span>CANARY</span><strong>app-v2</strong></article></div><div class="cover-caption">ToR 用 BGP 找入口，Envoy 用 HTTPRoute 选后端</div>
+          </div>
+        </div>
+        <aside class="speaker-copy"><p>大家好，这一节把前面学过的 BGP、LoadBalancer IP 和 Kubernetes Service 连起来，搭一个真正可以从集群外访问的 Envoy Gateway。</p><p>请求先从 VLAN 30 到 172.16.0.241，ToR 根据 BGP ECMP 选择入口节点。进入 Envoy 后，HTTPRoute 再按 Host、Path 和权重把请求发给 v1 或 v2。</p><p class="note-source">主课程：<a href="https://k8snetworking.com/lessons/19-calico-ingress">https://k8snetworking.com/lessons/19-calico-ingress</a></p></aside>
+      </section>
+
+      <section class="slide" data-section="定位" data-title="Calico Ingress Gateway 把 Gateway API 落成 Envoy 数据面">
+        <div class="slide-header"><div><p class="eyebrow">Specification and implementation</p><h2>Calico Ingress Gateway 把 Gateway API 落成 Envoy 数据面</h2><div class="rule"></div></div></div>
+        <div class="spec-runtime"><article><span>KUBERNETES API</span><h3>Gateway API</h3><p>定义 GatewayClass、Gateway、HTTPRoute、ReferenceGrant 等标准资源。</p><strong>声明意图</strong></article><div class="translate">controller translates</div><article class="control"><span>CONTROL PLANE</span><h3>Envoy Gateway</h3><p>监听资源变化，生成代理配置并管理 Gateway 数据面。</p><strong>协调配置</strong></article><div class="translate">programs</div><article class="runtime"><span>DATA PLANE</span><h3>Envoy Proxy</h3><p>监听外部端口，匹配 HTTP 请求并把流量送到后端。</p><strong>处理请求</strong></article></div>
+        <div class="callout"><strong>Calico 的角色：</strong>Tigera Operator 管理 Gateway API 能力与 hardened Envoy Gateway 组件，并与 Calico IPAM、BGP 网络整合。</div>
+        <div class="slide-number">02</div>
+        <aside class="speaker-copy"><p>Gateway API 是规范，不是代理进程。Envoy Gateway 是控制面实现，真正收发流量的是 Envoy Proxy。</p><p>Calico 通过 Operator 把这些组件安装和管理起来，再把 LoadBalancer IPAM 与 BGP 宣告接进外部网络。</p></aside>
+      </section>
+
+      <section class="slide" data-section="Gateway API" data-title="Gateway API 把基础设施入口与应用路由分开管理">
+        <div class="slide-header"><div><p class="eyebrow">Role-oriented model</p><h2>Gateway API 把基础设施入口与应用路由分开管理</h2><div class="rule"></div></div></div>
+        <table class="data-table role-table"><thead><tr><th>角色</th><th>主要资源</th><th>本课配置</th><th>负责内容</th></tr></thead><tbody><tr><td>平台团队</td><td>GatewayAPI / GatewayClass</td><td>tigera-gateway-class</td><td>控制器、镜像、部署约束</td></tr><tr><td>网络团队</td><td>Gateway</td><td>HTTP :80</td><td>入口、listener、允许附加的 Route</td></tr><tr><td>应用团队</td><td>HTTPRoute</td><td>app.demo.lab /</td><td>匹配条件、后端与权重</td></tr><tr><td>目标命名空间所有者</td><td>ReferenceGrant</td><td>default → demo Services</td><td>授权跨命名空间引用</td></tr></tbody></table>
+        <div class="flat-block blue"><p class="body">与传统 Ingress 相比，Gateway API 用类型化字段表达 listener、route 和 backend，减少厂商注解承担的核心语义。</p></div>
+        <div class="slide-number">03</div>
+        <aside class="speaker-copy"><p>Gateway API 最有价值的设计是职责分离。平台团队提供类，网络团队提供入口，应用团队只写自己的路由。</p><p>跨 namespace 的后端不是 HTTPRoute 自己说了算，目标 namespace 还要用 ReferenceGrant 明确同意。</p></aside>
+      </section>
+
+      <section class="slide" data-section="金丝雀发布" data-title="金丝雀发布让少量真实流量先验证新版本">
+        <div class="slide-header compact-header"><div><p class="eyebrow">Progressive delivery</p><h2>金丝雀发布让少量真实流量先验证新版本</h2><div class="rule"></div></div></div>
+        <figure class="course-image canary-image"><img src="assets/canary.png" alt="原课件金丝雀流量分配图"><figcaption>初始权重：稳定版 app-v1 为 80，金丝雀 app-v2 为 20。权重描述长期选择概率，不保证每 100 次精确得到 80/20。</figcaption></figure>
+        <div class="slide-number">04</div>
+        <aside class="speaker-copy"><p>金丝雀不是再做一套入口，而是在同一个 HTTPRoute 里给两个 backend 设置权重。</p><p>80/20 表示长期选择比例。样本只有 100 次时，可能是 77/23 或 84/16，都不代表配置错误。</p></aside>
+      </section>
+
+      <section class="slide" data-section="实验拓扑" data-title="原课件拓扑：两个 BGP 入口节点与两个工作负载节点">
+        <div class="slide-header compact-header"><div><p class="eyebrow">Course topology</p><h2>原课件拓扑：两个 BGP 入口节点与两个工作负载节点</h2><div class="rule"></div></div></div>
+        <figure class="course-image topology-image"><img src="assets/cig-topology.png" alt="Calico Ingress Gateway 实验拓扑"><figcaption>外部用户位于 VLAN 30；worker 与 worker2 建立 eBGP；Envoy 只允许调度到带 <code>bgp-peer=true</code> 的节点；后端运行在 worker3/worker4。</figcaption></figure>
+        <div class="slide-number">05</div>
+        <aside class="speaker-copy"><p>课程拓扑把入口节点和 workload 节点分开。worker、worker2 既是 BGP speaker，也是 Envoy 的候选节点；worker3、worker4 专门跑业务。</p><p>图中只画了一个 Envoy 实例落在 worker，但配置允许它落在 worker 或 worker2。副本数和实际调度还要看运行输出。</p></aside>
+      </section>
+
+      <section class="slide" data-section="节点角色" data-title="五个 Kubernetes 节点全部在 VLAN 10，外部用户单独位于 VLAN 30">
+        <div class="slide-header"><div><p class="eyebrow">Exact lab addressing</p><h2>五个 Kubernetes 节点全部在 VLAN 10，外部用户单独位于 VLAN 30</h2><div class="rule"></div></div></div>
+        <div class="node-roles"><section><header>VLAN 10 · 10.10.10.0/24</header><article><span>control-plane</span><strong>.10</strong></article><article class="speaker"><span>worker</span><strong>.11</strong><b>BGP</b></article><article class="speaker"><span>worker2</span><strong>.12</strong><b>BGP</b></article><article><span>worker3</span><strong>.13</strong><b>APP</b></article><article><span>worker4</span><strong>.14</strong><b>APP</b></article></section><div class="tor"><span>cEOS</span><strong>AS 65001</strong><code>Vlan10 + Vlan30</code></div><section class="external"><header>VLAN 30 · 10.30.30.0/24</header><article><span>user</span><strong>10.30.30.100</strong><b>CLIENT</b></article></section></div>
+        <div class="slide-number">06</div>
+        <aside class="speaker-copy"><p>五个 Kubernetes 节点都在 VLAN 10，只是角色不同。两个 speaker 节点有 bgp-peer=true，两个 app 节点没有。</p><p>外部用户是独立 netshoot 容器，eth1 在 VLAN 30，静态路由把 172.16.0.0/16 指向 ToR。</p></aside>
+      </section>
+
+      <section class="slide" data-section="数据路径" data-title="一条请求依次经过外部路由、Gateway Service、Envoy 与后端 Service">
+        <div class="slide-header"><div><p class="eyebrow">End-to-end layers</p><h2>一条请求依次经过外部路由、Gateway Service、Envoy 与后端 Service</h2><div class="rule"></div></div></div>
+        <div class="layered-path"><article><span>1</span><h3>User route</h3><code>172.16.0.241 via 10.30.30.1</code></article><i>›</i><article><span>2</span><h3>ToR BGP / ECMP</h3><code>via .11 or .12</code></article><i>›</i><article><span>3</span><h3>LoadBalancer Service</h3><code>external IP :80</code></article><i>›</i><article><span>4</span><h3>Envoy</h3><code>Host + Path + weight</code></article><i>›</i><article><span>5</span><h3>Backend Service</h3><code>app-v1 / app-v2</code></article></div>
+        <div class="callout"><strong>两个负载均衡层：</strong>ToR 的 ECMP 选择入口 Node；Envoy 的 weighted backend 选择应用版本。两者解决的问题不同。</div>
+        <div class="slide-number">07</div>
+        <aside class="speaker-copy"><p>完整路径有两个负载均衡点。BGP ECMP 是三层，把流量送到某个 Kubernetes 节点。Envoy 是七层，根据 HTTPRoute 选 v1 或 v2。</p><p>中间还有 Gateway 创建的 LoadBalancer Service，负责把外部 IP 绑定到代理数据面。</p></aside>
+      </section>
+
+      <section class="slide" data-section="实验文件" data-title="实验把基础设施、入口和应用路由拆成独立清单">
+        <div class="slide-header"><div><p class="eyebrow">containerlab/19-calico-ingress</p><h2>实验把基础设施、入口和应用路由拆成独立清单</h2><div class="rule"></div></div></div>
+        <div class="ingress-file-map"><article><span>LAB</span><strong>topology.clab.yaml</strong><p>cEOS、五节点 Kind、外部 user 和链路。</p></article><article><span>CALICO</span><strong>custom-resources.yaml</strong><p>IPPool 与 VXLANCrossSubnet。</p></article><article><span>BGP</span><strong>bgpconfiguration + bgppeer</strong><p>AS、LB CIDR 与选择性 ToR 邻居。</p></article><article><span>GATEWAY</span><strong>gatewayapi.yaml</strong><p>启用 Gateway API 并约束代理节点。</p></article><article><span>APP</span><strong>app-v1 / app-v2</strong><p>Deployment、Service 与静态页面。</p></article><article><span>ROUTING</span><strong>Gateway + HTTPRoute + Grant</strong><p>由学员手动创建。</p></article></div>
+        <div class="slide-number">08</div>
+        <aside class="speaker-copy"><p>部署脚本负责基础设施、Calico、BGP、LB pool、GatewayAPI 和两个应用，但故意不创建 Gateway、ReferenceGrant、HTTPRoute。</p><p>课程让我们手动完成这三类资源，正好能观察每一步增加了什么对象。</p></aside>
+      </section>
+
+      <section class="slide" data-section="部署范围" data-title="deploy.sh 搭好能力与后端，入口路由由学员手动创建">
+        <div class="slide-header"><div><p class="eyebrow">What automation stops before</p><h2>deploy.sh 搭好能力与后端，入口路由由学员手动创建</h2><div class="rule"></div></div></div>
+        <div class="deploy-scope"><section class="automatic"><header>deploy.sh 自动完成</header><p>Containerlab + Kind</p><p>Calico 3.31.3 + API server</p><p>BGPConfiguration + BGPPeer</p><p>LoadBalancer IPPool</p><p>GatewayAPI + GatewayClass</p><p>app-v1 / app-v2</p></section><div class="manual-boundary">STOP</div><section class="manual"><header>课程手动完成</header><p>Gateway</p><p>ReferenceGrant</p><p>HTTPRoute</p><p>外部 curl 与权重变更</p></section></div>
+        <pre class="code terminal command-code"><span class="prompt">$</span> cd containerlab/19-calico-ingress
+<span class="prompt">$</span> chmod +x deploy.sh
+<span class="prompt">$</span> ./deploy.sh
+<span class="prompt">$</span> export KUBECONFIG=$(pwd)/k01.kubeconfig</pre>
+        <div class="slide-number">09</div>
+        <aside class="speaker-copy"><p>脚本安装 Calico 3.31.3，并等 GatewayClass 出现，最后部署 v1 和 v2。</p><p>它在 Gateway 之前停下来。演示时先说明这个边界，避免听众以为 Gateway 地址是脚本提前写死的。</p></aside>
+      </section>
+
+      <section class="slide" data-section="环境检查" data-title="五个 Node IP 与课程拓扑一致">
+        <div class="slide-header"><div><p class="eyebrow">Baseline</p><h2>五个 Node IP 与课程拓扑一致</h2><div class="rule"></div></div></div>
+        <pre class="code terminal node-output"><span class="prompt">$</span> kubectl get nodes -o wide
+NAME                STATUS   ROLES           INTERNAL-IP
+k01-control-plane   Ready    control-plane   10.10.10.10
+k01-worker          Ready    &lt;none&gt;          10.10.10.11
+k01-worker2         Ready    &lt;none&gt;          10.10.10.12
+k01-worker3         Ready    &lt;none&gt;          10.10.10.13
+k01-worker4         Ready    &lt;none&gt;          10.10.10.14</pre>
+        <div class="flat-block yellow"><p class="body">课程输出会因环境变化。后续 Gateway IP、Pod IP、Service ClusterIP 和 NodePort 都应用 JSONPath 或实时命令获取。</p></div>
+        <div class="slide-number">10</div>
+        <aside class="speaker-copy"><p>先确认五个 Node 全部 Ready，并且 Internal IP 与 topology 里 eth1 一致。</p><p>后面除了这些固定 Node IP，其他地址都是动态分配，不要照抄课件输出。</p></aside>
+      </section>
+
+      <section class="slide" data-section="选择性 BGP" data-title="只有 worker 与 worker2 带 bgp-peer=true">
+        <div class="slide-header"><div><p class="eyebrow">Selective peering</p><h2>只有 worker 与 worker2 带 bgp-peer=true</h2><div class="rule"></div></div></div>
+        <div class="speaker-nodes"><article class="peer"><span>10.10.10.11</span><strong>k01-worker</strong><code>bgp-peer=true</code></article><article class="peer"><span>10.10.10.12</span><strong>k01-worker2</strong><code>bgp-peer=true</code></article><article><span>10.10.10.13</span><strong>k01-worker3</strong><code>no label</code></article><article><span>10.10.10.14</span><strong>k01-worker4</strong><code>no label</code></article></div>
+        <pre class="code terminal command-code"><span class="prompt">$</span> kubectl get nodes -l bgp-peer=true
+NAME          STATUS   ROLES
+k01-worker    Ready    &lt;none&gt;
+k01-worker2   Ready    &lt;none&gt;</pre>
+        <div class="slide-number">11</div>
+        <aside class="speaker-copy"><p>nodeSelector 同时用于 BGPPeer 和 Gateway proxy placement。两个 speaker 节点既对 ToR 建邻居，也是 Envoy 的候选落点。</p><p>worker3、worker4 没有这个标签，应用 affinity 会把业务放到这两个节点。</p></aside>
+      </section>
+
+      <section class="slide" data-section="BGP 配置" data-title="BGPConfiguration 宣告整个 LoadBalancer 地址池">
+        <div class="slide-header"><div><p class="eyebrow">Global BGP policy</p><h2>BGPConfiguration 宣告整个 LoadBalancer 地址池</h2><div class="rule"></div></div></div>
+        <div class="grid-2"><pre class="code manifest-code"><span class="key">apiVersion:</span> projectcalico.org/v3
+<span class="key">kind:</span> BGPConfiguration
+<span class="key">metadata:</span>
+  <span class="key">name:</span> default
+<span class="key">spec:</span>
+  <span class="key">asNumber:</span> <span class="value">65010</span>
+  <span class="key">nodeToNodeMeshEnabled:</span> false
+  <span class="key">serviceLoadBalancerIPs:</span>
+  - <span class="key">cidr:</span> <span class="value">172.16.0.240/28</span></pre><div class="bgp-config-read"><article><span>AS</span><strong>65010</strong><p>Calico 节点对 ToR 的本地 AS。</p></article><article><span>MESH</span><strong>disabled</strong><p>不建立全节点 iBGP full mesh。</p></article><article><span>LB CIDR</span><strong>172.16.0.240/28</strong><p>允许通过 BGP 宣告的 LoadBalancer 地址范围。</p></article></div></div>
+        <div class="slide-number">12</div>
+        <aside class="speaker-copy"><p>BGPConfiguration 的 serviceLoadBalancerIPs 告诉 Calico哪些 LoadBalancer 地址可以对外宣告。</p><p>它不负责分配 IP。分配由下一页的 LoadBalancer IPPool 完成，两个资源必须配合。</p></aside>
+      </section>
+
+      <section class="slide" data-section="BGP 邻居" data-title="BGPPeer 的 nodeSelector 把 ToR 邻居限制在两个入口节点">
+        <div class="slide-header"><div><p class="eyebrow">Peer only from selected nodes</p><h2>BGPPeer 的 nodeSelector 把 ToR 邻居限制在两个入口节点</h2><div class="rule"></div></div></div>
+        <div class="grid-2"><pre class="code manifest-code"><span class="key">apiVersion:</span> projectcalico.org/v3
+<span class="key">kind:</span> BGPPeer
+<span class="key">metadata:</span>
+  <span class="key">name:</span> bgppeer-arista
+<span class="key">spec:</span>
+  <span class="key">peerIP:</span> <span class="value">10.10.10.1</span>
+  <span class="key">asNumber:</span> <span class="value">65001</span>
+  <span class="key">nodeSelector:</span> <span class="value">bgp-peer == "true"</span></pre><div class="peer-diagram"><article><span>worker .11</span><strong>AS 65010</strong></article><div class="peer-line"><i>eBGP</i></div><article class="tor-peer"><span>cEOS .1</span><strong>AS 65001</strong></article><div class="peer-line reverse"><i>eBGP</i></div><article><span>worker2 .12</span><strong>AS 65010</strong></article></div></div>
+        <div class="slide-number">13</div>
+        <aside class="speaker-copy"><p>BGPPeer 对象指定 ToR 10.10.10.1、远端 AS 65001，并用 selector 决定哪些 Calico Node 发起会话。</p><p>这比让五个节点全部对 ToR 建邻居更容易控制规模和入口角色。</p></aside>
+      </section>
+
+      <section class="slide" data-section="LoadBalancer IPAM" data-title="专用 IPPool 只给 LoadBalancer Service 分配地址">
+        <div class="slide-header"><div><p class="eyebrow">Address allocation</p><h2>专用 IPPool 只给 LoadBalancer Service 分配地址</h2><div class="rule"></div></div></div>
+        <div class="grid-2"><pre class="code manifest-code"><span class="key">apiVersion:</span> projectcalico.org/v3
+<span class="key">kind:</span> IPPool
+<span class="key">metadata:</span>
+  <span class="key">name:</span> loadbalancer-ip-pool
+<span class="key">spec:</span>
+  <span class="key">cidr:</span> <span class="value">172.16.0.240/28</span>
+  <span class="key">blockSize:</span> 28
+  <span class="key">assignmentMode:</span> Automatic
+  <span class="key">allowedUses:</span>
+  - <span class="value">LoadBalancer</span></pre><div class="pool-allocation"><span>172.16.0.240/28</span><div><b>.240</b><b class="chosen">.241</b><b>.242</b><b>.243</b><b>...</b><b>.255</b></div><strong>Gateway Service gets .241</strong><p>这段不会作为普通 workload 或 tunnel pool 使用。</p></div></div>
+        <div class="callout"><strong>分工：</strong>IPPool 分配 Service 地址；BGPConfiguration 决定哪些 LoadBalancer CIDR 对外发布。</div>
+        <div class="slide-number">14</div>
+        <aside class="speaker-copy"><p>allowedUses 只有 LoadBalancer，所以这个 pool 不会给 Pod 或 VXLAN tunnel 分地址。</p><p>Automatic 模式让 Gateway 自动创建的 LoadBalancer Service 拿到一个可用 IP，课程示例是 .241。</p></aside>
+      </section>
+
+      <section class="slide" data-section="启用 Gateway API" data-title="GatewayAPI CR 创建 GatewayClass 与 Envoy Gateway 组件">
+        <div class="slide-header"><div><p class="eyebrow">Operator integration</p><h2>GatewayAPI CR 创建 GatewayClass 与 Envoy Gateway 组件</h2><div class="rule"></div></div></div>
+        <div class="grid-2"><pre class="code manifest-code"><span class="key">apiVersion:</span> operator.tigera.io/v1
+<span class="key">kind:</span> GatewayAPI
+<span class="key">metadata:</span>
+  <span class="key">name:</span> default
+<span class="key">spec:</span>
+  <span class="key">gatewayClasses:</span>
+  - <span class="key">name:</span> tigera-gateway-class
+    <span class="key">gatewayDeployment:</span>
+      <span class="key">spec.template.spec.nodeSelector:</span>
+        <span class="key">bgp-peer:</span> <span class="value">"true"</span></pre><div class="operator-effects"><article><span>CRDs</span><strong>Gateway API resources</strong></article><article><span>CLASS</span><strong>tigera-gateway-class</strong></article><article><span>CONTROL</span><strong>Envoy Gateway controller</strong></article><article><span>PLACEMENT</span><strong>proxy on BGP nodes</strong></article></div></div>
+        <div class="slide-number">15</div>
+        <aside class="speaker-copy"><p>GatewayAPI 是 Calico Operator 的 CR。创建后，Operator 安装 Gateway API 资源和 Envoy Gateway 控制器，并创建 tigera-gateway-class。</p><p>这里的 gatewayDeployment nodeSelector 约束该 class 生成的数据面代理落点。</p></aside>
+      </section>
+
+      <section class="slide" data-section="放置语义" data-title="nodeSelector 约束候选节点，不保证两个节点各运行一个 Envoy">
+        <div class="slide-header"><div><p class="eyebrow">Eligibility is not replica topology</p><h2>nodeSelector 约束候选节点，不保证两个节点各运行一个 Envoy</h2><div class="rule"></div></div></div>
+        <div class="placement-nuance"><article><span>ELIGIBLE</span><strong>worker</strong><code>bgp-peer=true</code></article><article><span>ELIGIBLE</span><strong>worker2</strong><code>bgp-peer=true</code></article><div class="scheduler-choice">scheduler chooses based on replicas and availability</div><article class="actual"><span>EXAMPLE ACTUAL</span><strong>one Envoy Pod</strong><code>on worker</code></article></div>
+        <div class="grid-2 compact-gap"><div class="flat-block green"><h3>已保证</h3><p class="body">Envoy 不会调度到 worker3/worker4。</p></div><div class="flat-block orange"><h3>尚未保证</h3><p class="body">每个 BGP speaker 都有本地 Envoy，或副本跨两个节点分散。</p></div></div>
+        <div class="slide-number">16</div>
+        <aside class="speaker-copy"><p>selector 只做资格筛选。课程输出显示数据面 Envoy 只有一个副本，落在 worker。worker2 仍可能宣告 LB CIDR，但收到流量后要经 Service 数据面转给实际 endpoint。</p><p>真正高可用还要配置多个副本、反亲和或 topology spread，并验证 externalTrafficPolicy 和端点分布。</p></aside>
+      </section>
+
+      <section class="slide" data-section="GatewayClass" data-title="tigera-gateway-class 被 Envoy Gateway controller 接受">
+        <div class="slide-header"><div><p class="eyebrow">Capability is ready</p><h2>tigera-gateway-class 被 Envoy Gateway controller 接受</h2><div class="rule"></div></div></div>
+        <pre class="code terminal class-output"><span class="prompt">$</span> kubectl get gatewayapi
+NAME      AGE
+default   5m
+
+<span class="prompt">$</span> kubectl get gatewayclass
+NAME                   CONTROLLER                                      ACCEPTED
+tigera-gateway-class   gateway.envoyproxy.io/gatewayclass-controller   <span class="good">True</span></pre>
+        <div class="flat-block blue"><p class="body"><code>Accepted=True</code> 表示 controller 接受这个 class。此时尚未创建任何 Gateway，也不会有课程的入口地址。</p></div>
+        <div class="slide-number">17</div>
+        <aside class="speaker-copy"><p>GatewayClass 是平台能力入口。Accepted=True 说明 Envoy Gateway controller 正常识别它。</p><p>这个阶段没有 Gateway，当然也没有 listener、代理 Service 和 172.16.0.241。</p></aside>
+      </section>
+
+      <section class="slide" data-section="应用基线" data-title="稳定版两个副本，金丝雀版一个副本，都落在非 BGP 节点">
+        <div class="slide-header"><div><p class="eyebrow">Backends are separate from ingress nodes</p><h2>稳定版两个副本，金丝雀版一个副本，都落在非 BGP 节点</h2><div class="rule"></div></div></div>
+        <div class="app-placement"><section><header>worker3 / worker4</header><article class="v1"><span>app-v1</span><strong>2 replicas</strong><code>version=v1</code></article><article class="v2"><span>app-v2</span><strong>1 replica</strong><code>version=v2</code></article></section><div class="not-on">required affinity excludes<br>bgp-peer and control-plane</div><section class="gateway-nodes"><header>worker / worker2</header><article><span>Envoy candidates</span><strong>Ingress tier</strong><code>bgp-peer=true</code></article></section></div>
+        <pre class="code terminal command-code"><span class="prompt">$</span> kubectl get pods -n ingress-gateway-demo -o wide</pre>
+        <div class="slide-number">18</div>
+        <aside class="speaker-copy"><p>v1 有两个副本，v2 一个。它们使用 required node affinity，排除 bgp-peer 节点和 control-plane，所以只会去 worker3、worker4。</p><p>这把入口代理和业务工作负载拆成两个节点层次，便于观察跨节点转发。</p></aside>
+      </section>
+
+      <section class="slide" data-section="后端 Service" data-title="app-v1 与 app-v2 是两个独立 ClusterIP Service">
+        <div class="slide-header"><div><p class="eyebrow">Weighted backends are Services</p><h2>app-v1 与 app-v2 是两个独立 ClusterIP Service</h2><div class="rule"></div></div></div>
+        <div class="backend-services"><article class="v1"><span>Service app-v1</span><strong>port 80</strong><code>selector version=v1</code><div><b>Pod v1</b><b>Pod v1</b></div></article><article class="v2"><span>Service app-v2</span><strong>port 80</strong><code>selector version=v2</code><div><b>Pod v2</b></div></article></div>
+        <pre class="code terminal command-code"><span class="prompt">$</span> kubectl get svc -n ingress-gateway-demo
+NAME     TYPE        CLUSTER-IP   PORT(S)
+app-v1   ClusterIP   10.96.x.x   80/TCP
+app-v2   ClusterIP   10.96.x.x   80/TCP</pre>
+        <div class="callout"><strong>权重层级：</strong>HTTPRoute 在两个 Service 之间按 80/20 选择；Service 再在自己版本的 Pod endpoints 之间负载均衡。</div>
+        <div class="slide-number">19</div>
+        <aside class="speaker-copy"><p>HTTPRoute 的 backendRef 指向 Service，不是直接列 Pod IP。Envoy 先选 v1 或 v2 Service，再由实现解析后端 endpoint。</p><p>因此 v1 的 80% 会继续分布到它的两个 Pod，v2 的 20% 进入单个 Pod。</p></aside>
+      </section>
+
+      <section class="slide" data-section="手动步骤" data-title="Gateway、ReferenceGrant 与 HTTPRoute 构成完整入口关系">
+        <div class="slide-header"><div><p class="eyebrow">Three resources to create</p><h2>Gateway、ReferenceGrant 与 HTTPRoute 构成完整入口关系</h2><div class="rule"></div></div></div>
+        <div class="three-resources"><article><span>ENTRY</span><h3>Gateway</h3><p>创建 HTTP listener、Envoy data plane 与 LoadBalancer Service。</p><strong>default namespace</strong></article><article><span>PERMISSION</span><h3>ReferenceGrant</h3><p>允许 default 的 HTTPRoute 引用 demo namespace 的 Service。</p><strong>target namespace</strong></article><article><span>ROUTING</span><h3>HTTPRoute</h3><p>匹配 app.demo.lab 和 /，配置 v1/v2 权重。</p><strong>default namespace</strong></article></div>
+        <div class="flat-block yellow"><p class="body">创建顺序建议：Gateway → ReferenceGrant → HTTPRoute。即使顺序变化，最终也要检查 Route 的 Accepted 与 ResolvedRefs conditions。</p></div>
+        <div class="slide-number">20</div>
+        <aside class="speaker-copy"><p>三个资源各管一件事：入口、跨 namespace 授权、请求路由。</p><p>API server 允许先创建 HTTPRoute，但引用未满足时 status 会反映失败。课程按 Gateway、Grant、Route 的顺序更容易理解。</p></aside>
+      </section>
+
+      <section class="slide" data-section="Gateway" data-title="Gateway 创建一个接受所有 Host 的 HTTP 80 listener">
+        <div class="slide-header"><div><p class="eyebrow">gateway.yaml</p><h2>Gateway 创建一个接受所有 Host 的 HTTP 80 listener</h2><div class="rule"></div></div></div>
+        <div class="grid-2"><pre class="code manifest-code"><span class="key">apiVersion:</span> gateway.networking.k8s.io/v1
+<span class="key">kind:</span> Gateway
+<span class="key">metadata:</span>
+  <span class="key">name:</span> calico-ingress-gateway
+  <span class="key">namespace:</span> default
+<span class="key">spec:</span>
+  <span class="key">gatewayClassName:</span> tigera-gateway-class
+  <span class="key">listeners:</span>
+  - <span class="key">name:</span> http
+    <span class="key">protocol:</span> HTTP
+    <span class="key">port:</span> 80
+    <span class="key">allowedRoutes.namespaces.from:</span> All</pre><div class="listener-reading"><article><span>PORT</span><strong>80 / HTTP</strong></article><article><span>HOSTNAME</span><strong>not set</strong><p>listener 本身接受所有 Host。</p></article><article><span>ROUTES</span><strong>from All namespaces</strong><p>允许其他 namespace 的 Route 附加。</p></article></div></div>
+        <div class="slide-number">21</div>
+        <aside class="speaker-copy"><p>Gateway 没写 hostname，所以 listener 接受所有 Host。课程后面必须带 app.demo.lab，是因为 HTTPRoute 在做 hostname 匹配。</p><p>allowedRoutes from All 只是允许 Route 附加到 listener，不等于允许它跨 namespace 引用任意 Service。</p></aside>
+      </section>
+
+      <section class="slide" data-section="创建 Gateway" data-title="Gateway Programmed 后获得 172.16.0.241">
+        <div class="slide-header"><div><p class="eyebrow">Create the entry point</p><h2>Gateway Programmed 后获得 172.16.0.241</h2><div class="rule"></div></div></div>
+        <pre class="code terminal gateway-output"><span class="prompt">$</span> kubectl apply -f k8s-manifests/gateway.yaml
+gateway.gateway.networking.k8s.io/calico-ingress-gateway created
+
+<span class="prompt">$</span> kubectl get gateway
+NAME                     CLASS                  ADDRESS        PROGRAMMED
+calico-ingress-gateway   tigera-gateway-class   <span class="good">172.16.0.241</span>   <span class="good">True</span></pre>
+        <div class="gateway-effects"><article><span>PROXY</span><strong>Envoy Deployment / Pod</strong></article><article><span>SERVICE</span><strong>type LoadBalancer</strong></article><article><span>ADDRESS</span><strong>from LB IPPool</strong></article><article><span>LISTENER</span><strong>HTTP :80</strong></article></div>
+        <div class="slide-number">22</div>
+        <aside class="speaker-copy"><p>apply Gateway 后，controller 创建代理数据面和 LoadBalancer Service，并从 LB pool 分到 .241。</p><p>Programmed=True 表示 controller 已把 listener 配置下发。Address 出现不代表外部路由一定已经传播，还要看 BGP。</p></aside>
+      </section>
+
+      <section class="slide" data-section="Gateway 产物" data-title="Gateway 同时触发代理 Pod 与 LoadBalancer Service">
+        <div class="slide-header"><div><p class="eyebrow">One resource, several runtime objects</p><h2>Gateway 同时触发代理 Pod 与 LoadBalancer Service</h2><div class="rule"></div></div></div>
+        <div class="gateway-runtime"><article class="source"><span>default</span><strong>Gateway</strong><code>calico-ingress-gateway</code></article><div class="runtime-lane"></div><section><article><span>tigera-gateway</span><strong>Envoy Proxy Pod</strong><code>data plane</code></article><article><span>tigera-gateway</span><strong>LoadBalancer Service</strong><code>172.16.0.241</code></article><article><span>calico-system</span><strong>Envoy Gateway</strong><code>controller</code></article></section></div>
+        <div class="flat-block blue"><p class="body">课程运行时对象位于 <code>tigera-gateway</code> 与 <code>calico-system</code>。命名空间和对象名可能随 Calico/Envoy Gateway 版本变化，以 label 和 owner reference 为准。</p></div>
+        <div class="slide-number">23</div>
+        <aside class="speaker-copy"><p>一个 Gateway 会引出多个运行时对象。Gateway 本身在 default，但课程版本把 proxy 和 Service 放在 tigera-gateway，controller 在 calico-system。</p><p>当前官方文档对更新版本描述为 namespaced deployment model，实际排障不要硬猜 namespace，先查 owner 和 labels。</p></aside>
+      </section>
+
+      <section class="slide" data-section="LoadBalancer Service" data-title="Gateway Service 的 External IP 来自 Calico LoadBalancer IPPool">
+        <div class="slide-header"><div><p class="eyebrow">External address allocation</p><h2>Gateway Service 的 External IP 来自 Calico LoadBalancer IPPool</h2><div class="rule"></div></div></div>
+        <pre class="code terminal lb-service-output"><span class="prompt">$</span> kubectl get svc -n tigera-gateway
+NAME                                           TYPE           CLUSTER-IP   EXTERNAL-IP    PORT(S)
+envoy-default-calico-ingress-gateway-xxxx      LoadBalancer   10.96.x.x   <span class="good">172.16.0.241</span>   80:3xxxx/TCP
+
+<span class="prompt">$</span> GATEWAY_IP=$(kubectl get svc -n tigera-gateway \
+  -o jsonpath='{.items[0].status.loadBalancer.ingress[0].ip}')
+<span class="prompt">$</span> echo $GATEWAY_IP
+172.16.0.241</pre>
+        <div class="callout"><strong>不要依赖 items[0]：</strong>课程只有一个 Gateway Service。多 Gateway 环境应按 label 或明确 Service 名过滤，避免取到错误地址。</div>
+        <div class="slide-number">24</div>
+        <aside class="speaker-copy"><p>Service status.loadBalancer.ingress 里出现 .241，说明 Calico LoadBalancer IPAM 完成分配。</p><p>课程用 items[0] 图方便，生产脚本要按 owning gateway label 或 Service 名精确选择。</p></aside>
+      </section>
+
+      <section class="slide" data-section="ReferenceGrant" data-title="跨命名空间 backendRef 默认需要目标方授权">
+        <div class="slide-header"><div><p class="eyebrow">Target namespace controls access</p><h2>跨命名空间 backendRef 默认需要目标方授权</h2><div class="rule"></div></div></div>
+        <div class="grant-problem"><section><header>default</header><article><span>HTTPRoute</span><strong>canary-traffic-split</strong><code>wants app-v1/app-v2</code></article></section><div class="grant-wall"><b>DENY BY DEFAULT</b><span>cross-namespace reference</span></div><section class="target"><header>ingress-gateway-demo</header><article><span>Services</span><strong>app-v1 + app-v2</strong><code>target owner decides</code></article></section></div>
+        <div class="flat-block yellow"><p class="body">ReferenceGrant 必须创建在被引用资源所在的目标 namespace。来源 namespace 不能自行授予访问权。</p></div>
+        <div class="slide-number">25</div>
+        <aside class="speaker-copy"><p>HTTPRoute 在 default，两个 Service 在 ingress-gateway-demo。Gateway API 默认不让 Route 跨 namespace 指向它们。</p><p>授权对象必须由目标 namespace 所有者创建，这样来源团队不能自行绕过隔离。</p></aside>
+      </section>
+
+      <section class="slide" data-section="ReferenceGrant" data-title="ReferenceGrant 允许 default 的 HTTPRoute 引用本命名空间 Service">
+        <div class="slide-header"><div><p class="eyebrow">reference-grant.yaml</p><h2>ReferenceGrant 允许 default 的 HTTPRoute 引用本命名空间 Service</h2><div class="rule"></div></div></div>
+        <div class="grid-2"><pre class="code manifest-code"><span class="key">apiVersion:</span> gateway.networking.k8s.io/v1beta1
+<span class="key">kind:</span> ReferenceGrant
+<span class="key">metadata:</span>
+  <span class="key">name:</span> allow-gateway-to-demo
+  <span class="key">namespace:</span> <span class="value">ingress-gateway-demo</span>
+<span class="key">spec:</span>
+  <span class="key">from:</span>
+  - <span class="key">group:</span> gateway.networking.k8s.io
+    <span class="key">kind:</span> HTTPRoute
+    <span class="key">namespace:</span> <span class="value">default</span>
+  <span class="key">to:</span>
+  - <span class="key">group:</span> ""
+    <span class="key">kind:</span> Service</pre><div class="grant-reading"><article><span>WHO</span><strong>HTTPRoute</strong><code>from default</code></article><article><span>WHAT</span><strong>Service</strong><code>core API group</code></article><article><span>WHERE</span><strong>this namespace</strong><code>ingress-gateway-demo</code></article></div></div>
+        <pre class="code terminal command-code"><span class="prompt">$</span> kubectl apply -f k8s-manifests/reference-grant.yaml</pre>
+        <div class="slide-number">26</div>
+        <aside class="speaker-copy"><p>这个 Grant 没列具体 Service 名，所以允许 default namespace 的 HTTPRoute 引用 demo namespace 里的任意 Service。</p><p>需要更严格时，可以按 API 支持的 target name 收窄授权范围。</p></aside>
+      </section>
+
+      <section class="slide" data-section="HTTPRoute" data-title="HTTPRoute 匹配 Host 与路径，并给两个 Service 设置权重">
+        <div class="slide-header"><div><p class="eyebrow">httproute.yaml</p><h2>HTTPRoute 匹配 Host 与路径，并给两个 Service 设置权重</h2><div class="rule"></div></div></div>
+        <pre class="code manifest-code route-manifest"><span class="key">kind:</span> HTTPRoute
+<span class="key">metadata:</span>
+  <span class="key">name:</span> canary-traffic-split
+  <span class="key">namespace:</span> default
+<span class="key">spec:</span>
+  <span class="key">hostnames:</span> [<span class="value">"app.demo.lab"</span>]
+  <span class="key">parentRefs:</span>
+  - <span class="key">name:</span> calico-ingress-gateway
+  <span class="key">rules:</span>
+  - <span class="key">matches:</span>
+    - <span class="key">path:</span> {<span class="key">type:</span> PathPrefix, <span class="key">value:</span> /}
+    <span class="key">backendRefs:</span>
+    - <span class="key">name:</span> app-v1
+      <span class="key">namespace:</span> ingress-gateway-demo
+      <span class="key">port:</span> 80
+      <span class="key">weight:</span> <span class="good">80</span>
+    - <span class="key">name:</span> app-v2
+      <span class="key">namespace:</span> ingress-gateway-demo
+      <span class="key">port:</span> 80
+      <span class="key">weight:</span> <span class="hot">20</span></pre>
+        <div class="slide-number">27</div>
+        <aside class="speaker-copy"><p>HTTPRoute 先通过 parentRefs 附加到 Gateway，再匹配 Host app.demo.lab 和所有以 / 开头的 path。</p><p>backendRefs 指向另一个 namespace 的两个 Service，因此依赖刚才的 ReferenceGrant。</p></aside>
+      </section>
+
+      <section class="slide" data-section="Host 匹配" data-title="app.demo.lab 由 HTTPRoute 匹配，不在 Gateway listener 上">
+        <div class="slide-header"><div><p class="eyebrow">Precise ownership of hostname</p><h2>app.demo.lab 由 HTTPRoute 匹配，不在 Gateway listener 上</h2><div class="rule"></div></div></div>
+        <div class="hostname-ownership"><article><span>Gateway listener</span><strong>hostname omitted</strong><p>接受任何 Host，再交给附加 Route。</p></article><div class="host-request"><code>Host: app.demo.lab</code></div><article class="route"><span>HTTPRoute</span><strong>hostnames: app.demo.lab</strong><p>只有匹配的请求进入 backendRefs。</p></article></div>
+        <div class="grid-2 compact-gap"><div class="flat-block green"><h3>带正确 Host</h3><p class="body">HTTPRoute 匹配，返回 v1 或 v2。</p></div><div class="flat-block red"><h3>缺少或错误 Host</h3><p class="body">没有 Route 匹配，Envoy 通常返回 404。</p></div></div>
+        <div class="slide-number">28</div>
+        <aside class="speaker-copy"><p>原课程有一处文字说 Gateway listener 配了 app.demo.lab，但实际 gateway.yaml 没写 hostname。真正的 hostname 条件在 HTTPRoute。</p><p>所以不带 Host 时失败，不是连接不到 Gateway，而是到达 Envoy 后没有匹配 Route。</p></aside>
+      </section>
+
+      <section class="slide" data-section="资源关系" data-title="原课件关系图：Route 连接 Gateway 与跨命名空间 Service">
+        <div class="slide-header compact-header"><div><p class="eyebrow">Course relationship diagram</p><h2>原课件关系图：Route 连接 Gateway 与跨命名空间 Service</h2><div class="rule"></div></div></div>
+        <figure class="course-image relation-image"><img src="assets/cig-relationships.png" alt="Gateway、HTTPRoute、ReferenceGrant 与 Service 关系图"><figcaption>Gateway 接收流量；HTTPRoute 通过 parentRefs 附加；ReferenceGrant 在目标 namespace 授权 backendRefs；Service 再选择对应版本 Pod。</figcaption></figure>
+        <div class="slide-number">29</div>
+        <aside class="speaker-copy"><p>这张图把两个 namespace 画得很清楚。Gateway 和 Route 在 default，Grant 与 Service 在 ingress-gateway-demo。</p><p>Grant 不是流量经过的代理，它是控制面的授权检查。真正数据包不会“穿过 ReferenceGrant”。</p></aside>
+      </section>
+
+      <section class="slide" data-section="资源关系" data-title="控制面按附加、授权、解析三个步骤确认 Route">
+        <div class="slide-header"><div><p class="eyebrow">Configuration resolution</p><h2>控制面按附加、授权、解析三个步骤确认 Route</h2><div class="rule"></div></div><button class="action-btn" type="button" data-replay="#resource-flow" title="重播动画" aria-label="重播资源关系动画">↻</button></div>
+        <div class="resource-flow is-playing" id="resource-flow"><article><span>Gateway</span><strong>listener :80</strong><code>allowedRoutes=All</code></article><div class="resource-lane"><i>parentRefs</i></div><article><span>HTTPRoute</span><strong>Host + Path</strong><code>80 / 20</code></article><div class="resource-lane grant"><i>grant check</i></div><article><span>ReferenceGrant</span><strong>ALLOW</strong><code>default → Service</code></article><div class="resource-lane backend"><i>backendRefs</i></div><article><span>Services</span><strong>app-v1 / app-v2</strong><code>port 80</code></article></div>
+        <div class="flat-block blue"><p class="body">这是控制面关系动画。数据面请求到达 Envoy 后，直接按已经下发的配置访问后端，不会逐请求查询这些 Kubernetes 对象。</p></div>
+        <div class="slide-number">30</div>
+        <aside class="speaker-copy"><p>控制器先判断 Route 能否附加 Gateway，再检查跨 namespace 引用是否有 Grant，最后解析 Service 和端口。</p><p>这些都是配置生成阶段。每次 HTTP 请求不会回头调用 Kubernetes API 做 Grant 检查。</p></aside>
+      </section>
+
+      <section class="slide" data-section="状态验证" data-title="Accepted、Programmed 与 ResolvedRefs 分别验证不同环节">
+        <div class="slide-header"><div><p class="eyebrow">Status is the first diagnostic</p><h2>Accepted、Programmed 与 ResolvedRefs 分别验证不同环节</h2><div class="rule"></div></div></div>
+        <div class="status-conditions"><article><span>Gateway</span><strong>Accepted=True</strong><p>GatewayClass/controller 接受对象。</p></article><article><span>Gateway</span><strong>Programmed=True</strong><p>listener 与数据面已配置。</p></article><article><span>HTTPRoute</span><strong>Accepted=True</strong><p>Route 成功附加到 parent。</p></article><article><span>HTTPRoute</span><strong>ResolvedRefs=True</strong><p>Service、namespace、port 与 Grant 都能解析。</p></article></div>
+        <pre class="code terminal command-code"><span class="prompt">$</span> kubectl describe gateway calico-ingress-gateway
+<span class="prompt">$</span> kubectl describe httproute canary-traffic-split</pre>
+        <div class="slide-number">31</div>
+        <aside class="speaker-copy"><p>kubectl get 只能看到摘要，真正排障要 describe 看 conditions 和 reason。</p><p>ResolvedRefs=False 常见于 Service 名、namespace、port 写错或缺 ReferenceGrant；Programmed=False 更偏向 controller 或 proxy 配置问题。</p></aside>
+      </section>
+
+      <section class="slide" data-section="BGP 验证" data-title="ToR 与两个 speaker 建立 eBGP 会话">
+        <div class="slide-header"><div><p class="eyebrow">Control-plane reachability</p><h2>ToR 与两个 speaker 建立 eBGP 会话</h2><div class="rule"></div></div></div>
+        <pre class="code terminal bgp-summary"><span class="prompt">$</span> docker exec -it clab-calico-ingress-ceos01 Cli
+ceos&gt; enable
+ceos# show ip bgp summary
+
+Neighbor      AS      State   PfxRcd
+10.10.10.11   65010   <span class="good">Estab</span>   1
+10.10.10.12   65010   <span class="good">Estab</span>   1</pre>
+        <div class="callout"><strong>先有会话，再看路由：</strong>邻居 Established 只证明 BGP 通道正常；是否学到 LB CIDR 还要执行 <code>show ip route</code>。</div>
+        <div class="slide-number">32</div>
+        <aside class="speaker-copy"><p>cEOS 本地 AS 65001，两个邻居都是 65010，状态 Established。</p><p>PfxRcd 只是收到的前缀数量，下一页要看具体 172.16.0.240/28 是否形成两条等价路径。</p></aside>
+      </section>
+
+      <section class="slide" data-section="BGP 路由" data-title="ToR 通过两个下一跳学习 172.16.0.240/28">
+        <div class="slide-header"><div><p class="eyebrow">ECMP route</p><h2>ToR 通过两个下一跳学习 172.16.0.240/28</h2><div class="rule"></div></div></div>
+        <pre class="code terminal route-output"><span class="prompt">ceos#</span> show ip route
+
+B E  172.16.0.240/28 [200/0]
+       via <span class="good">10.10.10.11</span>, Vlan10
+       via <span class="good">10.10.10.12</span>, Vlan10</pre>
+        <div class="route-meaning"><article><span>B</span><strong>BGP learned</strong></article><article><span>E</span><strong>external route</strong></article><article><span>/28</span><strong>whole LB pool</strong></article><article><span>2 paths</span><strong>ECMP candidates</strong></article></div>
+        <div class="flat-block yellow"><p class="body">课程宣告的是整个 <code>/28</code>，不是只宣告单个 <code>172.16.0.241/32</code>。ToR 对这个 pool 内地址使用相同下一跳集合。</p></div>
+        <div class="slide-number">33</div>
+        <aside class="speaker-copy"><p>show ip route 显示 /28 同时经 .11 和 .12。cEOS 配置 maximum-paths 4，所以两条等价 BGP 路径能一起进入转发表。</p><p>这让外部用户无需知道 Kubernetes NodePort，只需访问 LoadBalancer IP。</p></aside>
+      </section>
+
+      <section class="slide" data-section="ECMP" data-title="ToR 按 flow hash 在两个入口节点间选择路径">
+        <div class="slide-header"><div><p class="eyebrow">Layer 3 distribution</p><h2>ToR 按 flow hash 在两个入口节点间选择路径</h2><div class="rule"></div></div><button class="action-btn" type="button" data-replay="#ecmp-flow" title="重播动画" aria-label="重播 ECMP 动画">↻</button></div>
+        <div class="ingress-ecmp is-playing" id="ecmp-flow"><article class="tor-node"><span>ToR</span><strong>172.16.0.240/28</strong><code>ECMP hash</code></article><div class="ecmp-branches"><div class="ecmp-ingress-lane top"><i>FLOW A</i></div><div class="ecmp-ingress-lane bottom"><i>FLOW B</i></div></div><div class="ecmp-targets"><article><span>next hop</span><strong>worker .11</strong><code>BGP speaker</code></article><article><span>next hop</span><strong>worker2 .12</strong><code>BGP speaker</code></article></div></div>
+        <div class="callout"><strong>同一 TCP flow：</strong>通常保持在同一路径。ECMP 不是把单个 HTTP 请求拆成两半，而是在多条连接之间分布。</div>
+        <div class="slide-number">34</div>
+        <aside class="speaker-copy"><p>ToR 对五元组做 hash，某条 TCP flow 选中 worker 或 worker2。后续包通常保持同一路径，避免乱序。</p><p>这里的 50/50 也不是严格每两个请求轮换，取决于 flow hash 和连接复用。</p></aside>
+      </section>
+
+      <section class="slide" data-section="外部主机" data-title="用户主机通过 10.30.30.1 路由到 LoadBalancer 网段">
+        <div class="slide-header"><div><p class="eyebrow">VLAN 30 client</p><h2>用户主机通过 10.30.30.1 路由到 LoadBalancer 网段</h2><div class="rule"></div></div></div>
+        <pre class="code terminal user-route"><span class="prompt">$</span> docker exec clab-calico-ingress-user ip addr show eth1
+inet <span class="good">10.30.30.100/24</span> scope global eth1
+
+<span class="prompt">$</span> docker exec clab-calico-ingress-user ip route
+10.30.30.0/24 dev eth1 src 10.30.30.100
+<span class="good">172.16.0.0/16 via 10.30.30.1 dev eth1</span></pre>
+        <div class="user-path"><article><span>user</span><strong>10.30.30.100</strong></article><div></div><article><span>gateway</span><strong>10.30.30.1</strong></article><div></div><article><span>LB IP</span><strong>172.16.0.241</strong></article></div>
+        <div class="slide-number">35</div>
+        <aside class="speaker-copy"><p>外部容器有管理网 eth0 和实验网 eth1。访问 172.16.0.0/16 时走 eth1，下一跳是 cEOS Vlan30 的 10.30.30.1。</p><p>这条静态路由负责把请求送到能理解 BGP LB 前缀的 ToR。</p></aside>
+      </section>
+
+      <section class="slide" data-section="完整请求" data-title="外部请求经过 ToR、入口 Node、Envoy 与后端 Pod">
+        <div class="slide-header"><div><p class="eyebrow">Data plane</p><h2>外部请求经过 ToR、入口 Node、Envoy 与后端 Pod</h2><div class="rule"></div></div><button class="action-btn" type="button" data-replay="#request-flow" title="重播动画" aria-label="重播完整请求动画">↻</button></div>
+        <div class="request-flow is-playing" id="request-flow"><article><span>VLAN 30</span><strong>User</strong><code>Host app.demo.lab</code></article><div class="request-lane"><i>HTTP</i></div><article class="tor-step"><span>L3</span><strong>ToR ECMP</strong><code>172.16.0.241</code></article><div class="request-lane"><i>NODE</i></div><article class="envoy-step"><span>L7</span><strong>Envoy</strong><code>route + weight</code></article><div class="request-lane stable"><i>80/20</i></div><article class="backend-step"><span>WORKLOAD</span><strong>v1 or v2 Pod</strong><code>worker3 / worker4</code></article></div>
+        <div class="flat-block blue"><p class="body">如果 ECMP 选中的 Node 没有本地 Envoy endpoint，Service 数据面仍可能转发到另一 Node。课程默认 <code>externalTrafficPolicy</code> 与副本分布需要实际检查。</p></div>
+        <div class="slide-number">36</div>
+        <aside class="speaker-copy"><p>请求先做三层路径选择，再在 Envoy 做七层选择。动画每一段只连接相邻卡片，所以不会因缩放出现斜线。</p><p>课程文案说入口节点本地 Envoy，但示例只有一个 proxy 副本。若 ToR 选中另一个 speaker，Service 可能跨节点送到真正的 Envoy endpoint。</p></aside>
+      </section>
+
+      <section class="slide" data-section="Host 匹配" data-title="缺少 Host header 时，请求到达 Envoy 但没有 Route 匹配">
+        <div class="slide-header"><div><p class="eyebrow">Reachable gateway, unmatched request</p><h2>缺少 Host header 时，请求到达 Envoy 但没有 Route 匹配</h2><div class="rule"></div></div></div>
+        <div class="host-compare"><article class="match"><span>REQUEST</span><code>GET / HTTP/1.1<br>Host: app.demo.lab</code><strong>MATCH</strong><p>HTTPRoute 选择 backend。</p></article><article class="no-match"><span>REQUEST</span><code>GET / HTTP/1.1<br>Host: 172.16.0.241</code><strong>NO MATCH</strong><p>Envoy 通常返回 404。</p></article></div>
+        <pre class="code terminal command-code"><span class="prompt">$</span> docker exec clab-calico-ingress-user curl -s http://$GATEWAY_IP
+<span class="error">404 / empty response</span></pre>
+        <div class="slide-number">37</div>
+        <aside class="speaker-copy"><p>不带 -H 时，curl 自动把 Host 写成 IP。它能连上 172.16.0.241，但 app.demo.lab 的 Route 不匹配。</p><p>404 是七层证据，说明网络路径和 Envoy listener 都已经工作，不要把它误诊为 BGP 失败。</p></aside>
+      </section>
+
+      <section class="slide" data-section="单次请求" data-title="带 app.demo.lab Host 后，单次请求返回任一版本">
+        <div class="slide-header"><div><p class="eyebrow">One weighted choice</p><h2>带 app.demo.lab Host 后，单次请求返回任一版本</h2><div class="rule"></div></div></div>
+        <pre class="code terminal single-request"><span class="prompt">$</span> GATEWAY_IP=$(kubectl get svc -n tigera-gateway \
+  -o jsonpath='{.items[0].status.loadBalancer.ingress[0].ip}')
+
+<span class="prompt">$</span> docker exec clab-calico-ingress-user curl -s \
+  -H "Host: app.demo.lab" http://$GATEWAY_IP | \
+  grep -o "App Version [12]"
+
+<span class="good">App Version 1</span></pre>
+        <div class="flat-block yellow"><p class="body">单次返回 v1 或 v2 都合理。权重只能通过多次独立请求或连接观察，不能从一次结果判断比例。</p></div>
+        <div class="slide-number">38</div>
+        <aside class="speaker-copy"><p>这条 curl 同时验证路由、Host 匹配、Envoy 和后端。返回 v1 是一次随机或调度选择的结果，返回 v2 也正常。</p><p>要验证权重，需要足够样本，并注意 curl 是否复用连接。</p></aside>
+      </section>
+
+      <section class="slide" data-section="权重语义" data-title="80 与 20 是相对权重，不是固定请求编号规则">
+        <div class="slide-header"><div><p class="eyebrow">Weighted routing semantics</p><h2>80 与 20 是相对权重，不是固定请求编号规则</h2><div class="rule"></div></div></div>
+        <div class="weight-semantics"><article class="stable"><span>app-v1</span><strong>weight 80</strong><div class="weight-bar"><i style="width:80%"></i></div><p>长期期望约 80%。</p></article><article class="canary"><span>app-v2</span><strong>weight 20</strong><div class="weight-bar"><i style="width:20%"></i></div><p>长期期望约 20%。</p></article></div>
+        <div class="not-equal"><p><strong>不是：</strong>前 80 个请求固定去 v1，后 20 个固定去 v2。</p><p><strong>也不是：</strong>每 5 个请求必然 4 个 v1、1 个 v2。</p><p><strong>应理解为：</strong>每次选择按权重参与，样本越大越接近配置比例。</p></div>
+        <div class="slide-number">39</div>
+        <aside class="speaker-copy"><p>权重是相对数，80:20 与 8:2 在比例上等价。实现会根据连接和请求进行选择。</p><p>小样本出现偏差很正常，测试时至少做几十到几百次，并看多个时间窗口。</p></aside>
+      </section>
+
+      <section class="slide" data-section="分布测试" data-title="100 次请求可以快速观察近似 80/20 分布">
+        <div class="slide-header"><div><p class="eyebrow">Sample the distribution</p><h2>100 次请求可以快速观察近似 80/20 分布</h2><div class="rule"></div></div></div>
+        <pre class="code terminal distribution-test"><span class="prompt">$</span> for i in $(seq 100); do
+  docker exec clab-calico-ingress-user curl -s \
+    -H "Host: app.demo.lab" http://$GATEWAY_IP | \
+    grep -o "App Version [12]"
+done | sort | uniq -c
+
+     <span class="good">80 App Version 1</span>
+     <span class="value">20 App Version 2</span></pre>
+        <div class="distribution-bars"><article><span>v1 stable</span><div><i style="width:80%"></i></div><strong>example 80</strong></article><article><span>v2 canary</span><div><i style="width:20%"></i></div><strong>example 20</strong></article></div>
+        <div class="slide-number">40</div>
+        <aside class="speaker-copy"><p>循环 100 次，把页面里的 App Version 提取出来，再 sort uniq 计数。课程刚好得到 80 和 20。</p><p>现场结果可能是 76/24。只要多轮样本围绕配置比例波动，就符合预期。</p></aside>
+      </section>
+
+      <section class="slide" data-section="统计验证" data-title="更大样本应显示接近而非精确等于配置比例">
+        <div class="slide-header"><div><p class="eyebrow">Use percentages</p><h2>更大样本应显示接近而非精确等于配置比例</h2><div class="rule"></div></div></div>
+        <div class="sample-stats"><article class="v1"><span>Version 1</span><strong>161</strong><b>80.5%</b></article><article class="v2"><span>Version 2</span><strong>39</strong><b>19.5%</b></article><div class="sample-total"><span>TOTAL</span><strong>200</strong></div></div>
+        <pre class="code terminal command-code"><span class="prompt">$</span> for i in $(seq 200); do ...; done | awk '
+/Version 1/ {v1++} /Version 2/ {v2++}
+END { total=v1+v2; printf("v1 %.1f%%, v2 %.1f%%\n", v1/total*100, v2/total*100) }'</pre>
+        <div class="callout"><strong>工程上还要看：</strong>错误率、延迟、业务指标和版本日志。流量比例正确不代表金丝雀版本健康。</div>
+        <div class="slide-number">41</div>
+        <aside class="speaker-copy"><p>200 次得到 80.5% 和 19.5%，这比恰好 80/20 更能说明权重是概率分布。</p><p>金丝雀决策不能只看计数，还要比较 v2 的错误率、P95/P99、资源占用和业务成功率。</p></aside>
+      </section>
+
+      <section class="slide" data-section="推进发布" data-title="JSON Patch 把两个 backend 权重改为 50/50">
+        <div class="slide-header"><div><p class="eyebrow">Increase canary exposure</p><h2>JSON Patch 把两个 backend 权重改为 50/50</h2><div class="rule"></div></div></div>
+        <pre class="code terminal weight-patch"><span class="prompt">$</span> kubectl patch httproute canary-traffic-split \
+  --type='json' -p='[
+  {"op":"replace","path":"/spec/rules/0/backendRefs/0/weight","value":50},
+  {"op":"replace","path":"/spec/rules/0/backendRefs/1/weight","value":50}
+]'
+
+<span class="prompt">$</span> kubectl get httproute canary-traffic-split \
+  -o jsonpath='{.spec.rules[0].backendRefs}' | jq</pre>
+        <div class="weight-change"><article><span>BEFORE</span><strong>80 / 20</strong></article><i>›</i><article class="after"><span>AFTER</span><strong>50 / 50</strong></article></div>
+        <div class="slide-number">42</div>
+        <aside class="speaker-copy"><p>JSON Patch 用数组索引定位两个 backendRef。先确认 YAML 顺序，再执行，避免把权重改反。</p><p>更新 HTTPRoute 不需要重建 Service 或 Pod，controller 会把新权重下发到 Envoy。</p></aside>
+      </section>
+
+      <section class="slide" data-section="50/50" data-title="更新后新请求近似平均分配给两个版本">
+        <div class="slide-header"><div><p class="eyebrow">Canary at half traffic</p><h2>更新后新请求近似平均分配给两个版本</h2><div class="rule"></div></div><button class="action-btn" type="button" data-replay="#half-flow" title="重播动画" aria-label="重播 50/50 动画">↻</button></div>
+        <div class="half-flow is-playing" id="half-flow"><article><span>Envoy</span><strong>HTTPRoute</strong><code>new config</code></article><div class="half-branches"><div class="half-lane top"><i>50%</i></div><div class="half-lane bottom"><i>50%</i></div></div><div class="half-targets"><article class="v1"><span>stable</span><strong>app-v1</strong></article><article class="v2"><span>canary</span><strong>app-v2</strong></article></div></div>
+        <pre class="code terminal command-code">     52 App Version 1
+     48 App Version 2</pre>
+        <div class="slide-number">43</div>
+        <aside class="speaker-copy"><p>50/50 后重复 100 次，课程得到 52/48。这个轻微偏差完全正常。</p><p>动画仍然使用两条独立水平轨道，不从中心画斜线到上下对象，因此缩放后端点不会漂移。</p></aside>
+      </section>
+
+      <section class="slide" data-section="完成发布" data-title="把 v1 权重设为 0，所有新请求转到 v2">
+        <div class="slide-header"><div><p class="eyebrow">Complete rollout</p><h2>把 v1 权重设为 0，所有新请求转到 v2</h2><div class="rule"></div></div></div>
+        <div class="rollout-stages"><article><span>STEP 1</span><strong>80 / 20</strong><p>初始验证</p></article><i>›</i><article><span>STEP 2</span><strong>50 / 50</strong><p>扩大样本</p></article><i>›</i><article class="complete"><span>STEP 3</span><strong>0 / 100</strong><p>完成发布</p></article></div>
+        <pre class="code terminal command-code"><span class="prompt">$</span> kubectl patch httproute canary-traffic-split --type='json' -p='[
+  {"op":"replace","path":"/spec/rules/0/backendRefs/0/weight","value":0},
+  {"op":"replace","path":"/spec/rules/0/backendRefs/1/weight","value":100}
+]'</pre>
+        <div class="flat-block green"><p class="body">连续 10 次请求都应返回 <code>App Version 2</code>。已有长连接的行为取决于连接复用和协议，测试重点是新请求。</p></div>
+        <div class="slide-number">44</div>
+        <aside class="speaker-copy"><p>完成发布时不需要立刻删除 v1。先把新请求权重调到 0/100，观察一段时间，再决定是否缩容旧版本。</p><p>HTTP keep-alive 或长连接可能保留已有上游，验证时要明确测的是新请求还是现有连接。</p></aside>
+      </section>
+
+      <section class="slide" data-section="回滚" data-title="发现异常时把权重改回 100/0">
+        <div class="slide-header"><div><p class="eyebrow">Traffic rollback</p><h2>发现异常时把权重改回 100/0</h2><div class="rule"></div></div></div>
+        <div class="rollback-flow"><article class="bad"><span>CANARY SIGNAL</span><strong>v2 error rate rises</strong><code>latency / business KPI</code></article><div class="rollback-lane"><i>PATCH</i></div><article class="route"><span>HTTPRoute</span><strong>v1=100 · v2=0</strong><code>configuration update</code></article><div class="rollback-lane"><i>NEW REQUESTS</i></div><article class="stable"><span>STABLE</span><strong>app-v1</strong><code>serves traffic</code></article></div>
+        <pre class="code terminal command-code"><span class="prompt">$</span> kubectl patch httproute canary-traffic-split --type='json' -p='[
+  {"op":"replace","path":"/spec/rules/0/backendRefs/0/weight","value":100},
+  {"op":"replace","path":"/spec/rules/0/backendRefs/1/weight","value":0}
+]'</pre>
+        <div class="slide-number">45</div>
+        <aside class="speaker-copy"><p>回滚只改 Route 权重，新请求立即回到 v1，v2 Pod 可以保留用于日志和问题分析。</p><p>它比重新部署旧镜像快，但仍要监控控制器是否接受配置以及代理是否及时更新。</p></aside>
+      </section>
+
+      <section class="slide" data-section="Envoy 组件" data-title="课程输出区分 Envoy Gateway controller 与数据面 proxy">
+        <div class="slide-header"><div><p class="eyebrow">Controller and proxy</p><h2>课程输出区分 Envoy Gateway controller 与数据面 proxy</h2><div class="rule"></div></div></div>
+        <pre class="code terminal envoy-output"><span class="prompt">$</span> kubectl get pods -n tigera-gateway -o wide
+
+envoy-default-calico-ingress-gateway-...   2/2 Running   <span class="good">k01-worker</span>
+envoy-gateway-...                          1/1 Running   <span class="good">k01-worker</span>
+...certgen...                              0/1 Completed k01-worker3</pre>
+        <div class="component-split"><article><span>envoy-gateway</span><strong>control plane</strong><p>把 Gateway API 资源翻译成 Envoy 配置。</p></article><article><span>envoy-default-...</span><strong>data plane proxy</strong><p>监听 80 并实际处理外部请求。</p></article><article><span>certgen job</span><strong>setup task</strong><p>完成后状态 Completed 属于正常。</p></article></div>
+        <div class="slide-number">46</div>
+        <aside class="speaker-copy"><p>名字里都有 envoy，容易混淆。envoy-gateway 是控制器，envoy-default 开头的是为具体 Gateway 创建的数据面 proxy。</p><p>certgen 是 Job，完成后 0/1 Completed 不是故障。</p></aside>
+      </section>
+
+      <section class="slide" data-section="入口高可用" data-title="双 BGP 路径不自动等于双 Envoy 数据面">
+        <div class="slide-header"><div><p class="eyebrow">Separate route redundancy from proxy redundancy</p><h2>双 BGP 路径不自动等于双 Envoy 数据面</h2><div class="rule"></div></div></div>
+        <div class="ha-layers"><article><span>L3 ROUTING</span><h3>两条 ECMP 路径</h3><p>ToR 可选择 worker 或 worker2。</p><strong>route redundancy</strong></article><article><span>SERVICE</span><h3>LoadBalancer data path</h3><p>选中节点把流量导向 proxy endpoint。</p><strong>cluster or local policy</strong></article><article><span>PROXY</span><h3>Envoy 副本</h3><p>课程示例可能只有一个 data plane Pod。</p><strong>replica redundancy</strong></article></div>
+        <div class="callout"><strong>生产检查：</strong>Gateway proxy replicas、pod anti-affinity/topology spread、Service <code>externalTrafficPolicy</code>、每节点 endpoint 与故障切换。</div>
+        <div class="slide-number">47</div>
+        <aside class="speaker-copy"><p>路由冗余、Service 转发和代理副本是三层独立问题。两条 BGP next hop 只说明 ToR 有两个入口选择。</p><p>若要求每个入口节点本地终结流量，需要多副本和拓扑约束，还要配合 externalTrafficPolicy Local 等设计。</p></aside>
+      </section>
+
+      <section class="slide" data-section="NetworkPolicy" data-title="全局默认拒绝时，Envoy 需要 DNS、控制器与后端放行规则">
+        <div class="slide-header"><div><p class="eyebrow">Policy interaction</p><h2>全局默认拒绝时，Envoy 需要 DNS、控制器与后端放行规则</h2><div class="rule"></div></div></div>
+        <div class="policy-needs"><article><span>INGRESS</span><strong>external → Envoy :80</strong><p>允许入口请求到代理 listener。</p></article><article><span>EGRESS</span><strong>Envoy → kube-dns :53</strong><p>代理启动和服务解析需要 DNS。</p></article><article><span>EGRESS</span><strong>Envoy → controller :18000</strong><p>课程对应版本需接收控制器配置。</p></article><article><span>EGRESS</span><strong>Envoy → app Services :80</strong><p>允许访问 demo namespace 后端。</p></article></div>
+        <div class="flat-block yellow"><p class="body">ReferenceGrant 只授权配置引用，不替代 NetworkPolicy。Route <code>ResolvedRefs=True</code> 时，数据面仍可能被策略阻断。</p></div>
+        <div class="slide-number">48</div>
+        <aside class="speaker-copy"><p>Gateway API 授权和 Calico NetworkPolicy 是两个平面。Grant 决定能不能引用，Policy 决定包能不能通过。</p><p>课程没有启用全局默认拒绝，所以不需要额外规则。生产若有 default deny，要显式放行 proxy 的 DNS、控制器和后端流量。</p></aside>
+      </section>
+
+      <section class="slide" data-section="源地址" data-title="源 IP 是否保留取决于 Gateway Service 的 externalTrafficPolicy">
+        <div class="slide-header"><div><p class="eyebrow">Inspect instead of assuming</p><h2>源 IP 是否保留取决于 Gateway Service 的 externalTrafficPolicy</h2><div class="rule"></div></div></div>
+        <table class="data-table source-policy"><thead><tr><th>模式</th><th>入口 Node 行为</th><th>后端可见源地址</th><th>拓扑要求</th></tr></thead><tbody><tr><td><code>Cluster</code></td><td>可转发到任意 proxy endpoint</td><td>可能发生 SNAT</td><td>无需每个入口 Node 有本地 endpoint</td></tr><tr><td><code>Local</code></td><td>只使用本地 proxy endpoint</td><td>通常保留客户端源 IP</td><td>每个被宣告入口 Node 应有健康本地 endpoint</td></tr></tbody></table>
+        <pre class="code terminal command-code"><span class="prompt">$</span> kubectl get svc -n tigera-gateway \
+  -o jsonpath='{range .items[*]}{.metadata.name}{"  "}{.spec.externalTrafficPolicy}{"\n"}{end}'</pre>
+        <div class="slide-number">49</div>
+        <aside class="speaker-copy"><p>课程没有展示 externalTrafficPolicy，所以不能直接断言 Envoy 一定看到 10.30.30.100。</p><p>Cluster 更容易跨节点找到 endpoint，Local 更适合保留源 IP，但要求路由宣告和本地副本拓扑配套。</p></aside>
+      </section>
+
+      <section class="slide" data-section="可观测性" data-title="Route 状态、Envoy 日志与版本响应构成三层证据">
+        <div class="slide-header"><div><p class="eyebrow">Control and data plane evidence</p><h2>Route 状态、Envoy 日志与版本响应构成三层证据</h2><div class="rule"></div></div></div>
+        <div class="observability-layers"><article><span>CONTROL PLANE</span><h3>Gateway / HTTPRoute conditions</h3><code>Accepted · Programmed · ResolvedRefs</code></article><article><span>PROXY</span><h3>Envoy logs and metrics</h3><code>route match · response code · upstream</code></article><article><span>APPLICATION</span><h3>Version response</h3><code>App Version 1 / 2</code></article></div>
+        <pre class="code terminal command-code"><span class="prompt">$</span> kubectl logs -n tigera-gateway \
+  -l gateway.envoyproxy.io/owning-gateway-name=calico-ingress-gateway</pre>
+        <div class="slide-number">50</div>
+        <aside class="speaker-copy"><p>控制面 condition 能解释配置是否被接受，Envoy 日志能解释请求匹配和上游，应用响应能证明真正版本。</p><p>只看 curl 成功不足以判断 80/20，也看不到 Route 配置里潜在 warning。</p></aside>
+      </section>
+
+      <section class="slide" data-section="排障" data-title="Gateway 没有地址时，先查 IPAM 再查 controller">
+        <div class="slide-header"><div><p class="eyebrow">No ADDRESS / EXTERNAL-IP pending</p><h2>Gateway 没有地址时，先查 IPAM 再查 controller</h2><div class="rule"></div></div></div>
+        <div class="trouble-grid ingress-trouble"><article><span>1</span><h3>Gateway status</h3><code>describe gateway</code><p>Accepted、Programmed 与 events。</p></article><article><span>2</span><h3>LB IPPool</h3><code>kubectl get ippools</code><p>allowedUses、CIDR、Automatic。</p></article><article><span>3</span><h3>LB controller</h3><code>get kubecontrollersconfiguration</code><p>是否为 Service 分配地址。</p></article><article><span>4</span><h3>GatewayClass</h3><code>get gatewayclass</code><p>Accepted 与 controllerName。</p></article><article><span>5</span><h3>Proxy Service</h3><code>get svc -n tigera-gateway</code><p>status.loadBalancer 是否写入。</p></article><article><span>6</span><h3>Controller logs</h3><code>logs envoy-gateway</code><p>配置与资源创建错误。</p></article></div>
+        <div class="slide-number">51</div>
+        <aside class="speaker-copy"><p>Gateway ADDRESS 为空时，先沿控制面查。IPPool 是否存在、是否只允许 LoadBalancer、分配控制器是否启用、GatewayClass 是否 Accepted。</p><p>还要看代理 Service 的 events 和 status，而不是先去 ToR 查 BGP。</p></aside>
+      </section>
+
+      <section class="slide" data-section="排障" data-title="能到 Gateway 但后端失败时，重点查 Host、Route、Grant 与 Service">
+        <div class="slide-header"><div><p class="eyebrow">404 / 503 / timeout after connect</p><h2>能到 Gateway 但后端失败时，重点查 Host、Route、Grant 与 Service</h2><div class="rule"></div></div></div>
+        <div class="failure-map"><article><span>404</span><strong>no matching route</strong><p>Host 或 path 不匹配。</p></article><article><span>ResolvedRefs=False</span><strong>reference invalid</strong><p>缺 Grant、Service/port/namespace 错。</p></article><article><span>503</span><strong>no healthy upstream</strong><p>Service endpoints、Pod readiness 或策略。</p></article><article><span>timeout</span><strong>data path blocked</strong><p>NetworkPolicy、路由或后端监听。</p></article></div>
+        <pre class="code terminal command-code"><span class="prompt">$</span> kubectl describe httproute canary-traffic-split
+<span class="prompt">$</span> kubectl get referencegrant -n ingress-gateway-demo
+<span class="prompt">$</span> kubectl get endpointslice -n ingress-gateway-demo</pre>
+        <div class="slide-number">52</div>
+        <aside class="speaker-copy"><p>HTTP 状态码已经提供定位线索。404 看匹配，503 看 upstream，timeout 看网络策略和路径。</p><p>ResolvedRefs=False 时先修控制面引用；它为 True 但 503，再看 EndpointSlice 和 Pod readiness。</p></aside>
+      </section>
+
+      <section class="slide" data-section="排障" data-title="外部完全不可达时，按用户路由、ToR BGP、Node Service 检查">
+        <div class="slide-header"><div><p class="eyebrow">No TCP connection to LoadBalancer IP</p><h2>外部完全不可达时，按用户路由、ToR BGP、Node Service 检查</h2><div class="rule"></div></div></div>
+        <div class="network-ladder"><article><span>USER</span><strong>ip route</strong><code>172.16/16 via 10.30.30.1</code></article><i>›</i><article><span>TOR</span><strong>BGP summary</strong><code>.11/.12 Established</code></article><i>›</i><article><span>TOR</span><strong>show ip route</strong><code>172.16.0.240/28 ECMP</code></article><i>›</i><article><span>NODE</span><strong>Service rules</strong><code>LB IP :80</code></article><i>›</i><article><span>PROXY</span><strong>ready endpoint</strong><code>Envoy listening</code></article></div>
+        <pre class="code terminal command-code"><span class="prompt">$</span> calicoctl node status
+<span class="prompt">$</span> docker exec -it clab-calico-ingress-ceos01 Cli -c "show ip bgp summary"
+<span class="prompt">$</span> docker exec -it clab-calico-ingress-ceos01 Cli -c "show ip route"</pre>
+        <div class="slide-number">53</div>
+        <aside class="speaker-copy"><p>如果连 TCP 都建不起来，就从外向内查。用户有没有路由、ToR 有没有会话和 /28、Node 是否有 LB Service 规则、proxy endpoint 是否 Ready。</p><p>不要在这种情况下先改 HTTPRoute，因为请求还没到七层。</p></aside>
+      </section>
+
+      <section class="slide" data-section="现场演示" data-title="三十分钟演示顺序覆盖入口、路由、发布与回滚">
+        <div class="slide-header"><div><p class="eyebrow">Live demo runbook</p><h2>三十分钟演示顺序覆盖入口、路由、发布与回滚</h2><div class="rule"></div></div></div>
+        <div class="demo-columns ingress-demo"><ol><li><code>./deploy.sh</code><span>搭建五节点、ToR、BGP、Gateway API 和应用</span></li><li><code>get nodes -l bgp-peer=true</code><span>确认两个 speaker</span></li><li><code>show ip bgp summary</code><span>确认两条 eBGP 会话</span></li><li><code>get gatewayclass</code><span>确认 tigera class Accepted</span></li><li><code>get pods/svc -n ingress-gateway-demo</code><span>确认后端落点</span></li><li><code>apply gateway.yaml</code><span>等待 Programmed 与 .241</span></li><li><code>apply reference-grant.yaml</code><span>授权跨 namespace</span></li></ol><ol start="8"><li><code>apply httproute.yaml</code><span>确认 Accepted/ResolvedRefs</span></li><li><code>show ip route</code><span>确认 /28 双 next hop</span></li><li><code>curl without Host</code><span>观察 404</span></li><li><code>curl with Host</code><span>验证单次请求</span></li><li><code>100 requests</code><span>观察近似 80/20</span></li><li><code>patch 50/50 → 0/100</code><span>推进发布</span></li><li><code>patch 100/0</code><span>演示快速回滚</span></li></ol></div>
+        <div class="callout"><strong>清理：</strong><code>chmod +x destroy.sh &amp;&amp; ./destroy.sh</code>。执行前确认没有需要保留的抓包或日志。</div>
+        <div class="slide-number">54</div>
+        <aside class="speaker-copy"><p>演示顺序先证明基础能力，再手动创建三类 Gateway 资源，最后做数据面和权重变化。</p><p>每一步都说清验证对象：BGP 负责可达，Gateway 负责 listener，Grant 负责授权，Route 负责匹配和权重。</p></aside>
+      </section>
+
+      <section class="slide" data-section="总结与来源" data-title="Calico Ingress Gateway 的完整证据链">
+        <div class="slide-header"><div><p class="eyebrow">Summary and sources</p><h2>Calico Ingress Gateway 的完整证据链</h2><div class="rule"></div></div></div>
+        <div class="summary-row"><article><span>01</span><h3>入口能力</h3><p>GatewayAPI CR 提供 GatewayClass 与 Envoy Gateway。</p></article><article><span>02</span><h3>外部可达</h3><p>LB IPAM 分配地址，Calico BGP 向 ToR 宣告池。</p></article><article><span>03</span><h3>请求路由</h3><p>Gateway listener 接收，HTTPRoute 匹配 Host 与后端。</p></article><article><span>04</span><h3>渐进发布</h3><p>调整 backend weight 扩大、完成或回滚金丝雀。</p></article></div>
+        <div class="sources"><article><strong>Lesson 19</strong><a href="https://k8snetworking.com/lessons/19-calico-ingress">k8snetworking.com/.../19-calico-ingress</a></article><article><strong>课程仓库</strong><a href="https://github.com/aadhilam/k8-networking-calico-containerlab/tree/master/containerlab/19-calico-ingress">github.com/aadhilam/.../19-calico-ingress</a></article><article><strong>Calico Gateway</strong><a href="https://docs.tigera.io/calico/latest/networking/ingress-gateway/about-calico-ingress-gateway">docs.tigera.io/.../ingress-gateway</a></article><article><strong>LB BGP</strong><a href="https://docs.tigera.io/calico/latest/networking/configuring/advertise-service-ips">docs.tigera.io/.../advertise-service-ips</a></article></div>
+        <div class="slide-number">55</div>
+        <aside class="speaker-copy"><p>最后用四层收束：Operator 提供 Gateway 能力，Calico IPAM 和 BGP 提供外部地址与路由，Envoy 按 HTTPRoute 转发，权重更新完成渐进发布。</p><p>生产还要补齐多副本拓扑、NetworkPolicy、源地址策略、TLS、可观测性和自动化发布判断。</p></aside>
+      </section>
+
+    </div>
+    <div class="progress-track" aria-hidden="true"><div id="progress-fill"></div></div>
+    <nav class="controls" aria-label="演示控制"><button class="tool-btn" id="prev" type="button" title="上一页" aria-label="上一页">‹</button><button class="tool-btn" id="next" type="button" title="下一页" aria-label="下一页">›</button><button class="tool-btn" id="notes-toggle" type="button" title="讲稿" aria-label="显示或隐藏讲稿" aria-pressed="false">N</button><button class="tool-btn" id="overview-toggle" type="button" title="总览" aria-label="显示或隐藏总览" aria-pressed="false">▦</button><button class="tool-btn" id="fullscreen" type="button" title="全屏" aria-label="切换全屏">⛶</button></nav>
+    <button class="notes-backdrop" id="notes-backdrop" type="button" aria-label="关闭讲稿" tabindex="-1"></button>
+    <aside class="notes-panel" id="notes-panel" aria-live="polite" aria-hidden="true"><div class="notes-header"><h2 id="notes-title">讲稿</h2><button class="notes-close" id="notes-close" type="button" title="关闭讲稿" aria-label="关闭讲稿">×</button></div><div id="notes-body"></div></aside>
+    <aside class="overview" id="overview" aria-label="幻灯片总览"></aside>
+  </main>
+  <script src="app.js?v=1"></script>
+</body>
+</html>

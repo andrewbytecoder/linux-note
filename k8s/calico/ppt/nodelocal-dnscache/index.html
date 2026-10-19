@@ -1,0 +1,548 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="基于 Kubernetes Networking Labs Lesson 17 的 NodeLocal DNSCache 中文动态演示课件">
+  <title>NodeLocal DNSCache：让 DNS 查询先在本节点命中</title>
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="styles.css?v=1">
+</head>
+<body>
+  <main class="deck-shell" aria-label="NodeLocal DNSCache HTML 演示文稿">
+    <div id="deck-canvas">
+
+      <section class="slide cover active" data-section="NodeLocal DNSCache" data-title="让 DNS 查询先在本节点命中">
+        <div class="cover-layout dns-cover-layout">
+          <div class="cover-copy">
+            <p class="eyebrow">Lesson 17 · CoreDNS · iptables · Cache</p>
+            <h1>NodeLocal DNSCache<br><span class="yellow-mark">让 DNS 先在本节点命中</span></h1>
+            <p class="lead">Pod 仍然查询 <code>10.96.0.10</code>，但答案优先从所在节点的缓存返回；只有 miss 才回源 CoreDNS。</p>
+            <div class="cover-meta"><span>10.96.0.10</span><span>169.254.20.10</span><span>DaemonSet</span><span>NOTRACK</span></div>
+          </div>
+          <div class="dns-cover-flow is-playing" id="cover-flow" aria-label="Pod 查询本地 DNS 缓存，未命中后回源 CoreDNS">
+            <article class="flow-card pod"><span>CLIENT POD</span><strong>dns-test</strong><code>UDP :53</code></article>
+            <div class="flow-lane orange"><i>QUERY</i></div>
+            <article class="flow-card cache"><span>THIS NODE</span><strong>NodeLocal Cache</strong><code>10.96.0.10</code><b>HIT → local response</b></article>
+            <div class="flow-lane green delayed"><i>MISS / TCP</i></div>
+            <article class="flow-card coredns"><span>UPSTREAM</span><strong>CoreDNS</strong><code>kube-dns-upstream</code></article>
+            <div class="cover-caption"><b>HIT</b> 不离开节点　/　<b>MISS</b> 才经 upstream Service 回源</div>
+          </div>
+        </div>
+        <aside class="speaker-copy"><p>大家好，这一节讲 NodeLocal DNSCache。它不是替换 CoreDNS，而是在每个节点放一个轻量缓存代理，让 Pod 的 DNS 查询先走本机。</p><p>今天最重要的不是背一个 DaemonSet，而是看懂透明接管：Pod 的 resolv.conf 仍然写 10.96.0.10，iptables raw 表先把包标成 UNTRACKED，内核再把这个地址当本地地址交给缓存进程。</p><p class="note-source">主课程：<a href="https://k8snetworking.com/lessons/17-nodelocal-dnscache">https://k8snetworking.com/lessons/17-nodelocal-dnscache</a></p></aside>
+      </section>
+
+      <section class="slide" data-section="问题背景" data-title="默认 DNS 路径把一次查询变成跨节点网络请求">
+        <div class="slide-header"><div><p class="eyebrow">Before NodeLocal</p><h2>默认 DNS 路径把一次查询变成跨节点网络请求</h2><div class="rule"></div></div></div>
+        <div class="standard-dns is-playing" id="standard-flow">
+          <article><span>Worker A</span><strong>Client Pod</strong><code>192.168.x.x</code></article><div class="dns-lane"><i>UDP query</i></div><article class="svc"><span>Service VIP</span><strong>kube-dns</strong><code>10.96.0.10</code></article><div class="dns-lane"><i>DNAT</i></div><article class="remote"><span>Maybe Worker B</span><strong>CoreDNS Pod</strong><code>:53</code></article>
+        </div>
+        <div class="grid-3 compact-gap"><div class="flat-block orange"><h3>额外时延</h3><p class="body">命中远端 CoreDNS 时，要经过 Service 转发和节点间网络。</p></div><div class="flat-block red"><h3>UDP conntrack</h3><p class="body">大量短查询会增加表项压力，并可能暴露竞态问题。</p></div><div class="flat-block blue"><h3>尾延迟</h3><p class="body">上游抖动、丢包与重试都会被业务请求放大。</p></div></div>
+        <div class="slide-number">02</div>
+        <aside class="speaker-copy"><p>标准路径里，Pod 先发给 kube-dns ClusterIP，再由 kube-proxy 把流量 DNAT 到某个 CoreDNS Pod。这个 Pod 可能在另一台节点上。</p><p>DNS 单次报文很小，但调用频率高。延迟、conntrack 压力和偶发 UDP 丢包累积起来，就会变成应用启动慢、服务发现超时或者明显的 P99 抖动。</p></aside>
+      </section>
+
+      <section class="slide" data-section="核心概念" data-title="NodeLocal 是每节点缓存层，不是第二套权威 DNS">
+        <div class="slide-header"><div><p class="eyebrow">Cache, not authority</p><h2>NodeLocal 是每节点缓存层，不是第二套权威 DNS</h2><div class="rule"></div></div></div>
+        <div class="role-split"><article class="local"><span>DaemonSet · every node</span><h3>node-local-dns</h3><p>监听本地地址、缓存响应、暴露指标、miss 时转发。</p><code>registry.k8s.io/dns/k8s-dns-node-cache:1.26.4</code></article><div class="role-arrow">MISS ›</div><article class="authority"><span>Deployment · cluster service</span><h3>CoreDNS</h3><p>读取 Kubernetes 服务发现信息，并按 Corefile 完成权威解析与外部转发。</p><code>kube-dns-upstream</code></article></div>
+        <div class="callout"><strong>边界：</strong>缓存 Pod 不直接监听 Kubernetes API 生成 Service 记录；它把集群域 miss 交给 CoreDNS。</div>
+        <div class="slide-number">03</div>
+        <aside class="speaker-copy"><p>这里要先纠正一个常见说法：NodeLocal 不是“每台机器部署一份 CoreDNS 权威服务”。它使用 CoreDNS 插件框架，但角色是缓存代理。</p><p>Service 和 Pod 记录仍然由原来的 CoreDNS 回答。NodeLocal 只保存最近答案，在 TTL 有效期内直接返回。</p></aside>
+      </section>
+
+      <section class="slide" data-section="收益" data-title="它同时优化时延、连接跟踪与可观测性">
+        <div class="slide-header"><div><p class="eyebrow">Why it exists</p><h2>它同时优化时延、连接跟踪与可观测性</h2><div class="rule"></div></div></div>
+        <div class="benefit-grid"><article><span>01</span><h3>本地命中</h3><p>同名查询直接从节点缓存返回，减少网络跳数。</p></article><article><span>02</span><h3>绕开 DNAT</h3><p>Pod 到本地缓存的 DNS 包使用 NOTRACK，不占用普通 Service NAT 路径。</p></article><article><span>03</span><h3>TCP 回源</h3><p>集群域 miss 可用 TCP 访问 CoreDNS，连接关闭后 conntrack 更快清理。</p></article><article><span>04</span><h3>负缓存</h3><p>短时间缓存 NXDOMAIN，抑制错误域名造成的查询风暴。</p></article><article><span>05</span><h3>节点级指标</h3><p>每个 Node 都有 hit、miss、request、entry 指标。</p></article><article><span>06</span><h3>故障域更小</h3><p>已有缓存可吸收部分上游短时抖动，但不能永久替代上游。</p></article></div>
+        <div class="slide-number">04</div>
+        <aside class="speaker-copy"><p>最直观的收益是低延迟，但真正值得关注的还有 conntrack。Pod 发往本地缓存的包不做普通 Service DNAT；NodeLocal 到 CoreDNS 的 miss 又可以强制使用 TCP。</p><p>另外，指标被拆到节点维度，排查“只有某一台机器 DNS 慢”会更直接。</p></aside>
+      </section>
+
+      <section class="slide" data-section="课程架构" data-title="原课件拓扑：Pod 到本地缓存，miss 再到 upstream">
+        <div class="slide-header compact-header"><div><p class="eyebrow">Course architecture</p><h2>原课件拓扑：Pod 到本地缓存，miss 再到 upstream</h2><div class="rule"></div></div></div>
+        <figure class="course-figure"><img src="assets/nodelocal-dnscache-setup.png" alt="原课件 NodeLocal DNSCache 架构图"><figcaption>原课程图：<code>kube-dns</code> 入口在节点内透明接管；cluster miss 走 <code>kube-dns-upstream</code>，外部域走节点上游 resolver。</figcaption></figure>
+        <div class="slide-number">05</div>
+        <aside class="speaker-copy"><p>这张是课程仓库原图。注意两个 Service 名称：kube-dns 是 Pod 看到的入口，kube-dns-upstream 是 NodeLocal 回源 CoreDNS 的通道。</p><p>外部域名不是先问 Kubernetes 记录，而是使用节点的上游解析器。后面我们会直接对照 Corefile。</p></aside>
+      </section>
+
+      <section class="slide" data-section="实验环境" data-title="Lesson 17 使用三节点 Kind 与 Calico 3.30.0">
+        <div class="slide-header"><div><p class="eyebrow">containerlab/17-nodelocal-dnscache</p><h2>Lesson 17 使用三节点 Kind 与 Calico 3.30.0</h2><div class="rule"></div></div></div>
+        <div class="lab-nodes"><article><span>CONTROL PLANE</span><strong>k01-control-plane</strong><code>kindest/node:v1.32.2</code></article><article><span>WORKER</span><strong>k01-worker</strong><code>NodeLocal × 1</code></article><article><span>WORKER</span><strong>k01-worker2</strong><code>NodeLocal × 1</code></article></div>
+        <table class="data-table compact"><thead><tr><th>项目</th><th>课程值</th><th>用途</th></tr></thead><tbody><tr><td>Pod CIDR</td><td>192.168.0.0/16</td><td>Calico 工作负载地址</td></tr><tr><td>Service CIDR</td><td>10.96.0.0/16</td><td><code>kube-dns = 10.96.0.10</code></td></tr><tr><td>Calico IPPool</td><td>VXLANCrossSubnet /26 blocks</td><td>跨子网 VXLAN，出集群 NAT</td></tr><tr><td>NodeLocal</td><td>169.254.20.10/32</td><td>本地监听地址</td></tr></tbody></table>
+        <div class="slide-number">06</div>
+        <aside class="speaker-copy"><p>本课不是两节点，而是一个 control-plane 加两个 worker。Kind 镜像是 1.32.2，Calico 3.30.0，Pod 网段 192.168.0.0/16。</p><p>NodeLocal 是 DaemonSet，所以三台节点最终应各有一个缓存 Pod。这个“一节点一份”是后面验证数量的依据。</p></aside>
+      </section>
+
+      <section class="slide" data-section="部署基线" data-title="deploy.sh 只搭集群、Calico 与 dns-test">
+        <div class="slide-header"><div><p class="eyebrow">Do not skip the baseline</p><h2>deploy.sh 只搭集群、Calico 与 dns-test</h2><div class="rule"></div></div></div>
+        <div class="deploy-sequence"><article><span>1</span><h3>Containerlab</h3><code>sudo containerlab deploy -t k01.clab.yaml</code></article><i>›</i><article><span>2</span><h3>Calico</h3><code>operator + custom-resources.yaml</code></article><i>›</i><article><span>3</span><h3>Test Pod</h3><code>kubectl apply -f tools/dns-test-pod.yaml</code></article></div>
+        <pre class="code terminal command-code"><span class="prompt">$</span> cd containerlab/17-nodelocal-dnscache
+<span class="prompt">$</span> chmod +x deploy.sh
+<span class="prompt">$</span> ./deploy.sh
+<span class="prompt">$</span> export KUBECONFIG=$(pwd)/k01.kubeconfig
+<span class="prompt">$</span> kubectl get nodes -o wide</pre>
+        <div class="flat-block yellow"><p class="body"><strong>课程节奏：</strong>脚本没有安装 NodeLocal DNSCache。先证明标准 DNS 正常，再手动部署并比较前后差异。</p></div>
+        <div class="slide-number">07</div>
+        <aside class="speaker-copy"><p>deploy.sh 会重建 topology，安装 Calico，等三个节点 ready，并创建一个 netshoot 的 dns-test Pod。</p><p>它故意不安装 NodeLocal。演示时不要一上来就 apply 缓存清单；先记录基线，后面的“透明接管”才有对照。</p></aside>
+      </section>
+
+      <section class="slide" data-section="基线检查" data-title="先确认 CoreDNS 与 dns-test 分布在哪些节点">
+        <div class="slide-header"><div><p class="eyebrow">Know the placement</p><h2>先确认 CoreDNS 与 dns-test 分布在哪些节点</h2><div class="rule"></div></div></div>
+        <pre class="code terminal placement-output"><span class="prompt">$</span> kubectl get nodes
+NAME                STATUS   ROLES           VERSION
+k01-control-plane   Ready    control-plane   v1.32.2
+k01-worker          Ready    &lt;none&gt;          v1.32.2
+k01-worker2         Ready    &lt;none&gt;          v1.32.2
+
+<span class="prompt">$</span> kubectl get pod -n kube-system -l k8s-app=kube-dns -o wide
+NAME                       READY   STATUS    NODE
+coredns-...                 1/1     Running   k01-control-plane
+coredns-...                 1/1     Running   k01-control-plane
+
+<span class="prompt">$</span> kubectl get pod dns-test -o wide
+NAME       READY   STATUS    IP              NODE
+dns-test   1/1     Running   192.168.x.x     k01-worker</pre>
+        <div class="callout"><strong>不要照抄示例 IP：</strong>Pod IP 与调度节点会变化；后续用 JSONPath 动态取值。</div>
+        <div class="slide-number">08</div>
+        <aside class="speaker-copy"><p>先看位置，是为了说明默认 DNS 请求可能跨节点，也为了后面选择“和 dns-test 同节点”的 NodeLocal Pod。</p><p>课程输出里的 IP 只是一次运行结果。演示命令尽量用 label、field-selector 和 JSONPath，不要硬编码 Pod 名。</p></aside>
+      </section>
+
+      <section class="slide" data-section="基线检查" data-title="kube-dns 是 Pod 当前看到的唯一 DNS 入口">
+        <div class="slide-header"><div><p class="eyebrow">Before installation</p><h2>kube-dns 是 Pod 当前看到的唯一 DNS 入口</h2><div class="rule"></div></div></div>
+        <div class="grid-2"><pre class="code terminal"><span class="prompt">$</span> kubectl get svc kube-dns -n kube-system
+NAME       TYPE        CLUSTER-IP    PORT(S)
+kube-dns   ClusterIP   <span class="good">10.96.0.10</span>   53/UDP,
+                                      53/TCP,
+                                      9153/TCP</pre><div class="service-facts"><article><span>UDP 53</span><strong>普通 DNS 查询</strong></article><article><span>TCP 53</span><strong>大响应与 TCP 查询</strong></article><article><span>TCP 9153</span><strong>CoreDNS metrics</strong></article></div></div>
+        <div class="flat-block blue"><p class="body">NodeLocal 部署后，这个 Service 仍然存在；不同的是，本节点把相同的 <code>10.96.0.10/32</code> 也绑定到本地 dummy interface。</p></div>
+        <div class="slide-number">09</div>
+        <aside class="speaker-copy"><p>基线阶段只有 kube-dns 这个 ClusterIP。53 端口同时支持 UDP 和 TCP，9153 是 CoreDNS 指标。</p><p>NodeLocal 不会删除 kube-dns。透明模式的关键恰恰是复用这个地址，让 Pod 不改配置。</p></aside>
+      </section>
+
+      <section class="slide" data-section="基线检查" data-title="Pod 的 resolv.conf 固定指向 10.96.0.10">
+        <div class="slide-header"><div><p class="eyebrow">What the application sees</p><h2>Pod 的 resolv.conf 固定指向 10.96.0.10</h2><div class="rule"></div></div></div>
+        <div class="grid-2"><pre class="code terminal"><span class="prompt">$</span> kubectl exec dns-test -- cat /etc/resolv.conf
+
+search default.svc.cluster.local \
+       svc.cluster.local \
+       cluster.local
+nameserver <span class="good">10.96.0.10</span>
+options ndots:5</pre><div class="resolv-explain"><article><span>search</span><p>短名称依次补齐 namespace、svc 与 cluster.local。</p></article><article><span>nameserver</span><p>应用只知道 kube-dns ClusterIP，不知道 CoreDNS Pod IP。</p></article><article><span>ndots:5</span><p>少于 5 个点的名称先尝试搜索域，可能产生多次查询。</p></article></div></div>
+        <div class="slide-number">10</div>
+        <aside class="speaker-copy"><p>这是应用视角。它只知道 10.96.0.10，完全不知道后端是 CoreDNS 还是本机缓存。</p><p>顺便提醒 ndots:5：像 google.com 这样的名字只有一个点，解析器可能先拼接多个 search domain，再尝试原名。缓存对这类高频重复查询很有帮助。</p></aside>
+      </section>
+
+      <section class="slide" data-section="本地地址" data-title="169.254.20.10 要唯一、可绑定且不冲突">
+        <div class="slide-header"><div><p class="eyebrow">Pick a safe local IP</p><h2>169.254.20.10 要唯一、可绑定且不冲突</h2><div class="rule"></div></div></div>
+        <div class="ip-choice"><article><span>COURSE VALUE</span><strong>169.254.20.10/32</strong><p>IPv4 link-local 范围内的节点本地地址。</p></article><div class="check-list"><p><b>1</b> 不与 Service CIDR、Pod CIDR、Node IP 冲突</p><p><b>2</b> 不被节点上已有进程或接口占用</p><p><b>3</b> 所有 kubelet / manifest 使用同一个值</p><p><b>4</b> IPv6 环境可选择合适的 ULA 地址</p></div></div>
+        <pre class="code terminal command-code"><span class="prompt">$</span> kubectl get svc -A -o wide
+<span class="prompt">$</span> kubectl get pod -A -o wide
+<span class="prompt">$</span> docker exec k01-worker ip addr</pre>
+        <div class="slide-number">11</div>
+        <aside class="speaker-copy"><p>169.254.20.10 是课程选择，不是 Kubernetes 强制常量。生产要先做地址冲突检查。</p><p>官方建议选 IPv4 link-local 或 IPv6 ULA 里的地址。这里用 /32，因为它只是本机监听标识，不需要在二层邻居间广播。</p></aside>
+      </section>
+
+      <section class="slide" data-section="准备清单" data-title="复制官方清单，再替换三个显式占位符">
+        <div class="slide-header"><div><p class="eyebrow">Prepare nodelocaldns.yaml</p><h2>复制官方清单，再替换三个显式占位符</h2><div class="rule"></div></div></div>
+        <div class="grid-2"><pre class="code terminal"><span class="prompt">$</span> cp nodelocal-dnscache/nodelocaldns.yaml .
+
+<span class="prompt">$</span> grep -o '__PILLAR__[A-Z_]*__' \
+  nodelocaldns.yaml | sort -u
+
+__PILLAR__LOCAL__DNS__
+__PILLAR__DNS__DOMAIN__
+__PILLAR__DNS__SERVER__
+__PILLAR__CLUSTER__DNS__
+__PILLAR__UPSTREAM__SERVERS__</pre><div class="pillar-grid"><article><code>LOCAL__DNS</code><strong>169.254.20.10</strong></article><article><code>DNS__DOMAIN</code><strong>cluster.local</strong></article><article><code>DNS__SERVER</code><strong>10.96.0.10</strong></article><article class="auto"><code>CLUSTER__DNS</code><strong>运行时写入</strong></article><article class="auto"><code>UPSTREAM__SERVERS</code><strong>运行时写入</strong></article></div></div>
+        <div class="slide-number">12</div>
+        <aside class="speaker-copy"><p>清单里能看到五类占位符，但课程只让我们替换前三类。CLUSTER_DNS 和 UPSTREAM_SERVERS 会由 node-cache 启动逻辑根据 upstream Service 和节点 resolv.conf 写入运行时 Corefile。</p><p>不要看到占位符就全部手工替换，否则容易偏离官方部署逻辑。</p></aside>
+      </section>
+
+      <section class="slide" data-section="准备清单" data-title="从集群读取 kube-dns IP，避免把环境值写死">
+        <div class="slide-header"><div><p class="eyebrow">Course commands</p><h2>从集群读取 kube-dns IP，避免把环境值写死</h2><div class="rule"></div></div></div>
+        <pre class="code terminal sed-code"><span class="prompt">$</span> kubedns=$(kubectl get svc kube-dns -n kube-system \
+  -o jsonpath={.spec.clusterIP})
+<span class="prompt">$</span> domain="cluster.local"
+<span class="prompt">$</span> localdns="169.254.20.10"
+
+<span class="prompt">$</span> sed -i "s/__PILLAR__LOCAL__DNS__/$localdns/g; \
+  s/__PILLAR__DNS__DOMAIN__/$domain/g; \
+  s/__PILLAR__DNS__SERVER__/$kubedns/g" nodelocaldns.yaml
+
+<span class="prompt">$</span> grep -n '__PILLAR__LOCAL\|__PILLAR__DNS__' nodelocaldns.yaml
+<span class="good"># no output</span></pre>
+        <div class="callout"><strong>跨平台提醒：</strong>课程是在 Linux/containerlab 环境执行，使用 GNU <code>sed -i</code>。在 macOS 或 PowerShell 中要改用对应语法。</div>
+        <div class="slide-number">13</div>
+        <aside class="speaker-copy"><p>这段是课程原始命令。kubedns 动态读取，domain 和 localdns 由我们指定，再一次性 sed。</p><p>最后用 grep 做验收：前三个占位符不该再出现。CLUSTER_DNS 和 UPSTREAM_SERVERS 仍然存在是正常的。</p></aside>
+      </section>
+
+      <section class="slide" data-section="清单拆解" data-title="一个 YAML 同时创建身份、回源、配置与节点代理">
+        <div class="slide-header"><div><p class="eyebrow">Five resources</p><h2>一个 YAML 同时创建身份、回源、配置与节点代理</h2><div class="rule"></div></div></div>
+        <div class="resource-strip"><article><span>01</span><h3>ServiceAccount</h3><code>node-local-dns</code></article><article><span>02</span><h3>Service</h3><code>kube-dns-upstream</code></article><article><span>03</span><h3>ConfigMap</h3><code>node-local-dns</code></article><article><span>04</span><h3>DaemonSet</h3><code>node-local-dns</code></article><article><span>05</span><h3>Headless Service</h3><code>metrics :9253</code></article></div>
+        <div class="grid-2 compact-gap"><div class="flat-block green"><h3>数据面</h3><p class="body">DaemonSet 在每个节点监听 53，并写本机接口与 iptables 规则。</p></div><div class="flat-block blue"><h3>回源与观测</h3><p class="body">upstream Service 选中 CoreDNS；Headless Service 让 Prometheus 发现每个缓存 Pod。</p></div></div>
+        <div class="slide-number">14</div>
+        <aside class="speaker-copy"><p>apply 之后不只多一个 DaemonSet。还会有回源 Service、Corefile ConfigMap、服务账号和指标发现用的 Headless Service。</p><p>讲清这五个对象，后面 kubectl get 的输出就不再像“凭空多出来一堆资源”。</p></aside>
+      </section>
+
+      <section class="slide" data-section="DaemonSet" data-title="hostNetwork 与 NET_ADMIN 让缓存进程进入节点数据面">
+        <div class="slide-header"><div><p class="eyebrow">Why it can intercept traffic</p><h2>hostNetwork 与 NET_ADMIN 让缓存进程进入节点数据面</h2><div class="rule"></div></div></div>
+        <div class="grid-2"><pre class="code manifest-code"><span class="key">spec:</span>
+  <span class="key">priorityClassName:</span> system-node-critical
+  <span class="key">hostNetwork:</span> <span class="value">true</span>
+  <span class="key">dnsPolicy:</span> Default
+  <span class="key">tolerations:</span>
+  - <span class="key">operator:</span> Exists
+  <span class="key">containers:</span>
+  - <span class="key">name:</span> node-cache
+    <span class="key">securityContext:</span>
+      <span class="key">capabilities:</span>
+        <span class="key">add:</span> [<span class="value">NET_ADMIN</span>]</pre><div class="spec-notes"><article><strong>hostNetwork</strong><p>监听节点网络命名空间中的本地 IP。</p></article><article><strong>dnsPolicy: Default</strong><p>缓存 Pod 自己不再递归使用集群 DNS。</p></article><article><strong>NET_ADMIN</strong><p>创建 dummy interface 与维护 iptables 规则。</p></article><article><strong>system-node-critical</strong><p>在资源紧张时提高 DNS 节点组件优先级。</p></article></div></div>
+        <div class="slide-number">15</div>
+        <aside class="speaker-copy"><p>NodeLocal 能做透明接管，是因为它不是普通 Pod 网络：hostNetwork 让它直接使用节点 namespace，NET_ADMIN 允许它配置接口和 netfilter。</p><p>dnsPolicy 必须是 Default，避免它自己把上游又指回 10.96.0.10，形成解析环路。</p></aside>
+      </section>
+
+      <section class="slide" data-section="Corefile" data-title="四个 server block 把集群域、反向域和外部域分开">
+        <div class="slide-header"><div><p class="eyebrow">NodeLocal Corefile</p><h2>四个 server block 把集群域、反向域和外部域分开</h2><div class="rule"></div></div></div>
+        <table class="data-table zone-table"><thead><tr><th>Server block</th><th>缓存</th><th>回源</th><th>传输</th></tr></thead><tbody><tr><td><code>cluster.local:53</code></td><td>success 9984 / 30s<br>denial 9984 / 5s</td><td><code>kube-dns-upstream</code></td><td>force_tcp</td></tr><tr><td><code>in-addr.arpa:53</code></td><td>30s</td><td><code>kube-dns-upstream</code></td><td>force_tcp</td></tr><tr><td><code>ip6.arpa:53</code></td><td>30s</td><td><code>kube-dns-upstream</code></td><td>force_tcp</td></tr><tr><td><code>.:53</code></td><td>30s</td><td>Node <code>/etc/resolv.conf</code></td><td>按上游协商</td></tr></tbody></table>
+        <div class="flat-block yellow"><p class="body">课程原始清单的外部域 block 没有 <code>force_tcp</code>；后续“开启日志”示例额外写了它。演示时以实际 ConfigMap 为准。</p></div>
+        <div class="slide-number">16</div>
+        <aside class="speaker-copy"><p>Corefile 按 zone 分四块。集群域和两个反向解析域明确 force_tcp；外部根域使用节点上游，原始清单没有强制 TCP。</p><p>这一页专门指出课程后半日志示例与原始清单的细小差异，避免大家误以为所有 miss 都必然强制 TCP。</p></aside>
+      </section>
+
+      <section class="slide" data-section="缓存策略" data-title="success 与 denial 使用不同 TTL 控制新鲜度">
+        <div class="slide-header"><div><p class="eyebrow">Positive and negative cache</p><h2>success 与 denial 使用不同 TTL 控制新鲜度</h2><div class="rule"></div></div></div>
+        <div class="cache-policy"><article class="success"><span>SUCCESS CACHE</span><strong>9984 entries</strong><b>30 seconds</b><p>已有记录的正常响应，减少重复查询。</p></article><article class="denial"><span>DENIAL CACHE</span><strong>9984 entries</strong><b>5 seconds</b><p>NXDOMAIN / NODATA 短暂缓存，避免错误名称持续打到上游。</p></article></div>
+        <div class="grid-2 compact-gap"><div class="flat-block green"><h3>为什么负缓存更短</h3><p class="body">刚创建的 Service 不应被旧 NXDOMAIN 长时间遮住。</p></div><div class="flat-block orange"><h3>容量不是内存上限</h3><p class="body">每个 server block 都有缓存，内存还受并发查询 goroutine 影响。</p></div></div>
+        <div class="slide-number">17</div>
+        <aside class="speaker-copy"><p>success 允许 9984 条，默认最多 30 秒；denial 也是 9984 条，但只有 5 秒。负缓存短，是为了让新建 Service 很快可见。</p><p>官方估算单个 10000 条缓存满载约 30MB，但 NodeLocal 有多个 server block，并发查询也会占内存，所以不能只给 5Mi request 就认为上限是 5Mi。</p></aside>
+      </section>
+
+      <section class="slide" data-section="回源路径" data-title="集群域 miss 走 kube-dns-upstream，外部域走节点 resolver">
+        <div class="slide-header"><div><p class="eyebrow">Two upstream decisions</p><h2>集群域 miss 走 kube-dns-upstream，外部域走节点 resolver</h2><div class="rule"></div></div></div>
+        <div class="upstream-split"><article><span>*.cluster.local</span><h3>集群服务发现</h3><div class="mini-path"><b>NodeLocal</b><i>TCP</i><b>kube-dns-upstream</b><i>DNAT</i><b>CoreDNS</b></div><code>forward . __PILLAR__CLUSTER__DNS__ { force_tcp }</code></article><article><span>public / private external zone</span><h3>外部名称</h3><div class="mini-path"><b>NodeLocal</b><i>forward</i><b>Node resolv.conf</b><i>network</i><b>Upstream DNS</b></div><code>forward . __PILLAR__UPSTREAM__SERVERS__</code></article></div>
+        <div class="slide-number">18</div>
+        <aside class="speaker-copy"><p>集群域只能让 CoreDNS 回答，所以 miss 进入 kube-dns-upstream。这个 Service 仍然使用 kube-proxy 正常负载均衡到 CoreDNS Pod。</p><p>外部域则读取节点的 resolv.conf。生产排障时，如果所有外部域失败但 cluster.local 正常，要看节点上游配置，而不是先改 CoreDNS Service。</p></aside>
+      </section>
+
+      <section class="slide" data-section="代理模式" data-title="iptables 模式可透明接管；IPVS 模式必须改 kubelet DNS">
+        <div class="slide-header"><div><p class="eyebrow">The manifest is mode-sensitive</p><h2>iptables 模式可透明接管；IPVS 模式必须改 kubelet DNS</h2><div class="rule"></div></div></div>
+        <table class="data-table mode-table"><thead><tr><th>项目</th><th>iptables（本课）</th><th>IPVS</th></tr></thead><tbody><tr><td>NodeLocal 绑定</td><td><code>169.254.20.10</code> + <code>10.96.0.10</code></td><td>只绑定 <code>169.254.20.10</code></td></tr><tr><td>Pod resolv.conf</td><td>仍是 <code>10.96.0.10</code></td><td>应改为 <code>169.254.20.10</code></td></tr><tr><td>原因</td><td>NOTRACK + local route 可绕开 Service DNAT</td><td>IPVS 已占用 kube-dns VIP</td></tr><tr><td>kubelet</td><td>无需调整 <code>--cluster-dns</code></td><td>设置本地监听 IP</td></tr></tbody></table>
+        <div class="flat-block red"><p class="body"><strong>不要混用：</strong>直接把 iptables 模式的双地址参数放进 IPVS 集群，可能造成地址绑定冲突或 DNS 不可用。</p></div>
+        <div class="slide-number">19</div>
+        <aside class="speaker-copy"><p>本实验是 kube-proxy iptables 模式，所以 NodeLocal 同时绑定 Service IP 和 link-local IP，Pod 零改动。</p><p>IPVS 已经在本机管理 Service VIP，因此 NodeLocal 只绑定 169.254.20.10，并且 kubelet 要把新 Pod 的 cluster-dns 写成本地地址。这是上线前必须确认的分支。</p></aside>
+      </section>
+
+      <section class="slide" data-section="创建资源" data-title="创建清单后，先确认五类对象都落地">
+        <div class="slide-header"><div><p class="eyebrow">Deploy NodeLocal</p><h2>创建清单后，先确认五类对象都落地</h2><div class="rule"></div></div></div>
+        <pre class="code terminal deploy-output"><span class="prompt">$</span> kubectl create -f nodelocaldns.yaml
+serviceaccount/node-local-dns created
+service/kube-dns-upstream created
+configmap/node-local-dns created
+daemonset.apps/node-local-dns created
+service/node-local-dns created
+
+<span class="prompt">$</span> kubectl rollout status ds/node-local-dns -n kube-system
+daemon set "node-local-dns" successfully rolled out</pre>
+        <div class="callout"><strong>幂等性：</strong>课程使用 <code>create</code> 展示首次创建；反复演示或运维更新可使用 <code>apply</code>，但要先理解差异。</div>
+        <div class="slide-number">20</div>
+        <aside class="speaker-copy"><p>课程命令是 kubectl create。输出应该明确列出五类资源，然后等待 DaemonSet rollout 完成。</p><p>如果某个 Pod 起不来，不要立刻测试 DNS；先 describe Pod，看 capability、hostNetwork、镜像和 liveness probe。</p></aside>
+      </section>
+
+      <section class="slide" data-section="部署验证" data-title="三节点应看到三个 node-local-dns Pod">
+        <div class="slide-header"><div><p class="eyebrow">One cache per node</p><h2>三节点应看到三个 node-local-dns Pod</h2><div class="rule"></div></div></div>
+        <div class="daemon-grid"><article><span>k01-control-plane</span><strong>node-local-dns-abc</strong><b>1/1 Running</b></article><article><span>k01-worker</span><strong>node-local-dns-def</strong><b>1/1 Running</b></article><article><span>k01-worker2</span><strong>node-local-dns-ghi</strong><b>1/1 Running</b></article></div>
+        <pre class="code terminal command-code"><span class="prompt">$</span> kubectl get pods -n kube-system -l k8s-app=node-local-dns -o wide
+<span class="prompt">$</span> kubectl get ds node-local-dns -n kube-system
+NAME             DESIRED   CURRENT   READY   UP-TO-DATE   AVAILABLE
+node-local-dns   <span class="good">3</span>         <span class="good">3</span>         <span class="good">3</span>       3            3</pre>
+        <div class="slide-number">21</div>
+        <aside class="speaker-copy"><p>DaemonSet 的正确性不是“有一个 Running”，而是 desired、current、ready 都等于节点数。课程三节点，所以应是 3。</p><p>它带 NoSchedule 和 NoExecute toleration，control-plane 也会有实例；这保证系统 Pod 和普通 Pod 在每个节点都能就近查询。</p></aside>
+      </section>
+
+      <section class="slide" data-section="Service 拆分" data-title="kube-dns 保持入口，kube-dns-upstream 专门服务 miss">
+        <div class="slide-header"><div><p class="eyebrow">Same selectors, different roles</p><h2>kube-dns 保持入口，kube-dns-upstream 专门服务 miss</h2><div class="rule"></div></div></div>
+        <div class="service-split"><article class="front"><span>POD-FACING</span><h3>kube-dns</h3><strong>10.96.0.10</strong><p>Pod resolv.conf 中的稳定入口；本课由节点本地接管。</p></article><article class="back"><span>CACHE-FACING</span><h3>kube-dns-upstream</h3><strong>10.96.x.x</strong><p>selector 仍为 <code>k8s-app=kube-dns</code>，用于 miss 回源。</p></article><article class="metrics"><span>DISCOVERY</span><h3>node-local-dns</h3><strong>clusterIP: None</strong><p>暴露每个缓存 Pod 的 9253 指标。</p></article></div>
+        <pre class="code terminal command-code"><span class="prompt">$</span> kubectl get svc -n kube-system | grep -E 'kube-dns|node-local-dns'</pre>
+        <div class="slide-number">22</div>
+        <aside class="speaker-copy"><p>三个 Service 名称很像，但角色不同。kube-dns 面向业务 Pod，upstream 面向缓存 miss，Headless Service 面向指标采集。</p><p>upstream 的具体 ClusterIP 由集群动态分配，不要把示例里的 10.96.x.x 写死。</p></aside>
+      </section>
+
+      <section class="slide" data-section="本地接口" data-title="同一 dummy interface 同时拥有本地 IP 与 kube-dns VIP">
+        <div class="slide-header"><div><p class="eyebrow">The transparent interception anchor</p><h2>同一 dummy interface 同时拥有本地 IP 与 kube-dns VIP</h2><div class="rule"></div></div></div>
+        <pre class="code terminal interface-output"><span class="prompt">$</span> NODE=$(kubectl get pod dns-test -o jsonpath='{.spec.nodeName}')
+<span class="prompt">$</span> docker exec $NODE ip addr show nodelocaldns
+
+X: nodelocaldns: &lt;BROADCAST,NOARP&gt; mtu 1500 qdisc noop
+   state <span class="value">DOWN</span> group default
+   link/ether 00:00:00:00:00:00 brd ff:ff:ff:ff:ff:ff
+   inet <span class="good">169.254.20.10/32</span> scope global nodelocaldns
+   inet <span class="good">10.96.0.10/32</span> scope global nodelocaldns</pre>
+        <div class="grid-2 compact-gap"><div class="flat-block green"><h3>两条 /32 都在</h3><p class="body">这是 iptables 透明模式的关键证据。</p></div><div class="flat-block yellow"><h3>state DOWN 不等于故障</h3><p class="body">dummy interface 没有物理 carrier；以地址、路由和实际解析为准。</p></div></div>
+        <div class="slide-number">23</div>
+        <aside class="speaker-copy"><p>这一步是课程的“magic”。同一个 nodelocaldns 接口同时拥有 169.254.20.10 和 10.96.0.10。</p><p>输出里的 state DOWN 很容易误导人。dummy 不是物理网卡，没有 carrier；只要地址存在、local route 正确、进程监听，DOWN 本身不是失败结论。</p></aside>
+      </section>
+
+      <section class="slide" data-section="透明性" data-title="部署前后，Pod 的 resolv.conf 完全不变">
+        <div class="slide-header"><div><p class="eyebrow">No application change</p><h2>部署前后，Pod 的 resolv.conf 完全不变</h2><div class="rule"></div></div></div>
+        <div class="before-after"><article><span>BEFORE</span><h3>CoreDNS Service path</h3><code>nameserver 10.96.0.10</code><p>kube-proxy DNAT 到 CoreDNS Pod。</p></article><div class="same-mark">SAME<br>CONFIG</div><article><span>AFTER</span><h3>Node-local path</h3><code>nameserver 10.96.0.10</code><p>本节点先接管，miss 再回源。</p></article></div>
+        <pre class="code terminal command-code"><span class="prompt">$</span> kubectl exec dns-test -- cat /etc/resolv.conf
+nameserver <span class="good">10.96.0.10</span></pre>
+        <div class="slide-number">24</div>
+        <aside class="speaker-copy"><p>这就是透明的定义：应用配置没改、Pod 也不用重建，但同一个目标地址在节点上有了新的本地数据路径。</p><p>因此验证不能只看 resolv.conf。还要看 raw 规则、local route 和 NodeLocal 指标，才能证明请求真的到了缓存。</p></aside>
+      </section>
+
+      <section class="slide" data-section="透明接管" data-title="一条 DNS 查询按 raw、nat、route、INPUT 的顺序处理">
+        <div class="slide-header"><div><p class="eyebrow">Order of operations</p><h2>一条 DNS 查询按 raw、nat、route、INPUT 的顺序处理</h2><div class="rule"></div></div><button class="action-btn" type="button" data-replay="#packet-pipeline" title="重播动画" aria-label="重播数据包动画">↻</button></div>
+        <div class="packet-pipeline is-playing" id="packet-pipeline"><article><span>1</span><h3>Pod ingress</h3><code>dst 10.96.0.10:53</code></article><div class="pipeline-lane"><i>DNS</i></div><article><span>2</span><h3>raw PREROUTING</h3><code>NOTRACK</code></article><div class="pipeline-lane"><i>UNTRACKED</i></div><article><span>3</span><h3>nat PREROUTING</h3><code>DNAT skipped</code></article><div class="pipeline-lane"><i>same dst</i></div><article><span>4</span><h3>Local route</h3><code>dev lo</code></article><div class="pipeline-lane"><i>INPUT</i></div><article><span>5</span><h3>NodeLocal</h3><code>listen :53</code></article></div>
+        <div class="callout"><strong>顺序决定结果：</strong>raw 表先于 nat，先标成 UNTRACKED 后，Service DNAT 不能再改写这个 DNS 包的目标地址。</div>
+        <div class="slide-number">25</div>
+        <aside class="speaker-copy"><p>这一页把整条链串起来。Pod 包进入节点 namespace 后，raw PREROUTING 最先命中 NOTRACK；nat 里的 kube-proxy 规则虽然存在，却不能对这个 untracked 流完成 NAT。</p><p>目标仍是 10.96.0.10，路由表又认定它是本机地址，所以进入 INPUT 并交给监听 53 的 NodeLocal。</p></aside>
+      </section>
+
+      <section class="slide" data-section="raw 表" data-title="NodeLocal 为两个监听 IP、两种协议写入 NOTRACK">
+        <div class="slide-header"><div><p class="eyebrow">Validate step 2</p><h2>NodeLocal 为两个监听 IP、两种协议写入 NOTRACK</h2><div class="rule"></div></div></div>
+        <pre class="code terminal rules-output"><span class="prompt">$</span> docker exec $NODE iptables -t raw -S | \
+  grep -E "169.254.20.10|10.96.0.10"
+
+-A PREROUTING -d 169.254.20.10/32 -p udp --dport 53 -j NOTRACK
+-A PREROUTING -d 169.254.20.10/32 -p tcp --dport 53 -j NOTRACK
+-A PREROUTING -d 10.96.0.10/32    -p udp --dport 53 -j NOTRACK
+-A PREROUTING -d 10.96.0.10/32    -p tcp --dport 53 -j NOTRACK
+-A OUTPUT     -d 169.254.20.10/32 -p udp --dport 53 -j NOTRACK
+-A OUTPUT     -d 169.254.20.10/32 -p tcp --dport 53 -j NOTRACK
+-A OUTPUT     -d 10.96.0.10/32    -p udp --dport 53 -j NOTRACK
+-A OUTPUT     -d 10.96.0.10/32    -p tcp --dport 53 -j NOTRACK</pre>
+        <div class="slide-number">26</div>
+        <aside class="speaker-copy"><p>规则覆盖 PREROUTING 和 OUTPUT，是为了处理从 Pod 进入以及节点本机发出的查询；每个地址又同时覆盖 UDP 和 TCP 53。</p><p>实际输出可能包含额外 match 模块或链名细节，但核心证据是目标地址、协议、端口和 NOTRACK target。</p></aside>
+      </section>
+
+      <section class="slide" data-section="NOTRACK" data-title="NOTRACK 的目的不是加速，而是阻止 kube-proxy 抢走目标地址">
+        <div class="slide-header"><div><p class="eyebrow">Why raw comes first</p><h2>NOTRACK 的目的不是加速，而是阻止 kube-proxy 抢走目标地址</h2><div class="rule"></div></div></div>
+        <div class="notrack-effects"><article><span>01</span><h3>标记 UNTRACKED</h3><p>conntrack 不为 Pod→NodeLocal 的 DNS 包维护普通连接状态。</p></article><article><span>02</span><h3>NAT 无法建立映射</h3><p>DNAT 依赖连接跟踪保存正反向地址转换。</p></article><article><span>03</span><h3>目标保持不变</h3><p><code>dst=10.96.0.10</code> 继续进入路由决策。</p></article><article><span>04</span><h3>本地监听胜出</h3><p>内核发现该 /32 属于本机，交给 NodeLocal。</p></article></div>
+        <div class="flat-block orange"><p class="body"><strong>精确表述：</strong>不是“删除 kube-proxy 规则”，也不是“NodeLocal 优先级更高”；是 raw 表先决定不跟踪，让后续 nat 无法为该包建立转换。</p></div>
+        <div class="slide-number">27</div>
+        <aside class="speaker-copy"><p>NOTRACK 经常被简化成“减少 conntrack”，这没错，但在本课透明模式里更关键的作用是让 Service DNAT失效。</p><p>所以排障时不能只找 NodeLocal 进程。raw 规则丢失后，查询很可能仍然成功，却直接去了 CoreDNS，缓存完全被绕过。</p></aside>
+      </section>
+
+      <section class="slide" data-section="nat 表" data-title="kube-proxy 的 kube-dns DNAT 规则仍然存在">
+        <div class="slide-header"><div><p class="eyebrow">Validate step 3</p><h2>kube-proxy 的 kube-dns DNAT 规则仍然存在</h2><div class="rule"></div></div></div>
+        <pre class="code terminal nat-output"><span class="prompt">$</span> docker exec $NODE iptables -t nat -S | \
+  grep "kube-dns:dns cluster IP" | head -2
+
+-A KUBE-SERVICES -d 10.96.0.10/32 -p udp \
+  --dport 53 -j KUBE-SVC-TCOU7JCQXEZGVUNU
+
+-A KUBE-SERVICES -d 10.96.0.10/32 -p tcp \
+  --dport 53 -j KUBE-SVC-ERIFXISQEP7F7OF4</pre>
+        <div class="dual-state"><article><span>RULE EXISTS</span><strong>kube-proxy 继续管理 kube-dns</strong></article><article><span>PACKET UNTRACKED</span><strong>这类 DNS 包不执行 DNAT</strong></article></div>
+        <div class="slide-number">28</div>
+        <aside class="speaker-copy"><p>这一步专门证明 kube-proxy 没被改坏。KUBE-SERVICES 规则还在，其他普通 Service 也继续照常使用 DNAT。</p><p>透明接管只是让匹配 NodeLocal 目标的 DNS 包先变成 untracked，而不是全局关闭 kube-proxy 或 conntrack。</p></aside>
+      </section>
+
+      <section class="slide" data-section="路由" data-title="local 关键字证明 10.96.0.10 会在当前节点终结">
+        <div class="slide-header"><div><p class="eyebrow">Validate step 4</p><h2>local 关键字证明 10.96.0.10 会在当前节点终结</h2><div class="rule"></div></div></div>
+        <div class="grid-2"><pre class="code terminal route-proof"><span class="prompt">$</span> docker exec $NODE \
+  ip route get 10.96.0.10
+
+<span class="good">local</span> 10.96.0.10 dev lo \
+  src 10.96.0.10 uid 0
+    cache &lt;local&gt;</pre><div class="route-decision"><article><span>DESTINATION</span><strong>10.96.0.10</strong></article><i>›</i><article class="local"><span>ROUTE TYPE</span><strong>LOCAL</strong></article><i>›</i><article><span>DELIVERY</span><strong>INPUT</strong></article></div></div>
+        <div class="callout"><strong>为什么显示 dev lo：</strong>Linux local table 表示该地址属于本机；即使地址配置在 <code>nodelocaldns</code> dummy interface，local route 的交付设备仍可显示 loopback。</div>
+        <div class="slide-number">29</div>
+        <aside class="speaker-copy"><p>ip route get 是非常强的证据。local 说明这个目的地址不会送去某个下一跳，而是在当前网络 namespace 内终结。</p><p>有人会问明明 IP 绑在 nodelocaldns，为什么 dev lo。因为 local table 负责本机地址交付，输出显示 lo 是正常的内核行为。</p></aside>
+      </section>
+
+      <section class="slide" data-section="filter 表" data-title="INPUT ACCEPT 允许 DNS 到达节点本地进程">
+        <div class="slide-header"><div><p class="eyebrow">Validate step 5</p><h2>INPUT ACCEPT 允许 DNS 到达节点本地进程</h2><div class="rule"></div></div></div>
+        <pre class="code terminal input-output"><span class="prompt">$</span> docker exec $NODE iptables -S INPUT | \
+  grep -E "169.254.20.10|10.96.0.10"
+
+-A INPUT -d 169.254.20.10/32 -p udp --dport 53 -j ACCEPT
+-A INPUT -d 169.254.20.10/32 -p tcp --dport 53 -j ACCEPT
+-A INPUT -d 10.96.0.10/32    -p udp --dport 53 -j ACCEPT
+-A INPUT -d 10.96.0.10/32    -p tcp --dport 53 -j ACCEPT</pre>
+        <div class="delivery-chain"><article><b>raw</b><span>NOTRACK</span></article><i>›</i><article><b>nat</b><span>no DNAT</span></article><i>›</i><article><b>route</b><span>local</span></article><i>›</i><article class="last"><b>filter INPUT</b><span>ACCEPT</span></article></div>
+        <div class="slide-number">30</div>
+        <aside class="speaker-copy"><p>到了 local route 之后，包还要过 filter INPUT。NodeLocal 为两个地址、两种协议各放行 53 端口。</p><p>这四步任何一步缺失都可能让透明接管失败：raw、nat 行为、local route 和 INPUT。排障要按链路顺序查，而不是随机翻日志。</p></aside>
+      </section>
+
+      <section class="slide" data-section="缓存命中" data-title="HIT：查询与响应都留在同一节点">
+        <div class="slide-header"><div><p class="eyebrow">Fast path</p><h2>HIT：查询与响应都留在同一节点</h2><div class="rule"></div></div><button class="action-btn" type="button" data-replay="#hit-flow" title="重播动画" aria-label="重播缓存命中动画">↻</button></div>
+        <div class="hit-flow is-playing" id="hit-flow"><article class="client"><span>Pod</span><strong>dns-test</strong><code>A kubernetes.default</code></article><div class="hit-lane query"><i>1 QUERY</i></div><article class="cache"><span>Same Node</span><strong>NodeLocal</strong><code>cache lookup</code><b>HIT</b></article><div class="hit-lane response"><i>2 RESPONSE</i></div><article class="client result"><span>Pod</span><strong>10.96.0.1</strong><code>NOERROR</code></article></div>
+        <div class="hit-proof"><span>0 × cross-node hop</span><span>0 × upstream query</span><span>1 × cache hit counter</span></div>
+        <div class="slide-number">31</div>
+        <aside class="speaker-copy"><p>命中路径最简单。Pod 发 UDP 查询，本机 NodeLocal 查到有效条目，直接把响应返回。整个过程不需要访问 upstream Service，也不离开节点。</p><p>动画用三块固定网格和两段独立轨道，每条线只连接相邻对象；缩放和窗口比例变化时不会漂移成斜线。</p></aside>
+      </section>
+
+      <section class="slide" data-section="缓存未命中" data-title="MISS：NodeLocal 通过 upstream Service 回源 CoreDNS">
+        <div class="slide-header"><div><p class="eyebrow">Slow path</p><h2>MISS：NodeLocal 通过 upstream Service 回源 CoreDNS</h2><div class="rule"></div></div><button class="action-btn" type="button" data-replay="#miss-flow" title="重播动画" aria-label="重播缓存未命中动画">↻</button></div>
+        <div class="miss-flow is-playing" id="miss-flow"><article><span>Worker A</span><strong>Client Pod</strong><code>UDP :53</code></article><div class="miss-lane"><i>QUERY</i></div><article class="cache"><span>Worker A</span><strong>NodeLocal</strong><code>MISS</code></article><div class="miss-lane tcp"><i>TCP</i></div><article class="svc"><span>ClusterIP</span><strong>kube-dns-upstream</strong><code>Service</code></article><div class="miss-lane upstream"><i>DNAT</i></div><article class="dns"><span>Any Node</span><strong>CoreDNS</strong><code>authoritative answer</code></article></div>
+        <div class="callout"><strong>回包：</strong>答案沿连接返回 NodeLocal，写入本节点缓存，再由 NodeLocal 回给原 Pod；下一次相同查询可能走 HIT。</div>
+        <div class="slide-number">32</div>
+        <aside class="speaker-copy"><p>miss 发生时，本机缓存要回源。对于 cluster.local，NodeLocal 用 TCP 访问 kube-dns-upstream，Service 再把连接负载均衡到某个 CoreDNS Pod。</p><p>CoreDNS 响应回来后先进入本地缓存，再返回客户端。下一次同节点相同名称在 TTL 内就不需要回源。</p></aside>
+      </section>
+
+      <section class="slide" data-section="节点间交互" data-title="CoreDNS 在另一节点时，只有 miss 才产生 node-to-node 流量">
+        <div class="slide-header"><div><p class="eyebrow">Cross-node only on miss</p><h2>CoreDNS 在另一节点时，只有 miss 才产生 node-to-node 流量</h2><div class="rule"></div></div><button class="action-btn" type="button" data-replay="#cross-node-flow" title="重播动画" aria-label="重播跨节点动画">↻</button></div>
+        <div class="cross-node-flow is-playing" id="cross-node-flow"><section class="node-zone worker-a"><header>Worker A</header><article><span>Pod</span><strong>dns-test</strong></article><div class="inside-lane"><i>UDP</i></div><article><span>hostNetwork</span><strong>NodeLocal</strong></article></section><div class="cross-lane"><i>MISS · TCP</i></div><section class="node-zone worker-b"><header>Control Plane / Worker B</header><article><span>Service backend</span><strong>CoreDNS</strong></article><div class="return-note">response → cache → Pod</div></section></div>
+        <div class="grid-2 compact-gap"><div class="flat-block green"><h3>HIT</h3><p class="body">只在 Worker A 内部流动。</p></div><div class="flat-block orange"><h3>MISS</h3><p class="body">才穿过 Calico node-to-node 数据面到远端 CoreDNS。</p></div></div>
+        <div class="slide-number">33</div>
+        <aside class="speaker-copy"><p>这一页专门看 node-to-node。客户端 Pod 和 NodeLocal 在 Worker A；CoreDNS 可能在 control-plane 或另一 worker。</p><p>NodeLocal 的价值是把高频重复查询留在 Worker A。真正需要最新答案的 miss 才走 Calico 的节点间网络，回包再被本地缓存。</p></aside>
+      </section>
+
+      <section class="slide" data-section="外部域名" data-title="外部域 miss 不经过 kube-dns-upstream 的集群域路径">
+        <div class="slide-header"><div><p class="eyebrow">Root zone forwarding</p><h2>外部域 miss 不经过 kube-dns-upstream 的集群域路径</h2><div class="rule"></div></div></div>
+        <div class="external-flow"><article><span>Pod</span><strong>A google.com</strong></article><i>›</i><article><span>Same Node</span><strong>NodeLocal</strong><code>cache miss</code></article><i>›</i><article><span>Runtime Corefile</span><strong>Node resolv.conf</strong><code>upstream resolver</code></article><i>›</i><article><span>External</span><strong>DNS Server</strong></article></div>
+        <pre class="code manifest-code command-code"><span class="key">.:</span>53 {
+  cache 30
+  bind 169.254.20.10 10.96.0.10
+  forward . <span class="value">__PILLAR__UPSTREAM__SERVERS__</span>
+  prometheus :9253
+}</pre>
+        <div class="slide-number">34</div>
+        <aside class="speaker-copy"><p>外部域进入点号这个 server block。miss 时使用节点 resolv.conf 指定的上游，不走 kube-dns-upstream 的集群域逻辑。</p><p>所以外部 DNS 故障要同时检查宿主机 resolv.conf、上游服务器可达性和防火墙。cluster.local 正常并不能证明外部域路径正常。</p></aside>
+      </section>
+
+      <section class="slide" data-section="功能验证" data-title="nslookup 成功只证明能解析，还要结合指标证明命中缓存">
+        <div class="slide-header"><div><p class="eyebrow">Functional proof</p><h2>nslookup 成功只证明能解析，还要结合指标证明命中缓存</h2><div class="rule"></div></div></div>
+        <pre class="code terminal nslookup-output"><span class="prompt">$</span> kubectl exec dns-test -- nslookup kubernetes.default
+Server:         <span class="good">10.96.0.10</span>
+Address:        10.96.0.10#53
+
+Name:   kubernetes.default.svc.cluster.local
+Address: <span class="good">10.96.0.1</span></pre>
+        <div class="proof-levels"><article><span>L1</span><strong>解析成功</strong><p>nslookup 有正确答案。</p></article><article><span>L2</span><strong>透明入口</strong><p>Server 仍显示 10.96.0.10。</p></article><article><span>L3</span><strong>本地接管</strong><p>接口、NOTRACK、local route 完整。</p></article><article><span>L4</span><strong>缓存命中</strong><p>同节点 metrics 的 hit 递增。</p></article></div>
+        <div class="slide-number">35</div>
+        <aside class="speaker-copy"><p>nslookup 输出看起来和部署前几乎一样，这正是透明模式的特点。但单独看成功解析，无法排除请求仍被 kube-proxy 送到 CoreDNS。</p><p>完整证据链要叠加接口、iptables、路由和 NodeLocal metrics。后面我们用 hit counter 做最后一锤。</p></aside>
+      </section>
+
+      <section class="slide" data-section="指标" data-title="指标必须选 dns-test 所在节点的 NodeLocal Pod">
+        <div class="slide-header"><div><p class="eyebrow">Per-node observability</p><h2>指标必须选 dns-test 所在节点的 NodeLocal Pod</h2><div class="rule"></div></div></div>
+        <pre class="code terminal metrics-select"><span class="prompt">$</span> TEST_NODE=$(kubectl get pod dns-test \
+  -o jsonpath='{.spec.nodeName}')
+
+<span class="prompt">$</span> NODELOCAL_POD=$(kubectl get pods -n kube-system \
+  -l k8s-app=node-local-dns \
+  --field-selector spec.nodeName=$TEST_NODE \
+  -o jsonpath='{.items[0].metadata.name}')
+
+<span class="prompt">$</span> kubectl port-forward -n kube-system \
+  $NODELOCAL_POD 9253:9253 &
+<span class="prompt">$</span> sleep 2</pre>
+        <div class="flat-block orange"><p class="body"><strong>常见误判：</strong>随便 port-forward 任意一个 NodeLocal Pod，再从另一节点的 dns-test 发查询，计数当然可能不动。</p></div>
+        <div class="slide-number">36</div>
+        <aside class="speaker-copy"><p>NodeLocal 指标是节点级的，所以先取 dns-test 的 spec.nodeName，再用 field-selector 精确找到同节点缓存 Pod。</p><p>这一段看似啰嗦，却能避免现场最常见的尴尬：查询明明成功，hit 指标就是不变，因为你看的是另一台节点。</p></aside>
+      </section>
+
+      <section class="slide" data-section="指标" data-title="request、miss、hit 与 entries 共同描述缓存行为">
+        <div class="slide-header"><div><p class="eyebrow">CoreDNS cache metrics</p><h2>request、miss、hit 与 entries 共同描述缓存行为</h2><div class="rule"></div></div></div>
+        <div class="metric-cards"><article><span>REQUESTS</span><strong>56</strong><code>coredns_cache_requests_total</code><p>进入 cache 插件的总请求。</p></article><article><span>MISSES</span><strong>35</strong><code>coredns_cache_misses_total</code><p>需要回源的请求。</p></article><article><span>HITS</span><strong>21</strong><code>coredns_cache_hits_total</code><p>success 与 denial 命中。</p></article><article><span>ENTRIES</span><strong>4</strong><code>coredns_cache_entries</code><p>当前缓存条目数。</p></article></div>
+        <pre class="code terminal command-code"><span class="prompt">$</span> curl -s http://127.0.0.1:9253/metrics | \
+  grep -E "coredns_cache_(hits|misses|requests|entries).*10.96.0.10.*cluster.local"</pre>
+        <div class="slide-number">37</div>
+        <aside class="speaker-copy"><p>request 是总量，miss 是回源，hit 分 success 和 denial，entries 是当前驻留条目。示例数字只用于解释关系，不代表你的环境应该完全一样。</p><p>CoreDNS 不会在 Prometheus 指标里暴露每个缓存域名，只提供聚合计数，这对隐私和指标基数都更合理。</p></aside>
+      </section>
+
+      <section class="slide" data-section="命中验证" data-title="重复同一查询，success hit 应在 TTL 内递增">
+        <div class="slide-header"><div><p class="eyebrow">Watch a hit happen</p><h2>重复同一查询，success hit 应在 TTL 内递增</h2><div class="rule"></div></div></div>
+        <div class="counter-demo"><article><span>BEFORE</span><strong>hits = 9</strong><code>curl metrics</code></article><i>›</i><article class="query"><span>QUERY</span><strong>kubernetes.default</strong><code>kubectl exec dns-test -- nslookup ...</code></article><i>›</i><article class="after"><span>AFTER</span><strong>hits = 10</strong><code>same metric label set</code></article></div>
+        <pre class="code terminal command-code"><span class="prompt">$</span> curl -s http://127.0.0.1:9253/metrics | grep "coredns_cache_hits_total.*success.*cluster.local"
+<span class="prompt">$</span> kubectl exec dns-test -- nslookup kubernetes.default
+<span class="prompt">$</span> curl -s http://127.0.0.1:9253/metrics | grep "coredns_cache_hits_total.*success.*cluster.local"
+<span class="prompt">$</span> kill %1</pre>
+        <div class="slide-number">38</div>
+        <aside class="speaker-copy"><p>先读一次 hit，再查同一个名字，再读一次。只要条目还在 TTL 内，success hit 应该增加。</p><p>如果 miss 先增加也不一定是错，可能是第一次查询、TTL 到期或者 label set 不同。连续查询几次并看 request、miss、hit 的相对变化。</p></aside>
+      </section>
+
+      <section class="slide" data-section="查询日志" data-title="调试时在每个 server block 加 log，再滚动重启">
+        <div class="slide-header"><div><p class="eyebrow">Temporary debugging</p><h2>调试时在每个 server block 加 log，再滚动重启</h2><div class="rule"></div></div></div>
+        <div class="grid-2"><pre class="code manifest-code"><span class="key">cluster.local:</span>53 {
+  <span class="hot">log</span>
+  errors
+  cache {
+    success 9984 30
+    denial 9984 5
+  }
+  bind 169.254.20.10 10.96.0.10
+  forward . __PILLAR__CLUSTER__DNS__ {
+    force_tcp
+  }
+}</pre><pre class="code terminal"><span class="prompt">$</span> kubectl edit configmap \
+  node-local-dns -n kube-system
+
+<span class="prompt">$</span> kubectl rollout restart daemonset \
+  node-local-dns -n kube-system
+
+<span class="prompt">$</span> kubectl rollout status daemonset \
+  node-local-dns -n kube-system</pre></div>
+        <div class="callout"><strong>别漏 zone：</strong>要同时观察 cluster.local、反向解析和外部域，需在对应的每个 server block 中添加 <code>log</code>。</div>
+        <div class="slide-number">39</div>
+        <aside class="speaker-copy"><p>CoreDNS 的 log 是插件指令，要放在每个想观察的 server block 里。改 ConfigMap 后课程选择 rollout restart，让每个 Pod 重新加载。</p><p>虽然 CoreDNS 也有 reload 插件，现场演示用显式重启更容易证明所有节点都拿到了相同配置。</p></aside>
+      </section>
+
+      <section class="slide" data-section="查询日志" data-title="一行日志能同时看到客户端、查询、协议、状态与耗时">
+        <div class="slide-header"><div><p class="eyebrow">Read the evidence</p><h2>一行日志能同时看到客户端、查询、协议、状态与耗时</h2><div class="rule"></div></div></div>
+        <pre class="code terminal log-output">[INFO] <span class="good">192.168.82.65:54312</span> - <span class="value">42953</span>
+"<span class="good">A IN kubernetes.default.svc.cluster.local.</span> 
+ <span class="value">udp 54</span> false 512" <span class="good">NOERROR</span>
+qr,aa,rd 106 <span class="good">0.000232824s</span>
+
+[INFO] 192.168.82.65:38291 - 18276
+"A IN google.com. udp 28 false 512" NOERROR
+qr,rd,ra 54 <span class="value">0.023451s</span></pre>
+        <div class="log-fields"><span>client IP:port</span><span>query ID</span><span>type + name</span><span>protocol + bytes</span><span>rcode</span><span>duration</span></div>
+        <div class="slide-number">40</div>
+        <aside class="speaker-copy"><p>日志里可以看到 Pod IP 和源端口、query ID、记录类型、完整域名、UDP 大小、返回码和耗时。</p><p>本地缓存命中的 cluster.local 往往非常快；外部域需要回源，耗时可能更长。但日志本身没有直接打印 HIT/MISS，要结合 metrics 判断。</p></aside>
+      </section>
+
+      <section class="slide" data-section="生产设置" data-title="排障结束要移除 log，避免高基数输出拖慢 DNS">
+        <div class="slide-header"><div><p class="eyebrow">Turn it back off</p><h2>排障结束要移除 log，避免高基数输出拖慢 DNS</h2><div class="rule"></div></div></div>
+        <div class="logging-risk"><article class="debug"><span>DEBUG WINDOW</span><h3>临时开启</h3><p>精确观察某个节点、某段时间、某类查询。</p><strong>短时、定向、有人值守</strong></article><article class="prod"><span>PRODUCTION</span><h3>默认关闭</h3><p>每次 DNS 请求一行日志，高 QPS 会放大 CPU、I/O 与存储成本。</p><strong>长期看 metrics 与采样</strong></article></div>
+        <pre class="code terminal command-code"><span class="prompt">$</span> kubectl edit configmap node-local-dns -n kube-system
+<span class="comment"># remove every temporary `log` line</span>
+<span class="prompt">$</span> kubectl rollout restart daemonset node-local-dns -n kube-system
+<span class="prompt">$</span> kubectl rollout status daemonset node-local-dns -n kube-system</pre>
+        <div class="slide-number">41</div>
+        <aside class="speaker-copy"><p>日志插件很适合故障窗口，但不适合长期全量开启。DNS QPS 往往远大于业务请求 QPS，因为一次业务调用可能触发多个名称尝试。</p><p>排障完成要删掉 log 并确认 rollout。生产长期观测优先用 hit ratio、request rate、error 和 latency 指标。</p></aside>
+      </section>
+
+      <section class="slide" data-section="资源与故障" data-title="缓存容量、并发与 OOM 都必须按节点评估">
+        <div class="slide-header"><div><p class="eyebrow">Operational sizing</p><h2>缓存容量、并发与 OOM 都必须按节点评估</h2><div class="rule"></div></div></div>
+        <div class="ops-grid"><article><span>MEMORY</span><h3>约 30MB / 10000 entries / server block</h3><p>官方给的是量级估算，不是硬上限；多 zone 会叠加。</p></article><article><span>CONCURRENCY</span><h3>查询 goroutine 也占内存</h3><p>上游慢时并发堆积，峰值内存可能明显增加。</p></article><article><span>OOM</span><h3>Pod 重启期间有短暂空窗</h3><p>DaemonSet 会拉起新进程，但 DNS 可短时失败。</p></article><article><span>RULE LIFECYCLE</span><h3>异常退出要检查残留规则</h3><p>进程不可用而透明规则仍在时，查询可能被送到无人监听的本地地址。</p></article></div>
+        <div class="flat-block yellow"><p class="body">课程清单只声明 <code>requests: memory 5Mi</code>，它不是 usage limit。生产应基于指标设置合理 request/limit，并预留查询突发。</p></div>
+        <div class="slide-number">42</div>
+        <aside class="speaker-copy"><p>缓存满载内存是按 server block 估算的，再加上并发请求，生产不能简单沿用 5Mi request。</p><p>NodeLocal 崩溃时故障是节点局部的，但这台节点上的 Pod 都依赖它。监控要覆盖 Pod ready、重启次数、内存、请求错误和规则一致性。</p></aside>
+      </section>
+
+      <section class="slide" data-section="排障" data-title="按配置、进程、规则、路由、回源五层找第一个断点">
+        <div class="slide-header"><div><p class="eyebrow">Troubleshooting ladder</p><h2>按配置、进程、规则、路由、回源五层找第一个断点</h2><div class="rule"></div></div></div>
+        <div class="trouble-grid dns-trouble"><article><span>1</span><h3>Pod config</h3><code>cat /etc/resolv.conf</code><p>iptables 模式应仍是 10.96.0.10。</p></article><article><span>2</span><h3>DaemonSet</h3><code>get pods -o wide</code><p>每节点 Ready，liveness 正常。</p></article><article><span>3</span><h3>Interface</h3><code>ip addr show nodelocaldns</code><p>两个 /32 均已绑定。</p></article><article><span>4</span><h3>Netfilter</h3><code>iptables -t raw / -S INPUT</code><p>NOTRACK 与 ACCEPT 都存在。</p></article><article><span>5</span><h3>Route</h3><code>ip route get 10.96.0.10</code><p>必须显示 local。</p></article><article><span>6</span><h3>Upstream</h3><code>svc/endpoints + logs</code><p>miss 能否到 kube-dns-upstream。</p></article></div>
+        <div class="slide-number">43</div>
+        <aside class="speaker-copy"><p>最有效的排障方法是顺着包走。先确认 Pod 目标，再看缓存进程和接口，然后查 raw、INPUT、route，最后看 upstream 和 CoreDNS。</p><p>如果 hit 正常、miss 失败，重点在 kube-dns-upstream 或节点上游；如果连 hit 都不工作，重点在本地进程、监听、规则和路由。</p></aside>
+      </section>
+
+      <section class="slide" data-section="现场演示" data-title="二十分钟演示顺序：先基线，再接管，再证明命中">
+        <div class="slide-header"><div><p class="eyebrow">Live demo runbook</p><h2>二十分钟演示顺序：先基线，再接管，再证明命中</h2><div class="rule"></div></div></div>
+        <div class="demo-columns dns-demo"><ol><li><code>./deploy.sh</code><span>三节点、Calico、dns-test ready</span></li><li><code>get svc kube-dns</code><span>确认 10.96.0.10</span></li><li><code>cat /etc/resolv.conf</code><span>记录部署前入口</span></li><li><code>cp + sed nodelocaldns.yaml</code><span>替换三个占位符</span></li><li><code>kubectl create -f</code><span>创建五类资源</span></li><li><code>get ds/pod -o wide</code><span>确认每节点一个缓存</span></li></ol><ol start="7"><li><code>ip addr show nodelocaldns</code><span>确认双地址绑定</span></li><li><code>iptables -t raw -S</code><span>确认 NOTRACK</span></li><li><code>ip route get 10.96.0.10</code><span>确认 local route</span></li><li><code>nslookup kubernetes.default</code><span>验证透明解析</span></li><li><code>port-forward :9253</code><span>观察 hit 递增</span></li><li><code>log + rollout + logs</code><span>短时展示查询细节</span></li></ol></div>
+        <div class="callout"><strong>清理：</strong><code>kill %1</code> 停止 port-forward；删除临时 <code>log</code>；最后执行 <code>chmod +x destroy.sh &amp;&amp; ./destroy.sh</code>。</div>
+        <div class="slide-number">44</div>
+        <aside class="speaker-copy"><p>演示一定先有基线，再部署、再分层验证。不要只跑 nslookup；这会错过本课最有价值的 netfilter 和 local route 机制。</p><p>结束时要停 port-forward、关闭查询日志并清理 topology。这样下一次课程从干净环境开始。</p></aside>
+      </section>
+
+      <section class="slide" data-section="总结与来源" data-title="NodeLocal DNSCache 的完整证据链">
+        <div class="slide-header"><div><p class="eyebrow">Summary and sources</p><h2>NodeLocal DNSCache 的完整证据链</h2><div class="rule"></div></div></div>
+        <div class="summary-row"><article><span>01</span><h3>就近</h3><p>DaemonSet 为每个 Node 提供本地 DNS 缓存。</p></article><article><span>02</span><h3>透明</h3><p>iptables 模式继续使用 10.96.0.10，无需改 Pod。</p></article><article><span>03</span><h3>接管</h3><p>NOTRACK 保留目标，local route 将查询交给本机进程。</p></article><article><span>04</span><h3>回源</h3><p>miss 通过 upstream Service 到 CoreDNS，并写回节点缓存。</p></article></div>
+        <div class="sources"><article><strong>Lesson 17</strong><a href="https://k8snetworking.com/lessons/17-nodelocal-dnscache">k8snetworking.com/.../17-nodelocal-dnscache</a></article><article><strong>课程仓库</strong><a href="https://github.com/aadhilam/k8-networking-calico-containerlab/tree/master/containerlab/17-nodelocal-dnscache">github.com/aadhilam/.../17-nodelocal-dnscache</a></article><article><strong>Kubernetes 官方</strong><a href="https://kubernetes.io/docs/tasks/administer-cluster/nodelocaldns/">kubernetes.io/.../nodelocaldns</a></article><article><strong>NodeLocal 源码</strong><a href="https://github.com/kubernetes/dns/tree/master/cmd/node-cache">github.com/kubernetes/dns/.../node-cache</a></article></div>
+        <div class="slide-number">45</div>
+        <aside class="speaker-copy"><p>最后把证据链收束成四句话：每节点有缓存；Pod 配置不变；raw NOTRACK 加 local route 完成透明接管；miss 才回源 CoreDNS。</p><p>真正上线前再确认 kube-proxy 是 iptables 还是 IPVS，并基于节点 DNS QPS、并发和 cache entries 做内存容量规划。</p></aside>
+      </section>
+
+    </div>
+    <div class="progress-track" aria-hidden="true"><div id="progress-fill"></div></div>
+    <nav class="controls" aria-label="演示控制"><button class="tool-btn" id="prev" type="button" title="上一页" aria-label="上一页">‹</button><button class="tool-btn" id="next" type="button" title="下一页" aria-label="下一页">›</button><button class="tool-btn" id="notes-toggle" type="button" title="讲稿" aria-label="显示或隐藏讲稿" aria-pressed="false">N</button><button class="tool-btn" id="overview-toggle" type="button" title="总览" aria-label="显示或隐藏总览" aria-pressed="false">▦</button><button class="tool-btn" id="fullscreen" type="button" title="全屏" aria-label="切换全屏">⛶</button></nav>
+    <button class="notes-backdrop" id="notes-backdrop" type="button" aria-label="关闭讲稿" tabindex="-1"></button>
+    <aside class="notes-panel" id="notes-panel" aria-live="polite" aria-hidden="true"><div class="notes-header"><h2 id="notes-title">讲稿</h2><button class="notes-close" id="notes-close" type="button" title="关闭讲稿" aria-label="关闭讲稿">×</button></div><div id="notes-body"></div></aside>
+    <aside class="overview" id="overview" aria-label="幻灯片总览"></aside>
+  </main>
+  <script src="app.js?v=1"></script>
+</body>
+</html>

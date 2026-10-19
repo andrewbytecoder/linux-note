@@ -1,0 +1,705 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="基于 Kubernetes Networking Labs Lesson 20 的 Calico Ingress TLS、cert-manager、本地 CA 与 Gateway API 中文动态演示课件">
+  <title>Ingress TLS：从证书签发到 Envoy 热更新</title>
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="styles.css?v=1">
+</head>
+<body>
+  <main class="deck-shell" aria-label="Ingress TLS HTML 演示文稿">
+    <div id="deck-canvas">
+
+      <section class="slide cover active" data-section="Ingress TLS" data-title="从证书签发到 Envoy 热更新">
+        <div class="cover-layout tls-cover-layout"><div class="cover-copy"><p class="eyebrow">Lesson 20 · cert-manager · Local CA · Gateway API · Envoy</p><h1>Ingress TLS<br><span class="yellow-mark">从证书签发到 Envoy 热更新</span></h1><p class="lead">cert-manager 把 Certificate 变成 TLS Secret，Gateway 引用 Secret，Envoy 根据 SNI 选择证书并在入口终止 TLS。</p><div class="cover-meta"><span>*.demo.lab</span><span>api.demo.lab</span><span>TLS 1.3</span><span>HTTP 301</span></div></div><div class="tls-cover-flow is-playing" id="cover-flow"><article><span>CLIENT</span><strong>store.demo.lab</strong><code>SNI + HTTPS</code></article><div class="tls-lane"><i>443</i></div><article class="envoy"><span>ENVOY</span><strong>TLS Termination</strong><code>wildcard Secret</code></article><div class="tls-lane clear"><i>HTTP</i></div><article class="backend"><span>CLUSTER</span><strong>store Service</strong><code>port 80</code></article><div class="cover-caption">外部连接加密到 Gateway，课程后端使用明文 HTTP</div></div></div>
+        <aside class="speaker-copy"><p>大家好，这一节在上一课的 Gateway 和 BGP 入口上加 TLS。重点不是手工生成一张证书，而是看 cert-manager 如何管理完整生命周期，以及 Envoy 如何按 SNI 选择证书。</p><p>外部客户端和 Envoy 之间是 HTTPS，Envoy 解密后按 HTTPRoute 转发到集群内的 store、blog 或 api Service。本课后端仍是 HTTP 80，因此这是入口 TLS 终止，不是端到端 mTLS。</p><p class="note-source">主课程：<a href="https://k8snetworking.com/lessons/20-ingress-tls">https://k8snetworking.com/lessons/20-ingress-tls</a></p></aside>
+      </section>
+
+      <section class="slide" data-section="TLS 定位" data-title="TLS 终止发生在 Envoy，后端 Service 继续使用 HTTP">
+        <div class="slide-header"><div><p class="eyebrow">Where encryption ends</p><h2>TLS 终止发生在 Envoy，后端 Service 继续使用 HTTP</h2><div class="rule"></div></div></div>
+        <div class="termination-boundary"><article class="client"><span>External User</span><strong>HTTPS</strong><code>encrypted · authenticated</code></article><div class="encrypted-zone"><i>TLS records</i></div><article class="proxy"><span>Envoy Gateway</span><strong>decrypts</strong><code>certificate + private key</code></article><div class="clear-zone"><i>HTTP :80</i></div><article class="app"><span>Backend Service</span><strong>store / blog / api</strong><code>plain HTTP in this lab</code></article></div>
+        <div class="callout"><strong>安全边界：</strong>TLS 终止保护客户端到 Gateway。若需要 Gateway 到 Pod 也加密，要配置 BackendTLSPolicy、应用 TLS 或服务网格。</div><div class="slide-number">02</div>
+        <aside class="speaker-copy"><p>课程的证书只给 Envoy listener 使用。Envoy 收到 HTTPS、完成握手、解密请求，再发 HTTP 到 backend Service。</p><p>所以它保护外部链路，但不自动加密集群内部最后一段。不要把“入口 HTTPS”说成“端到端加密”。</p></aside>
+      </section>
+
+      <section class="slide" data-section="TLS 能力" data-title="TLS 同时提供机密性、完整性与服务器身份验证">
+        <div class="slide-header"><div><p class="eyebrow">What the handshake establishes</p><h2>TLS 同时提供机密性、完整性与服务器身份验证</h2><div class="rule"></div></div></div>
+        <div class="tls-properties"><article><span>CONFIDENTIALITY</span><h3>机密性</h3><p>会话密钥加密 HTTP 内容，旁路观察者无法直接读取。</p></article><article><span>INTEGRITY</span><h3>完整性</h3><p>认证加密检测传输中的篡改。</p></article><article><span>AUTHENTICATION</span><h3>服务器身份</h3><p>客户端验证证书链与请求主机名。</p></article></div>
+        <div class="flat-block yellow"><p class="body">本课没有配置客户端证书验证，因此不是双向 TLS。Certificate 的 <code>client auth</code> usage 也不会自动让 listener 要求客户端证书。</p></div><div class="slide-number">03</div>
+        <aside class="speaker-copy"><p>TLS 让客户端确认自己连的是受 Lab CA 签发、且 SAN 匹配的服务器，还为后续 HTTP 数据提供加密和完整性。</p><p>本课只做服务器认证。清单虽然把 client auth 加进 usage，但 Gateway 没配置 mTLS client validation，所以不会要求客户端证书。</p></aside>
+      </section>
+
+      <section class="slide" data-section="课程架构" data-title="原课件架构连接 cert-manager、TLS Secret、Gateway listener 与 Route">
+        <div class="slide-header compact-header"><div><p class="eyebrow">Course architecture</p><h2>原课件架构连接 cert-manager、TLS Secret、Gateway listener 与 Route</h2><div class="rule"></div></div></div>
+        <figure class="tls-course-image architecture-image"><img src="assets/tls-ingress.png" alt="Ingress TLS 整体架构图"><figcaption>上半部分是证书控制面，下半部分是 Gateway 数据面。Lab CA 本身是 self-signed 根 CA，叶子证书由它签发。</figcaption></figure><div class="slide-number">04</div>
+        <aside class="speaker-copy"><p>这张原图把完整关系放在一起。左上先创建 Lab CA，右上签发 wildcard 和 API 叶子证书，下面 Gateway listener 引用对应 Secret。</p><p>图中文字写 Root CA and Lab CA 容易让人以为有两级 CA。实际 certificates.yaml 只创建一个 self-signed 的 lab-ca，它就是本地信任根。</p></aside>
+      </section>
+
+      <section class="slide" data-section="实验拓扑" data-title="网络拓扑沿用 Lesson 19，增加证书控制面与三套应用">
+        <div class="slide-header"><div><p class="eyebrow">Same external path, new TLS layer</p><h2>网络拓扑沿用 Lesson 19，增加证书控制面与三套应用</h2><div class="rule"></div></div></div>
+        <div class="tls-lab-topology"><section><header>VLAN 30</header><article><span>user</span><strong>10.30.30.100</strong><code>curl / openssl</code></article></section><div class="topology-hop">ToR<br><b>BGP ECMP</b></div><section class="cluster-side"><header>VLAN 10</header><article class="gateway"><span>worker / worker2</span><strong>Envoy Gateway</strong><code>BGP speakers</code></article><article><span>worker3 / worker4</span><strong>store · blog · api</strong><code>application Pods</code></article></section></div>
+        <div class="grid-2 compact-gap"><div class="flat-block blue"><h3>网络入口</h3><p class="body">172.16.0.240/28 LoadBalancer pool 仍通过 BGP 对外宣告。</p></div><div class="flat-block orange"><h3>证书入口</h3><p class="body">cert-manager 生成 Secret，Gateway HTTPS listener 在 Envoy 终止 TLS。</p></div></div><div class="slide-number">05</div>
+        <aside class="speaker-copy"><p>底层网络和上一课一致：外部用户在 VLAN 30，Kubernetes 节点在 VLAN 10，两个 speaker 提供 BGP 入口。</p><p>这次应用变成 store、blog 和 api，新增 cert-manager 负责证书控制面。</p></aside>
+      </section>
+
+      <section class="slide" data-section="部署边界" data-title="deploy.sh 只搭基础设施、Calico、BGP 与 Gateway API">
+        <div class="slide-header"><div><p class="eyebrow">Manual work starts after GatewayClass</p><h2>deploy.sh 只搭基础设施、Calico、BGP 与 Gateway API</h2><div class="rule"></div></div></div>
+        <div class="tls-deploy-scope"><section><header>脚本完成</header><p>Containerlab + 五节点 Kind</p><p>Calico 3.31.3</p><p>选择性 BGP 与 LB IPPool</p><p>GatewayAPI + GatewayClass</p></section><div>STOP</div><section class="manual"><header>学员手动完成</header><p>安装 cert-manager 1.16.2</p><p>部署三套应用</p><p>创建 Issuer 与 Certificate</p><p>创建 Gateway、Grant、Routes</p><p>信任 CA、验证与轮换</p></section></div>
+        <pre class="code terminal command-code"><span class="prompt">$</span> cd containerlab/20-ingress-tls
+<span class="prompt">$</span> chmod +x deploy.sh &amp;&amp; ./deploy.sh
+<span class="prompt">$</span> export KUBECONFIG=$(pwd)/k01.kubeconfig</pre><div class="slide-number">06</div>
+        <aside class="speaker-copy"><p>脚本不会安装 cert-manager，也不会创建应用、证书或 TLS Gateway。这些都是课程主体。</p><p>演示时先确认脚本边界，避免后面找不到 namespace 时误以为部署失败。</p></aside>
+      </section>
+
+      <section class="slide" data-section="基础检查" data-title="五节点与 GatewayClass 必须先达到 Ready 和 Accepted">
+        <div class="slide-header"><div><p class="eyebrow">Infrastructure baseline</p><h2>五节点与 GatewayClass 必须先达到 Ready 和 Accepted</h2><div class="rule"></div></div></div>
+        <pre class="code terminal baseline-check"><span class="prompt">$</span> kubectl get nodes -o wide
+k01-control-plane   Ready   10.10.10.10
+k01-worker          Ready   10.10.10.11
+k01-worker2         Ready   10.10.10.12
+k01-worker3         Ready   10.10.10.13
+k01-worker4         Ready   10.10.10.14
+
+<span class="prompt">$</span> kubectl get gatewayclass
+NAME                   CONTROLLER                                      ACCEPTED
+tigera-gateway-class   gateway.envoyproxy.io/gatewayclass-controller   <span class="good">True</span></pre><div class="slide-number">07</div>
+        <aside class="speaker-copy"><p>先确认五个节点 Ready，再确认 tigera-gateway-class Accepted=True。证书部分建立在可用 Gateway API 上。</p><p>如果 class 没出现，先回到 Operator 与 GatewayAPI CR，暂时不要安装应用和证书。</p></aside>
+      </section>
+
+      <section class="slide" data-section="网络基线" data-title="LoadBalancer pool 与 BGP 路由仍负责把外部流量送到 Gateway">
+        <div class="slide-header"><div><p class="eyebrow">TLS does not replace routing</p><h2>LoadBalancer pool 与 BGP 路由仍负责把外部流量送到 Gateway</h2><div class="rule"></div></div></div>
+        <div class="network-baseline"><article><span>IPAM</span><strong>172.16.0.240/28</strong><p><code>allowedUses: LoadBalancer</code></p></article><i>+</i><article><span>BGP</span><strong>serviceLoadBalancerIPs</strong><p>worker/worker2 向 ToR 宣告。</p></article><i>+</i><article><span>GATEWAY</span><strong>HTTPS :443</strong><p>获得一个动态地址并终止 TLS。</p></article></div>
+        <div class="callout"><strong>分层排障：</strong>TCP 443 连接不通先查 BGP/Service；TLS alert 或证书错误再查 listener、Secret 和信任链。</div><div class="slide-number">08</div>
+        <aside class="speaker-copy"><p>TLS 只解决加密和身份，不会让地址自动可达。外部用户仍依赖静态路由、ToR BGP 和 LoadBalancer Service。</p><p>排障要先区分“到不了 443”和“到达 443 但证书验证失败”。</p></aside>
+      </section>
+
+      <section class="slide" data-section="cert-manager" data-title="cert-manager 把声明式 Certificate 转换为可消费的 TLS Secret">
+        <div class="slide-header"><div><p class="eyebrow">Certificate lifecycle controller</p><h2>cert-manager 把声明式 Certificate 转换为可消费的 TLS Secret</h2><div class="rule"></div></div></div>
+        <div class="cert-manager-value"><article><span>DESIRED STATE</span><strong>Certificate CR</strong><code>dnsNames · duration · issuerRef</code></article><div class="cm-arrow">reconcile</div><article class="cm"><span>CONTROLLER</span><strong>cert-manager</strong><code>key · CSR · issuance · renewal</code></article><div class="cm-arrow">writes</div><article class="secret"><span>CONSUMABLE</span><strong>kubernetes.io/tls Secret</strong><code>tls.crt · tls.key · ca.crt</code></article></div>
+        <div class="flat-block blue"><p class="body">Certificate 是期望状态，Secret 是运行时材料。应用与 Gateway 通常引用 Secret，不直接读取 Certificate CR。</p></div><div class="slide-number">09</div>
+        <aside class="speaker-copy"><p>Certificate 写域名、签发者、有效期和 Secret 名。cert-manager 负责生成私钥、创建请求、签发和续期，最后把材料写进 Secret。</p><p>Gateway 的 certificateRefs 指向 Secret，不是指向 Certificate 对象。</p></aside>
+      </section>
+
+      <section class="slide" data-section="cert-manager" data-title="Controller、Webhook 与 CA Injector 各自处理不同职责">
+        <div class="slide-header"><div><p class="eyebrow">Three core deployments</p><h2>Controller、Webhook 与 CA Injector 各自处理不同职责</h2><div class="rule"></div></div></div>
+        <div class="cm-components"><article><span>cert-manager</span><h3>Controller</h3><p>监听 Certificate、CertificateRequest 与 Issuer，执行签发和续期。</p></article><article><span>cert-manager-webhook</span><h3>Webhook</h3><p>校验、默认化并转换 cert-manager API 资源。</p></article><article><span>cert-manager-cainjector</span><h3>CA Injector</h3><p>向 webhook、APIService 和标注对象注入 CA bundle。</p></article></div><div class="slide-number">10</div>
+        <aside class="speaker-copy"><p>主 controller 负责业务逻辑，webhook 负责准入与版本转换，cainjector 负责 CA bundle 注入。</p><p>三个 Deployment 都 Available，才算安装完成。只看到 namespace 并不够。</p></aside>
+      </section>
+
+      <section class="slide" data-section="安装" data-title="课程固定安装 cert-manager v1.16.2 官方清单">
+        <div class="slide-header"><div><p class="eyebrow">Install the course version</p><h2>课程固定安装 cert-manager v1.16.2 官方清单</h2><div class="rule"></div></div></div>
+        <pre class="code terminal cert-install"><span class="prompt">$</span> kubectl apply -f \
+https://github.com/cert-manager/cert-manager/releases/download/v1.16.2/cert-manager.yaml
+
+namespace/cert-manager created
+customresourcedefinition.apiextensions.k8s.io/certificates.cert-manager.io created
+customresourcedefinition.apiextensions.k8s.io/clusterissuers.cert-manager.io created
+deployment.apps/cert-manager created
+deployment.apps/cert-manager-cainjector created
+deployment.apps/cert-manager-webhook created</pre>
+        <div class="flat-block yellow"><p class="body">本课环境按 v1.16.2 验证。生产安装应使用组织批准的版本，并先检查 Kubernetes 版本兼容性与升级说明。</p></div><div class="slide-number">11</div>
+        <aside class="speaker-copy"><p>官方 manifest 同时创建 namespace、CRD、RBAC、Deployment 和 Service。输出很多，重点看有没有失败资源。</p><p>不要在这套课程里随意换 latest，否则 API 行为、镜像和默认值可能与课件不同。</p></aside>
+      </section>
+
+      <section class="slide" data-section="安装验证" data-title="三个 Deployment Available 后再创建 Issuer">
+        <div class="slide-header"><div><p class="eyebrow">Wait for admission and controllers</p><h2>三个 Deployment Available 后再创建 Issuer</h2><div class="rule"></div></div></div>
+        <pre class="code terminal wait-output"><span class="prompt">$</span> kubectl wait --for=condition=available --timeout=300s \
+  deployment/cert-manager -n cert-manager
+<span class="prompt">$</span> kubectl wait --for=condition=available --timeout=300s \
+  deployment/cert-manager-webhook -n cert-manager
+<span class="prompt">$</span> kubectl wait --for=condition=available --timeout=300s \
+  deployment/cert-manager-cainjector -n cert-manager
+
+deployment.apps/cert-manager condition met
+deployment.apps/cert-manager-webhook condition met
+deployment.apps/cert-manager-cainjector condition met</pre><div class="slide-number">12</div>
+        <aside class="speaker-copy"><p>webhook 还没 Ready 时，创建 Certificate 或 Issuer 可能得到 admission 连接错误。</p><p>所以这三条 wait 是功能依赖，不只是让演示更整齐。</p></aside>
+      </section>
+
+      <section class="slide" data-section="安装验证" data-title="Pod 与 CRD 共同证明 cert-manager 可用">
+        <div class="slide-header"><div><p class="eyebrow">Runtime and API surface</p><h2>Pod 与 CRD 共同证明 cert-manager 可用</h2><div class="rule"></div></div></div>
+        <div class="grid-2"><pre class="code terminal"><span class="prompt">$</span> kubectl get pods -n cert-manager
+cert-manager-...              1/1 Running
+cert-manager-cainjector-...   1/1 Running
+cert-manager-webhook-...      1/1 Running</pre><pre class="code terminal"><span class="prompt">$</span> kubectl get crds | grep cert-manager
+certificates.cert-manager.io
+certificaterequests.cert-manager.io
+clusterissuers.cert-manager.io
+issuers.cert-manager.io
+orders.acme.cert-manager.io
+challenges.acme.cert-manager.io</pre></div>
+        <div class="callout"><strong>两类证据：</strong>Pod Ready 证明组件运行；CRD 存在证明 API Server 接受 Certificate 与 Issuer 资源。</div><div class="slide-number">13</div>
+        <aside class="speaker-copy"><p>三个 Pod Running 证明程序起来了，CRD 列表证明 Kubernetes API 已扩展。</p><p>如果 CRD 在但 webhook 不 Ready，kubectl apply 仍可能失败，所以两边都要看。</p></aside>
+      </section>
+
+      <section class="slide" data-section="烟雾测试" data-title="自签名烟测同时验证 Webhook、Controller 与 Secret 写入">
+        <div class="slide-header"><div><p class="eyebrow">Independent smoke test</p><h2>自签名烟测同时验证 Webhook、Controller 与 Secret 写入</h2><div class="rule"></div></div></div>
+        <pre class="code manifest-code smoke-yaml"><span class="key">kind:</span> Namespace
+<span class="key">metadata:</span> {<span class="key">name:</span> cert-manager-test}
+---
+<span class="key">apiVersion:</span> cert-manager.io/v1
+<span class="key">kind:</span> Issuer
+<span class="key">metadata:</span>
+  <span class="key">name:</span> test-selfsigned
+  <span class="key">namespace:</span> cert-manager-test
+<span class="key">spec:</span> {<span class="key">selfSigned:</span> {}}
+---
+<span class="key">apiVersion:</span> cert-manager.io/v1
+<span class="key">kind:</span> Certificate
+<span class="key">metadata:</span>
+  <span class="key">name:</span> selfsigned-cert
+  <span class="key">namespace:</span> cert-manager-test
+<span class="key">spec:</span>
+  <span class="key">dnsNames:</span> [example.com]
+  <span class="key">secretName:</span> selfsigned-cert-tls
+  <span class="key">issuerRef:</span> {<span class="key">name:</span> test-selfsigned}</pre><div class="slide-number">14</div>
+        <aside class="speaker-copy"><p>这个独立 namespace 的烟测不依赖 Lab CA，能快速证明资源被 webhook 接受、controller 能生成真实 X.509、Secret 能写入。</p><p>Issuer 是 namespaced，所以 Certificate 在同一个 cert-manager-test namespace 引用它。</p></aside>
+      </section>
+
+      <section class="slide" data-section="烟雾测试" data-title="Certificate Ready=True 表示自签名证书已写入目标 Secret">
+        <div class="slide-header"><div><p class="eyebrow">Reconciliation result</p><h2>Certificate Ready=True 表示自签名证书已写入目标 Secret</h2><div class="rule"></div></div></div>
+        <div class="smoke-flow"><article><span>Certificate</span><strong>selfsigned-cert</strong><code>example.com</code></article><div class="smoke-lane"></div><article><span>Issuer</span><strong>test-selfsigned</strong><code>sign with own key</code></article><div class="smoke-lane"></div><article class="secret"><span>Secret</span><strong>selfsigned-cert-tls</strong><code>tls.crt + tls.key</code></article></div>
+        <pre class="code terminal command-code"><span class="prompt">$</span> kubectl get certificate -n cert-manager-test
+NAME              READY   SECRET
+selfsigned-cert   <span class="good">True</span>    selfsigned-cert-tls</pre><div class="slide-number">15</div>
+        <aside class="speaker-copy"><p>SelfSigned issuer 会让 CertificateRequest 使用对应私钥给自己的证书签名。它是有效 X.509，但客户端不会自动信任。</p><p>Ready=True 加目标 Secret 存在，说明这套 cert-manager 基础能力正常。</p></aside>
+      </section>
+
+      <section class="slide" data-section="烟雾测试" data-title="OpenSSL 可以直接解码 Secret 中的真实 X.509 证书">
+        <div class="slide-header"><div><p class="eyebrow">Inspect and remove the smoke test</p><h2>OpenSSL 可以直接解码 Secret 中的真实 X.509 证书</h2><div class="rule"></div></div></div>
+        <pre class="code terminal inspect-test"><span class="prompt">$</span> kubectl get secret selfsigned-cert-tls \
+  -n cert-manager-test \
+  -o jsonpath='{.data.tls\.crt}' | base64 -d | \
+  openssl x509 -text -noout | head -15
+
+Certificate:
+  Data:
+    Version: 3
+    Signature Algorithm: ecdsa-with-SHA256
+    Subject Public Key Info: id-ecPublicKey
+
+<span class="prompt">$</span> kubectl delete namespace cert-manager-test</pre><div class="slide-number">16</div>
+        <aside class="speaker-copy"><p>Kubernetes Secret data 是 base64 编码，不是加密。解码后交给 openssl，可以看到真正证书字段。</p><p>烟测完成删除整个 namespace，避免测试 Issuer 和 Secret 混进正式资源。</p></aside>
+      </section>
+
+      <section class="slide" data-section="应用部署" data-title="store、blog 与 api 都运行在 cert-manager-demo namespace">
+        <div class="slide-header"><div><p class="eyebrow">Three HTTP backends</p><h2>store、blog 与 api 都运行在 cert-manager-demo namespace</h2><div class="rule"></div></div></div>
+        <div class="three-apps"><article class="store"><span>store.demo.lab</span><strong>store Service</strong><code>wildcard cert</code></article><article class="blog"><span>blog.demo.lab</span><strong>blog Service</strong><code>wildcard cert</code></article><article class="api"><span>api.demo.lab</span><strong>api Service</strong><code>dedicated cert</code></article></div>
+        <pre class="code terminal command-code"><span class="prompt">$</span> kubectl create namespace cert-manager-demo
+<span class="prompt">$</span> kubectl apply -f k8s-manifests/app-store.yaml
+<span class="prompt">$</span> kubectl apply -f k8s-manifests/app-blog.yaml
+<span class="prompt">$</span> kubectl apply -f k8s-manifests/app-api.yaml
+<span class="prompt">$</span> kubectl get pods,svc -n cert-manager-demo -o wide</pre><div class="slide-number">17</div>
+        <aside class="speaker-copy"><p>三套应用都是普通 HTTP Service，证书不会挂进应用 Pod。TLS 统一在 Envoy 入口终止。</p><p>应用通过 required affinity 落在非 BGP、非 control-plane 节点，入口与 workload 角色继续分离。</p></aside>
+      </section>
+
+      <section class="slide" data-section="证书策略" data-title="store 与 blog 共用 wildcard，api 使用独立证书">
+        <div class="slide-header"><div><p class="eyebrow">Two certificate strategies</p><h2>store 与 blog 共用 wildcard，api 使用独立证书</h2><div class="rule"></div></div></div>
+        <div class="cert-strategy"><section class="wildcard"><header>*.demo.lab</header><article><span>store.demo.lab</span><strong>shared</strong></article><article><span>blog.demo.lab</span><strong>shared</strong></article><footer>wildcard-demo-lab-tls</footer></section><section class="dedicated"><header>api.demo.lab</header><article><span>api.demo.lab</span><strong>isolated</strong></article><footer>api-demo-lab-tls</footer></section></div>
+        <div class="grid-2 compact-gap"><div class="flat-block green"><h3>Wildcard</h3><p class="body">资源少、统一续期，但同一私钥覆盖更多主机。</p></div><div class="flat-block blue"><h3>Dedicated</h3><p class="body">独立私钥与生命周期，故障和泄露影响范围更小。</p></div></div><div class="slide-number">18</div>
+        <aside class="speaker-copy"><p>Wildcard 很适合同一域下大量普通应用，但私钥泄露会影响所有匹配子域。</p><p>API 使用独立证书，可以单独轮换、吊销和设置策略，代价是对象更多。</p></aside>
+      </section>
+
+      <section class="slide" data-section="Issuer" data-title="SelfSigned 只负责启动 Lab CA，CA issuer 才签发业务证书">
+        <div class="slide-header"><div><p class="eyebrow">Two issuers, different jobs</p><h2>SelfSigned 只负责启动 Lab CA，CA issuer 才签发业务证书</h2><div class="rule"></div></div></div>
+        <div class="issuer-roles"><article class="self"><span>selfsigned-issuer</span><h3>Bootstrap</h3><p>给 lab-ca Certificate 自签名，生成本地信任根和私钥。</p><strong>只用于根 CA</strong></article><article class="ca"><span>lab-ca-issuer</span><h3>Primary signer</h3><p>读取 lab-ca-secret 的 CA 私钥，签发 wildcard 与 api 叶子证书。</p><strong>业务证书入口</strong></article></div>
+        <div class="callout"><strong>生产提示：</strong>cert-manager CA issuer 适合实验或有成熟 PKI 运维能力的环境；根 CA 轮换、信任分发和灾难恢复需要单独设计。</div><div class="slide-number">19</div>
+        <aside class="speaker-copy"><p>SelfSigned issuer 不是给每个业务证书直接用，而是用来创建本地 CA。随后 lab-ca-issuer 引用 CA Secret，统一签发叶子证书。</p><p>生产本地 CA 管理很复杂，官方也提醒需要专业轮换和信任分发方案。</p></aside>
+      </section>
+
+      <section class="slide" data-section="Issuer" data-title="原课件图展示两个 ClusterIssuer 的依赖顺序">
+        <div class="slide-header compact-header"><div><p class="eyebrow">Course issuer diagram</p><h2>原课件图展示两个 ClusterIssuer 的依赖顺序</h2><div class="rule"></div></div></div>
+        <figure class="tls-course-image issuer-image"><img src="assets/cert-issuers.png" alt="SelfSigned 与 CA ClusterIssuer 图"><figcaption><code>selfsigned-issuer</code> 无需外部 Secret；<code>lab-ca-issuer</code> 必须等 <code>lab-ca-secret</code> 出现后才能 Ready。</figcaption></figure><div class="slide-number">20</div>
+        <aside class="speaker-copy"><p>图左侧是启动 issuer，右侧是 CA issuer。右侧引用 lab-ca-secret，因此先创建 ClusterIssuer 时会暂时报 secret not found。</p><p>这是预期的依赖等待，不是需要删除重建的错误。</p></aside>
+      </section>
+
+      <section class="slide" data-section="Issuer 清单" data-title="ClusterIssuer 跨 namespace 可用，但 CA Secret 默认位于 cert-manager">
+        <div class="slide-header"><div><p class="eyebrow">cluster-issuers.yaml</p><h2>ClusterIssuer 跨 namespace 可用，但 CA Secret 默认位于 cert-manager</h2><div class="rule"></div></div></div>
+        <div class="grid-2"><pre class="code manifest-code"><span class="key">kind:</span> ClusterIssuer
+<span class="key">metadata:</span>
+  <span class="key">name:</span> selfsigned-issuer
+<span class="key">spec:</span>
+  <span class="key">selfSigned:</span> {}</pre><pre class="code manifest-code"><span class="key">kind:</span> ClusterIssuer
+<span class="key">metadata:</span>
+  <span class="key">name:</span> lab-ca-issuer
+<span class="key">spec:</span>
+  <span class="key">ca:</span>
+    <span class="key">secretName:</span> <span class="value">lab-ca-secret</span></pre></div>
+        <div class="flat-block yellow"><p class="body">ClusterIssuer 是 cluster-scoped，但它引用的 Secret 会在 cert-manager 的 cluster resource namespace 查找。课程把 <code>lab-ca</code> Certificate 也放在 <code>cert-manager</code>。</p></div>
+        <pre class="code terminal command-code"><span class="prompt">$</span> kubectl apply -f tls-config/cluster-issuers.yaml</pre><div class="slide-number">21</div>
+        <aside class="speaker-copy"><p>ClusterIssuer 能给任意 namespace 的 Certificate 使用，但 CA 私钥 Secret 不是随便放。默认查 cert-manager namespace。</p><p>课程设计正好匹配：lab-ca Certificate 在 cert-manager，生成 lab-ca-secret。</p></aside>
+      </section>
+
+      <section class="slide" data-section="Issuer 状态" data-title="lab-ca-issuer 初始 False 属于预期依赖等待">
+        <div class="slide-header"><div><p class="eyebrow">Expected transient state</p><h2>lab-ca-issuer 初始 False 属于预期依赖等待</h2><div class="rule"></div></div></div>
+        <pre class="code terminal issuer-status"><span class="prompt">$</span> kubectl get clusterissuers -o wide
+NAME                READY   STATUS
+selfsigned-issuer   <span class="good">True</span>
+lab-ca-issuer       <span class="error">False</span>   Error initializing issuer: secret not found</pre>
+        <div class="dependency-chain"><article><span>now</span><strong>selfsigned issuer ready</strong></article><i>›</i><article><span>next</span><strong>create lab-ca Certificate</strong></article><i>›</i><article><span>then</span><strong>lab-ca-secret appears</strong></article><i>›</i><article class="ready"><span>result</span><strong>lab-ca-issuer ready</strong></article></div><div class="slide-number">22</div>
+        <aside class="speaker-copy"><p>lab-ca-issuer 现在 False，因为 Secret 还没创建。不要在这里反复 apply issuer。</p><p>下一步创建 lab-ca Certificate，cert-manager 写出 Secret，issuer controller 会自动重试并变 Ready。</p></aside>
+      </section>
+
+      <section class="slide" data-section="证书签发" data-title="原课件图把 CA 启动、CA issuer 与叶子证书分为三个阶段">
+        <div class="slide-header compact-header"><div><p class="eyebrow">Course issuance diagram</p><h2>原课件图把 CA 启动、CA issuer 与叶子证书分为三个阶段</h2><div class="rule"></div></div></div>
+        <figure class="tls-course-image issuance-image"><img src="assets/issue-certs.png" alt="证书签发三个阶段图"><figcaption>先生成 <code>lab-ca-secret</code>，再让 <code>lab-ca-issuer</code> 读取它，最后签发 wildcard 与 API 证书。</figcaption></figure><div class="slide-number">23</div>
+        <aside class="speaker-copy"><p>签发顺序虽然都在一个 certificates.yaml 里，但控制器会按依赖自动收敛。</p><p>最先 Ready 的是 lab-ca，随后 CA issuer Ready，最后两个叶子 Certificate Ready。</p></aside>
+      </section>
+
+      <section class="slide" data-section="Lab CA" data-title="lab-ca Certificate 创建十年有效的 ECDSA P-256 本地根 CA">
+        <div class="slide-header"><div><p class="eyebrow">Bootstrap the trust anchor</p><h2>lab-ca Certificate 创建十年有效的 ECDSA P-256 本地根 CA</h2><div class="rule"></div></div></div>
+        <pre class="code manifest-code ca-manifest"><span class="key">kind:</span> Certificate
+<span class="key">metadata:</span>
+  <span class="key">name:</span> lab-ca
+  <span class="key">namespace:</span> cert-manager
+<span class="key">spec:</span>
+  <span class="key">isCA:</span> true
+  <span class="key">secretName:</span> lab-ca-secret
+  <span class="key">commonName:</span> Demo Lab Certificate Authority
+  <span class="key">duration:</span> 87600h
+  <span class="key">renewBefore:</span> 8760h
+  <span class="key">privateKey:</span>
+    <span class="key">algorithm:</span> ECDSA
+    <span class="key">size:</span> 256
+  <span class="key">issuerRef:</span>
+    <span class="key">name:</span> selfsigned-issuer
+    <span class="key">kind:</span> ClusterIssuer</pre><div class="slide-number">24</div>
+        <aside class="speaker-copy"><p>lab-ca 的私钥由 cert-manager 生成，Certificate 标记 isCA true，再由 selfsigned issuer 用同一把私钥签署自己的 CA 证书。</p><p>这个 CA 有十年有效期，Secret 包含 CA 私钥。实验方便，生产需要更严格的密钥保护。</p></aside>
+      </section>
+
+      <section class="slide" data-section="信任链" data-title="本实验信任链只有本地根 CA 与叶子证书两级">
+        <div class="slide-header"><div><p class="eyebrow">Accurate PKI chain</p><h2>本实验信任链只有本地根 CA 与叶子证书两级</h2><div class="rule"></div></div></div>
+        <div class="trust-chain"><article class="root"><span>TRUST ANCHOR</span><strong>Demo Lab CA</strong><code>self-signed · isCA=true</code></article><div class="sign-lanes"><div></div><div></div></div><section><article><span>LEAF</span><strong>*.demo.lab</strong><code>store + blog</code></article><article><span>LEAF</span><strong>api.demo.lab</strong><code>API only</code></article></section></div>
+        <div class="flat-block blue"><p class="body">客户端显式信任 Lab CA 后，就能验证它签发的两张叶子证书。课程没有创建额外 intermediate CA。</p></div><div class="slide-number">25</div>
+        <aside class="speaker-copy"><p>信任根就是 lab-ca-secret 里的 CA 证书。Wildcard 和 API 证书由它直接签发，没有第三层中间 CA。</p><p>客户端只需要安全地拿到并信任 Lab CA，之后可以验证两个叶子证书。</p></aside>
+      </section>
+
+      <section class="slide" data-section="Wildcard" data-title="Wildcard Certificate 覆盖所有一级子域并额外包含 apex 域">
+        <div class="slide-header"><div><p class="eyebrow">Shared certificate</p><h2>Wildcard Certificate 覆盖所有一级子域并额外包含 apex 域</h2><div class="rule"></div></div></div>
+        <div class="grid-2"><pre class="code manifest-code"><span class="key">kind:</span> Certificate
+<span class="key">metadata:</span>
+  <span class="key">name:</span> wildcard-demo-lab
+  <span class="key">namespace:</span> cert-manager-demo
+<span class="key">spec:</span>
+  <span class="key">secretName:</span> wildcard-demo-lab-tls
+  <span class="key">duration:</span> 2160h
+  <span class="key">renewBefore:</span> 720h
+  <span class="key">commonName:</span> "*.demo.lab"
+  <span class="key">dnsNames:</span>
+  - <span class="value">"*.demo.lab"</span>
+  - <span class="value">"demo.lab"</span>
+  <span class="key">issuerRef.name:</span> lab-ca-issuer</pre><div class="wildcard-coverage"><article class="covered"><span>covered</span><strong>store.demo.lab</strong></article><article class="covered"><span>covered</span><strong>blog.demo.lab</strong></article><article class="covered"><span>explicit SAN</span><strong>demo.lab</strong></article><article class="not-covered"><span>not covered</span><strong>x.y.demo.lab</strong></article></div></div><div class="slide-number">26</div>
+        <aside class="speaker-copy"><p>Wildcard 只匹配一层标签，例如 store.demo.lab，不匹配 x.y.demo.lab。apex demo.lab 也不会被 wildcard 自动覆盖，所以清单单独写进 SAN。</p><p>验证主机名时以 SAN 为准，不应只依赖 Common Name。</p></aside>
+      </section>
+
+      <section class="slide" data-section="Dedicated" data-title="API Certificate 只包含 api.demo.lab 并使用独立私钥">
+        <div class="slide-header"><div><p class="eyebrow">Per-service isolation</p><h2>API Certificate 只包含 api.demo.lab 并使用独立私钥</h2><div class="rule"></div></div></div>
+        <div class="grid-2"><pre class="code manifest-code"><span class="key">kind:</span> Certificate
+<span class="key">metadata:</span>
+  <span class="key">name:</span> api-demo-lab
+  <span class="key">namespace:</span> cert-manager-demo
+<span class="key">spec:</span>
+  <span class="key">secretName:</span> api-demo-lab-tls
+  <span class="key">duration:</span> 2160h
+  <span class="key">renewBefore:</span> 720h
+  <span class="key">commonName:</span> api.demo.lab
+  <span class="key">dnsNames:</span>
+  - <span class="value">api.demo.lab</span>
+  <span class="key">issuerRef.name:</span> lab-ca-issuer
+  <span class="key">privateKey:</span>
+    <span class="key">algorithm:</span> ECDSA
+    <span class="key">size:</span> 256</pre><div class="dedicated-benefits"><article><span>KEY</span><strong>independent private key</strong></article><article><span>LIFECYCLE</span><strong>rotate separately</strong></article><article><span>BLAST RADIUS</span><strong>api.demo.lab only</strong></article></div></div><div class="slide-number">27</div>
+        <aside class="speaker-copy"><p>API Certificate 有自己的 Secret 和 ECDSA 私钥。轮换它不会影响 store、blog。</p><p>这是关键服务常见做法，能缩小私钥泄露或证书配置错误的影响范围。</p></aside>
+      </section>
+
+      <section class="slide" data-section="策略比较" data-title="Wildcard 减少对象数量，Dedicated 缩小密钥影响范围">
+        <div class="slide-header"><div><p class="eyebrow">Choose based on ownership</p><h2>Wildcard 减少对象数量，Dedicated 缩小密钥影响范围</h2><div class="rule"></div></div></div>
+        <table class="data-table cert-compare"><thead><tr><th>维度</th><th>Wildcard</th><th>Dedicated</th></tr></thead><tbody><tr><td>覆盖范围</td><td><code>*.demo.lab</code> 多个一级子域</td><td><code>api.demo.lab</code> 单一主机</td></tr><tr><td>Secret 数量</td><td>多个 listener 可共享</td><td>每个服务单独 Secret</td></tr><tr><td>轮换</td><td>一次影响所有共享方</td><td>独立安排</td></tr><tr><td>私钥泄露范围</td><td class="bad-cell">覆盖的所有子域</td><td class="good-cell">单一服务</td></tr><tr><td>适合</td><td>同团队、同信任域的普通应用</td><td>关键 API 或独立责任域</td></tr></tbody></table><div class="slide-number">28</div>
+        <aside class="speaker-copy"><p>选择不是越细越好。Wildcard 简化日常运维，Dedicated 提供隔离，具体看团队边界和风险等级。</p><p>无论哪种方式，Secret RBAC 和备份同样重要。</p></aside>
+      </section>
+
+      <section class="slide" data-section="签发" data-title="一次 apply 创建 CA、Wildcard 与 API 三个 Certificate">
+        <div class="slide-header"><div><p class="eyebrow">Apply desired state</p><h2>一次 apply 创建 CA、Wildcard 与 API 三个 Certificate</h2><div class="rule"></div></div></div>
+        <pre class="code terminal issue-output"><span class="prompt">$</span> kubectl apply -f tls-config/certificates.yaml
+
+certificate.cert-manager.io/lab-ca created
+certificate.cert-manager.io/wildcard-demo-lab created
+certificate.cert-manager.io/api-demo-lab created
+
+<span class="prompt">$</span> kubectl get certificates -A -w
+NAMESPACE           NAME                READY   SECRET
+cert-manager        lab-ca              False   lab-ca-secret
+cert-manager-demo   wildcard-demo-lab   False   wildcard-demo-lab-tls
+cert-manager-demo   api-demo-lab        False   api-demo-lab-tls</pre><div class="slide-number">29</div>
+        <aside class="speaker-copy"><p>三个对象可以一次提交，但 controller 会按依赖收敛。最初全部 False 很正常。</p><p>watch 输出能展示状态从等待到 Ready 的时间顺序，完成后 Ctrl+C。</p></aside>
+      </section>
+
+      <section class="slide" data-section="签发顺序" data-title="Lab CA 先 Ready，随后 CA issuer 才能签发两张叶子证书">
+        <div class="slide-header"><div><p class="eyebrow">Dependency-driven convergence</p><h2>Lab CA 先 Ready，随后 CA issuer 才能签发两张叶子证书</h2><div class="rule"></div></div><button class="action-btn" type="button" data-replay="#issuance-flow" title="重播动画" aria-label="重播证书签发动画">↻</button></div>
+        <div class="issuance-flow is-playing" id="issuance-flow"><article><span>1</span><strong>lab-ca Certificate</strong><code>self-sign</code></article><div class="issue-lane"><i>SECRET</i></div><article><span>2</span><strong>lab-ca-secret</strong><code>CA key pair</code></article><div class="issue-lane"><i>READY</i></div><article><span>3</span><strong>lab-ca-issuer</strong><code>signer available</code></article><div class="issue-lane"><i>SIGN</i></div><article class="leaves"><span>4</span><strong>wildcard + api</strong><code>leaf Secrets</code></article></div>
+        <div class="callout"><strong>控制器重试：</strong>叶子 Certificate 可以先存在，cert-manager 会在 issuer Ready 后继续处理，无需手工重建。</div><div class="slide-number">30</div>
+        <aside class="speaker-copy"><p>动画按真正依赖顺序走：先 self-sign Lab CA、写 Secret、CA issuer Ready，然后签两张叶子证书。</p><p>所有连线都是相邻卡片间的固定水平轨道，浏览器缩放时不会偏离。</p></aside>
+      </section>
+
+      <section class="slide" data-section="状态验证" data-title="三个 Certificate Ready=True，lab-ca-issuer 变为可用">
+        <div class="slide-header"><div><p class="eyebrow">Ready state</p><h2>三个 Certificate Ready=True，lab-ca-issuer 变为可用</h2><div class="rule"></div></div></div>
+        <pre class="code terminal ready-output"><span class="prompt">$</span> kubectl get certificates -A
+NAMESPACE           NAME                READY   SECRET
+cert-manager        lab-ca              <span class="good">True</span>    lab-ca-secret
+cert-manager-demo   wildcard-demo-lab   <span class="good">True</span>    wildcard-demo-lab-tls
+cert-manager-demo   api-demo-lab        <span class="good">True</span>    api-demo-lab-tls
+
+<span class="prompt">$</span> kubectl get clusterissuer lab-ca-issuer
+NAME            READY   STATUS
+lab-ca-issuer   <span class="good">True</span>    Signing CA verified</pre><div class="slide-number">31</div>
+        <aside class="speaker-copy"><p>三个 Certificate 都 Ready，说明对应 Secret 已经写好。lab-ca-issuer 也从 secret not found 变成 Signing CA verified。</p><p>只有到这个状态，才进入 Gateway TLS 配置。</p></aside>
+      </section>
+
+      <section class="slide" data-section="证书详情" data-title="Certificate status 给出有效期、续期时间与目标 Secret">
+        <div class="slide-header"><div><p class="eyebrow">Inspect desired and observed state</p><h2>Certificate status 给出有效期、续期时间与目标 Secret</h2><div class="rule"></div></div></div>
+        <div class="grid-2"><pre class="code terminal cert-describe"><span class="prompt">$</span> kubectl describe certificate \
+  wildcard-demo-lab -n cert-manager-demo
+
+Common Name: *.demo.lab
+DNS Names: *.demo.lab, demo.lab
+Duration: 2160h
+Renew Before: 720h
+Algorithm: ECDSA / 256
+Secret Name: wildcard-demo-lab-tls
+Ready: True</pre><div class="cert-status-fields"><article><span>NOT BEFORE / AFTER</span><strong>实际证书有效窗口</strong></article><article><span>RENEWAL TIME</span><strong>计划开始续期的时间</strong></article><article><span>REVISION</span><strong>当前签发修订号</strong></article><article><span>CONDITIONS</span><strong>Ready、Reason 与 Message</strong></article></div></div><div class="slide-number">32</div>
+        <aside class="speaker-copy"><p>spec 是我们要什么，status 是 controller 实际拿到了什么。重点看 NotAfter、RenewalTime 和 condition message。</p><p>Certificate Ready 不只代表对象存在，而是目标 Secret 与期望证书一致。</p></aside>
+      </section>
+
+      <section class="slide" data-section="TLS Secret" data-title="叶子 Secret 保存证书、私钥和 CA 证书">
+        <div class="slide-header"><div><p class="eyebrow">Runtime material</p><h2>叶子 Secret 保存证书、私钥和 CA 证书</h2><div class="rule"></div></div></div>
+        <pre class="code terminal secret-output"><span class="prompt">$</span> kubectl get secrets -n cert-manager-demo | grep tls
+NAME                    TYPE                DATA
+wildcard-demo-lab-tls   kubernetes.io/tls   3
+api-demo-lab-tls        kubernetes.io/tls   3</pre>
+        <div class="secret-keys"><article><span>tls.crt</span><strong>leaf certificate</strong><p>可能附带 issuer chain。</p></article><article><span>tls.key</span><strong>private key</strong><p>Envoy 用它完成握手签名。</p></article><article><span>ca.crt</span><strong>Lab CA certificate</strong><p>用于向客户端分发信任根。</p></article></div>
+        <div class="flat-block red"><p class="body"><strong>敏感数据：</strong>Secret 的 base64 不是加密。限制 RBAC、启用 etcd encryption at rest，并审计对私钥 Secret 的读取。</p></div><div class="slide-number">33</div>
+        <aside class="speaker-copy"><p>两个 Secret 都显示 DATA=3，对应 tls.crt、tls.key 和 ca.crt。Gateway 需要前两项，客户端信任使用 CA 证书。</p><p>能读 Secret 的人就可能拿到私钥，base64 只是编码。</p></aside>
+      </section>
+
+      <section class="slide" data-section="OpenSSL" data-title="Issuer 与 Subject 能证明叶子证书由 Lab CA 签发">
+        <div class="slide-header"><div><p class="eyebrow">Inspect the actual X.509</p><h2>Issuer 与 Subject 能证明叶子证书由 Lab CA 签发</h2><div class="rule"></div></div></div>
+        <pre class="code terminal openssl-output"><span class="prompt">$</span> kubectl get secret wildcard-demo-lab-tls \
+  -n cert-manager-demo -o jsonpath='{.data.tls\.crt}' | \
+  base64 -d | openssl x509 -text -noout | head -20
+
+Signature Algorithm: ecdsa-with-SHA256
+Issuer: O = Demo Lab, CN = <span class="good">Demo Lab Certificate Authority</span>
+Validity:
+  Not Before: ...
+  Not After : ...
+Subject: O = Demo Lab, CN = <span class="value">*.demo.lab</span>
+Public Key Algorithm: id-ecPublicKey</pre>
+        <div class="callout"><strong>不是 self-signed leaf：</strong>Wildcard 的 Subject 与 Issuer 不同，签名由 Lab CA 私钥生成。</div><div class="slide-number">34</div>
+        <aside class="speaker-copy"><p>Wildcard 证书的 Subject 是 *.demo.lab，Issuer 是 Demo Lab CA，二者不同，证明它不是自己签自己。</p><p>真正主机名覆盖要继续看 X509v3 Subject Alternative Name。</p></aside>
+      </section>
+
+      <section class="slide" data-section="证书流程" data-title="原课件流程图展示私钥、CSR、签名与 Secret 的关系">
+        <div class="slide-header compact-header"><div><p class="eyebrow">Course certificate process</p><h2>原课件流程图展示私钥、CSR、签名与 Secret 的关系</h2><div class="rule"></div></div></div>
+        <figure class="tls-course-image process-image"><img src="assets/cert-process.png" alt="证书私钥与签发流程图"><figcaption>每张叶子证书使用自己的私钥；CA issuer 使用 <code>lab-ca-secret</code> 中的 CA 私钥签名，不会把 CA 私钥复制到叶子 Secret。</figcaption></figure><div class="slide-number">35</div>
+        <aside class="speaker-copy"><p>这张图最值得讲的是三把钥匙：CA 一把，Wildcard 一把，API 一把。CA 私钥只存在 lab-ca-secret。</p><p>签名并不是把 CA 私钥发给业务 Secret，而是用它对 CSR 生成签名。</p></aside>
+      </section>
+
+      <section class="slide" data-section="TLS Gateway" data-title="一个 Gateway 配置 HTTP 80 与三个 HTTPS 443 listener">
+        <div class="slide-header"><div><p class="eyebrow">Four listeners</p><h2>一个 Gateway 配置 HTTP 80 与三个 HTTPS 443 listener</h2><div class="rule"></div></div></div>
+        <table class="data-table listener-table"><thead><tr><th>listener</th><th>协议/端口</th><th>hostname</th><th>证书</th><th>用途</th></tr></thead><tbody><tr><td>http</td><td>HTTP / 80</td><td>未限制</td><td>无</td><td>301 到 HTTPS</td></tr><tr><td>https-store</td><td>HTTPS / 443</td><td>store.demo.lab</td><td>wildcard-demo-lab-tls</td><td>Store</td></tr><tr><td>https-blog</td><td>HTTPS / 443</td><td>blog.demo.lab</td><td>wildcard-demo-lab-tls</td><td>Blog</td></tr><tr><td>https-api</td><td>HTTPS / 443</td><td>api.demo.lab</td><td>api-demo-lab-tls</td><td>API</td></tr></tbody></table>
+        <div class="flat-block blue"><p class="body">三个 HTTPS listener 共享同一端口，通过 TLS ClientHello 的 SNI hostname 区分。每个 Route 用 <code>sectionName</code> 精确附加 listener。</p></div><div class="slide-number">36</div>
+        <aside class="speaker-copy"><p>同一个 Gateway 可以在 443 上放多个 hostname listener。Envoy 在握手早期读取 SNI，选择 listener 和证书。</p><p>Store、Blog 指同一个 Wildcard Secret，API 指 Dedicated Secret。</p></aside>
+      </section>
+
+      <section class="slide" data-section="Gateway Secret 引用" data-title="certificateRefs 跨 namespace 指向两个 TLS Secret">
+        <div class="slide-header"><div><p class="eyebrow">Gateway reads certificate material</p><h2>certificateRefs 跨 namespace 指向两个 TLS Secret</h2><div class="rule"></div></div></div>
+        <div class="grid-2"><pre class="code manifest-code"><span class="key">- name:</span> https-store
+  <span class="key">protocol:</span> HTTPS
+  <span class="key">port:</span> 443
+  <span class="key">hostname:</span> store.demo.lab
+  <span class="key">tls:</span>
+    <span class="key">mode:</span> Terminate
+    <span class="key">certificateRefs:</span>
+    - <span class="key">name:</span> wildcard-demo-lab-tls
+      <span class="key">namespace:</span> cert-manager-demo
+      <span class="key">kind:</span> Secret</pre><pre class="code manifest-code"><span class="key">- name:</span> https-api
+  <span class="key">protocol:</span> HTTPS
+  <span class="key">port:</span> 443
+  <span class="key">hostname:</span> api.demo.lab
+  <span class="key">tls:</span>
+    <span class="key">mode:</span> Terminate
+    <span class="key">certificateRefs:</span>
+    - <span class="key">name:</span> api-demo-lab-tls
+      <span class="key">namespace:</span> cert-manager-demo
+      <span class="key">kind:</span> Secret</pre></div>
+        <div class="callout"><strong>跨命名空间：</strong>Gateway 在 default，Secret 在 cert-manager-demo。没有目标 namespace 的 ReferenceGrant，listener 会出现 ResolvedRefs=False。</div><div class="slide-number">37</div>
+        <aside class="speaker-copy"><p>mode Terminate 表示 Envoy 处理私钥和证书。Secret 引用跨 namespace，所以需要 Grant。</p><p>Wildcard Secret 被 store 和 blog 两个 listener 引用，API Secret 只给 https-api。</p></aside>
+      </section>
+
+      <section class="slide" data-section="ReferenceGrant" data-title="两个 ReferenceGrant 分别授权 Gateway→Secret 与 HTTPRoute→Service">
+        <div class="slide-header"><div><p class="eyebrow">Two different cross-namespace references</p><h2>两个 ReferenceGrant 分别授权 Gateway→Secret 与 HTTPRoute→Service</h2><div class="rule"></div></div></div>
+        <div class="two-grants"><article><span>allow-gateway-secrets</span><h3>Gateway → Secret</h3><code>from default/Gateway<br>to core/Secret</code><p>让 HTTPS listener 读取证书与私钥。</p></article><article><span>allow-httproute-services</span><h3>HTTPRoute → Service</h3><code>from default/HTTPRoute<br>to core/Service</code><p>让三条 Route 指向应用 Service。</p></article></div>
+        <pre class="code terminal command-code"><span class="prompt">$</span> kubectl apply -f k8s-manifests/reference-grant.yaml</pre>
+        <div class="flat-block yellow"><p class="body">两个 Grant 都创建在目标资源所在的 <code>cert-manager-demo</code> namespace。Grant 是配置授权，不是数据包经过的代理。</p></div><div class="slide-number">38</div>
+        <aside class="speaker-copy"><p>本课比上一课多一种跨 namespace 引用：Gateway 读取 Secret。Route 引用 Service 仍需要另一个 Grant。</p><p>一个 Grant 不会自动覆盖所有 kind，from 和 to 必须匹配实际引用。</p></aside>
+      </section>
+
+      <section class="slide" data-section="创建 Gateway" data-title="Gateway 地址必须从 status 动态读取，不能照抄示例">
+        <div class="slide-header"><div><p class="eyebrow">The address comes from LoadBalancer IPAM</p><h2>Gateway 地址必须从 status 动态读取，不能照抄示例</h2><div class="rule"></div></div></div>
+        <pre class="code terminal gateway-create"><span class="prompt">$</span> kubectl apply -f k8s-manifests/gateway.yaml
+gateway.gateway.networking.k8s.io/tls-gateway created
+
+<span class="prompt">$</span> kubectl get gateway tls-gateway
+NAME          CLASS                  ADDRESS        PROGRAMMED
+tls-gateway   tigera-gateway-class   <span class="good">172.16.0.x</span>   <span class="good">True</span>
+
+<span class="prompt">$</span> GATEWAY_IP=$(kubectl get gateway tls-gateway \
+  -o jsonpath='{.status.addresses[0].value}')</pre>
+        <div class="flat-block red"><p class="body"><strong>课程文档差异：</strong>README 示例显示 <code>10.100.1.100</code>，但本实验 lb-ippool 是 <code>172.16.0.240/28</code>。以当前 Gateway status 为唯一依据。</p></div><div class="slide-number">39</div>
+        <aside class="speaker-copy"><p>Gateway 地址来自 Calico LB pool，实际应落在 172.16.0.240/28。README 的 10.100.1.100 是不一致示例。</p><p>演示全程用 JSONPath 读取 GATEWAY_IP，避免文档漂移造成访问错误。</p></aside>
+      </section>
+
+      <section class="slide" data-section="Listener 状态" data-title="每个 HTTPS listener 都要 Accepted、Programmed 与 ResolvedRefs">
+        <div class="slide-header"><div><p class="eyebrow">Per-listener evidence</p><h2>每个 HTTPS listener 都要 Accepted、Programmed 与 ResolvedRefs</h2><div class="rule"></div></div></div>
+        <div class="listener-status"><article><span>https-store</span><strong>ResolvedRefs=True</strong><p>Wildcard Secret 可读取。</p></article><article><span>https-blog</span><strong>ResolvedRefs=True</strong><p>共享 Wildcard Secret。</p></article><article><span>https-api</span><strong>ResolvedRefs=True</strong><p>Dedicated Secret 可读取。</p></article><article><span>http</span><strong>Programmed=True</strong><p>可附加 redirect Route。</p></article></div>
+        <pre class="code terminal command-code"><span class="prompt">$</span> kubectl describe gateway tls-gateway</pre>
+        <div class="callout"><strong>不要只 grep secret：</strong>完整 describe 能看到 listener name、condition、reason、attachedRoutes 和错误信息。</div><div class="slide-number">40</div>
+        <aside class="speaker-copy"><p>Gateway 总体 Programmed=True 还不够，每个 listener 都有独立 status。Secret Grant 或证书引用错误只会影响对应 listener。</p><p>describe 时按 listener name 阅读 condition 和 reason。</p></aside>
+      </section>
+
+      <section class="slide" data-section="HTTPS Route" data-title="三条 HTTPS HTTPRoute 用 sectionName 精确附加对应 listener">
+        <div class="slide-header"><div><p class="eyebrow">Host route to matching TLS listener</p><h2>三条 HTTPS HTTPRoute 用 sectionName 精确附加对应 listener</h2><div class="rule"></div></div></div>
+        <table class="data-table route-listeners"><thead><tr><th>HTTPRoute</th><th>hostname</th><th>parent sectionName</th><th>backend</th></tr></thead><tbody><tr><td>store-route</td><td>store.demo.lab</td><td>https-store</td><td>cert-manager-demo/store:80</td></tr><tr><td>blog-route</td><td>blog.demo.lab</td><td>https-blog</td><td>cert-manager-demo/blog:80</td></tr><tr><td>api-route</td><td>api.demo.lab</td><td>https-api</td><td>cert-manager-demo/api:80</td></tr></tbody></table>
+        <pre class="code manifest-code command-code"><span class="key">parentRefs:</span>
+- <span class="key">name:</span> tls-gateway
+  <span class="key">namespace:</span> default
+  <span class="key">sectionName:</span> <span class="value">https-store</span></pre>
+        <div class="slide-number">41</div>
+        <aside class="speaker-copy"><p>sectionName 让 Route 附加具体 listener，而不是 Gateway 上所有 listener。store-route 只进 https-store。</p><p>Route hostname 和 listener hostname 也必须兼容，否则 Attached/Accepted 会失败。</p></aside>
+      </section>
+
+      <section class="slide" data-section="HTTP 重定向" data-title="独立 HTTPRoute 把端口 80 的所有请求重定向到 HTTPS">
+        <div class="slide-header"><div><p class="eyebrow">RequestRedirect filter</p><h2>独立 HTTPRoute 把端口 80 的所有请求重定向到 HTTPS</h2><div class="rule"></div></div></div>
+        <div class="grid-2"><pre class="code manifest-code"><span class="key">kind:</span> HTTPRoute
+<span class="key">metadata:</span>
+  <span class="key">name:</span> http-redirect
+  <span class="key">namespace:</span> default
+<span class="key">spec:</span>
+  <span class="key">parentRefs:</span>
+  - <span class="key">name:</span> tls-gateway
+    <span class="key">sectionName:</span> http
+  <span class="key">rules:</span>
+  - <span class="key">filters:</span>
+    - <span class="key">type:</span> RequestRedirect
+      <span class="key">requestRedirect:</span>
+        <span class="key">scheme:</span> https
+        <span class="key">statusCode:</span> <span class="value">301</span></pre><div class="redirect-meaning"><article><span>REQUEST</span><strong>http://store.demo.lab/</strong></article><i>›</i><article><span>RESPONSE</span><strong>301 Moved Permanently</strong></article><i>›</i><article class="secure"><span>LOCATION</span><strong>https://store.demo.lab/</strong></article></div></div>
+        <div class="slide-number">42</div>
+        <aside class="speaker-copy"><p>重定向 Route 附加 http listener，没有 backendRef。Envoy 直接生成 301 和 Location。</p><p>它不代理原始 HTTP 内容到后端，客户端收到响应后自行发起新的 HTTPS 请求。</p></aside>
+      </section>
+
+      <section class="slide" data-section="创建 Route" data-title="一次 apply 创建三条 HTTPS Route 与一条重定向 Route">
+        <div class="slide-header"><div><p class="eyebrow">Apply and verify</p><h2>一次 apply 创建三条 HTTPS Route 与一条重定向 Route</h2><div class="rule"></div></div></div>
+        <pre class="code terminal routes-output"><span class="prompt">$</span> kubectl apply -f k8s-manifests/httproutes.yaml
+httproute.gateway.networking.k8s.io/store-route created
+httproute.gateway.networking.k8s.io/blog-route created
+httproute.gateway.networking.k8s.io/api-route created
+httproute.gateway.networking.k8s.io/http-redirect created
+
+<span class="prompt">$</span> kubectl get httproutes -n default
+store-route     ["store.demo.lab"]
+blog-route      ["blog.demo.lab"]
+api-route       ["api.demo.lab"]
+http-redirect</pre>
+        <div class="callout"><strong>进一步验证：</strong>对每条 Route 执行 <code>kubectl describe</code>，确认 Accepted=True 与 ResolvedRefs=True。</div><div class="slide-number">43</div>
+        <aside class="speaker-copy"><p>get 输出能确认对象存在，但无法证明 backendRef 和 listener attachment 有效。</p><p>至少抽查三条 HTTPS Route 的 Accepted 和 ResolvedRefs；redirect Route 则检查 attachment 和 filter support。</p></aside>
+      </section>
+
+      <section class="slide" data-section="名称解析" data-title="实验用 /etc/hosts 把三个域名都指向动态 Gateway IP">
+        <div class="slide-header"><div><p class="eyebrow">Local name resolution</p><h2>实验用 /etc/hosts 把三个域名都指向动态 Gateway IP</h2><div class="rule"></div></div></div>
+        <pre class="code terminal hosts-output"><span class="prompt">$</span> GATEWAY_IP=$(kubectl get gateway tls-gateway \
+  -o jsonpath='{.status.addresses[0].value}')
+
+<span class="prompt">$</span> sudo docker exec clab-ingress-tls-user sh -c \
+  "echo '$GATEWAY_IP store.demo.lab blog.demo.lab api.demo.lab' &gt;&gt; /etc/hosts"
+
+<span class="prompt">$</span> sudo docker exec clab-ingress-tls-user \
+  getent hosts store.demo.lab blog.demo.lab api.demo.lab</pre>
+        <div class="host-map"><span>store.demo.lab</span><span>blog.demo.lab</span><span>api.demo.lab</span><strong>same Gateway IP</strong></div>
+        <div class="slide-number">44</div>
+        <aside class="speaker-copy"><p>三个名字都解析到同一个 LoadBalancer IP。区别由 SNI 和 HTTP Host 在 Envoy 内部完成。</p><p>课程用 /etc/hosts 代替真实 DNS。生产应创建 A/AAAA 记录并自动同步 Gateway 地址。</p></aside>
+      </section>
+
+      <section class="slide" data-section="客户端信任" data-title="把 Lab CA 复制到用户容器，curl 才能验证本地 CA 证书">
+        <div class="slide-header"><div><p class="eyebrow">Distribute the trust anchor</p><h2>把 Lab CA 复制到用户容器，curl 才能验证本地 CA 证书</h2><div class="rule"></div></div></div>
+        <pre class="code terminal ca-copy"><span class="prompt">$</span> kubectl get secret lab-ca-secret -n cert-manager \
+  -o jsonpath='{.data.tls\.crt}' | base64 -d &gt; /tmp/lab-ca.crt
+
+<span class="prompt">$</span> sudo docker cp /tmp/lab-ca.crt \
+  clab-ingress-tls-user:/tmp/lab-ca.crt
+
+<span class="prompt">$</span> sudo docker exec clab-ingress-tls-user \
+  openssl x509 -in /tmp/lab-ca.crt -noout -subject -fingerprint</pre>
+        <div class="flat-block red"><p class="body"><strong>信任分发要求完整性：</strong>生产不能靠任意可写路径复制 CA。应使用受控 trust bundle、镜像、配置管理或 trust-manager，并验证 fingerprint。</p></div><div class="slide-number">45</div>
+        <aside class="speaker-copy"><p>本地 CA 不在系统公共信任库，所以 curl 默认会报 unknown issuer。--cacert 告诉 curl 额外信任这张 CA。</p><p>复制 CA 前后最好比对 fingerprint，避免把错误或被替换的 CA 加入信任。</p></aside>
+      </section>
+
+      <section class="slide" data-section="TLS 握手" data-title="ClientHello 的 SNI 决定 Envoy 选择哪个 listener 与证书">
+        <div class="slide-header"><div><p class="eyebrow">Certificate selection happens before HTTP</p><h2>ClientHello 的 SNI 决定 Envoy 选择哪个 listener 与证书</h2><div class="rule"></div></div><button class="action-btn" type="button" data-replay="#sni-flow" title="重播动画" aria-label="重播 SNI 动画">↻</button></div>
+        <div class="sni-flow is-playing" id="sni-flow"><article><span>CLIENT</span><strong>ClientHello</strong><code>SNI: api.demo.lab</code></article><div class="sni-lane"><i>SNI</i></div><article class="listener"><span>ENVOY :443</span><strong>https-api</strong><code>hostname match</code></article><div class="sni-lane"><i>SECRET</i></div><article class="certificate"><span>CERTIFICATE</span><strong>api-demo-lab-tls</strong><code>SAN api.demo.lab</code></article><div class="sni-lane"><i>VERIFY</i></div><article class="secure"><span>SESSION</span><strong>TLS established</strong><code>HTTP request follows</code></article></div>
+        <div class="callout"><strong>顺序：</strong>SNI 位于 TLS ClientHello，Envoy 在看到加密后的 HTTP Host 之前就要选择证书。</div><div class="slide-number">46</div>
+        <aside class="speaker-copy"><p>客户端先发 ClientHello 和明文可见的 SNI。Envoy 用 api.demo.lab 选择 https-api listener，再取 API Secret 的证书和私钥完成握手。</p><p>握手完成后，HTTP 请求才在加密通道里发送。SNI 和 HTTP Host 通常一致，但属于不同协议层。</p></aside>
+      </section>
+
+      <section class="slide" data-section="TLS 数据路径" data-title="HTTPS 请求在 Envoy 解密后按 HTTPRoute 转发到 HTTP 后端">
+        <div class="slide-header"><div><p class="eyebrow">Handshake then routing</p><h2>HTTPS 请求在 Envoy 解密后按 HTTPRoute 转发到 HTTP 后端</h2><div class="rule"></div></div><button class="action-btn" type="button" data-replay="#https-flow" title="重播动画" aria-label="重播 HTTPS 数据路径动画">↻</button></div>
+        <div class="https-flow is-playing" id="https-flow"><article><span>USER</span><strong>HTTPS</strong><code>store.demo.lab</code></article><div class="https-lane encrypted"><i>TLS</i></div><article class="envoy"><span>ENVOY</span><strong>decrypt + verify route</strong><code>store-route</code></article><div class="https-lane clear"><i>HTTP</i></div><article class="service"><span>SERVICE</span><strong>store :80</strong><code>ClusterIP</code></article><div class="https-lane clear"><i>POD</i></div><article class="pod"><span>WORKLOAD</span><strong>nginx Pod</strong><code>response HTML</code></article></div>
+        <div class="flat-block blue"><p class="body">NetworkPolicy 若默认拒绝，需要允许 Envoy 访问 kube-dns、控制器以及 cert-manager-demo 中三个 Service。</p></div><div class="slide-number">47</div>
+        <aside class="speaker-copy"><p>握手成功后，Envoy 解密 HTTP，store-route 根据 Host 和 Path 选择 store Service。课程后端是 HTTP 80。</p><p>这里再次强调，ReferenceGrant 是控制面授权，数据包不会经过 Grant。</p></aside>
+      </section>
+
+      <section class="slide" data-section="HTTPS 验证" data-title="Store 与 Blog 使用同一张 Wildcard 证书并通过 CA 验证">
+        <div class="slide-header"><div><p class="eyebrow">Shared wildcard in action</p><h2>Store 与 Blog 使用同一张 Wildcard 证书并通过 CA 验证</h2><div class="rule"></div></div></div>
+        <pre class="code terminal curl-wildcard"><span class="prompt">$</span> sudo docker exec clab-ingress-tls-user curl -v \
+  --cacert /tmp/lab-ca.crt https://store.demo.lab/ 2&gt;&amp;1 | \
+  grep -E "subject|issuer|SSL|verify"
+
+SSL connection using TLSv1.3 / TLS_AES_256_GCM_SHA384
+SSL certificate verify ok.
+subject: O=Demo Lab; CN=<span class="good">*.demo.lab</span>
+issuer: O=Demo Lab; CN=Demo Lab Certificate Authority</pre>
+        <div class="shared-proof"><article><span>store.demo.lab</span><strong>*.demo.lab</strong></article><article><span>blog.demo.lab</span><strong>*.demo.lab</strong></article><b>same certificate / key</b></div><div class="slide-number">48</div>
+        <aside class="speaker-copy"><p>Store 和 Blog 都应该显示 subject *.demo.lab，issuer Demo Lab CA，并且 verify ok。</p><p>两者共享同一 Secret，所以 serial number 和 public key 也应一致。</p></aside>
+      </section>
+
+      <section class="slide" data-section="HTTPS 验证" data-title="API listener 提供只匹配 api.demo.lab 的独立证书">
+        <div class="slide-header"><div><p class="eyebrow">Dedicated certificate in action</p><h2>API listener 提供只匹配 api.demo.lab 的独立证书</h2><div class="rule"></div></div></div>
+        <pre class="code terminal curl-api"><span class="prompt">$</span> sudo docker exec clab-ingress-tls-user curl -v \
+  --cacert /tmp/lab-ca.crt https://api.demo.lab/ 2&gt;&amp;1 | \
+  grep -E "subject|issuer|SSL|verify"
+
+SSL connection using TLSv1.3 / TLS_AES_256_GCM_SHA384
+SSL certificate verify ok.
+subject: O=Demo Lab; OU=API Services; CN=<span class="good">api.demo.lab</span>
+issuer: O=Demo Lab; CN=Demo Lab Certificate Authority</pre>
+        <div class="flat-block green"><p class="body">相同 Gateway IP、相同 443 端口，因为 SNI 不同而呈现不同证书。API Secret 可以独立轮换。</p></div><div class="slide-number">49</div>
+        <aside class="speaker-copy"><p>API 的 subject 应是 api.demo.lab，而不是 wildcard。Issuer 仍然是同一个 Lab CA，所以客户端用同一 CA 验证。</p><p>这证明 SNI listener 选择和 certificateRefs 都正确。</p></aside>
+      </section>
+
+      <section class="slide" data-section="证书对比" data-title="三个主机共享 Gateway IP，但证书覆盖范围和私钥不同">
+        <div class="slide-header"><div><p class="eyebrow">One IP, two certificate identities</p><h2>三个主机共享 Gateway IP，但证书覆盖范围和私钥不同</h2><div class="rule"></div></div></div>
+        <table class="data-table identity-certs"><thead><tr><th>Hostname</th><th>Listener</th><th>Secret</th><th>Subject / SAN</th><th>私钥</th></tr></thead><tbody><tr><td>store.demo.lab</td><td>https-store</td><td>wildcard-demo-lab-tls</td><td>*.demo.lab</td><td>Wildcard key</td></tr><tr><td>blog.demo.lab</td><td>https-blog</td><td>wildcard-demo-lab-tls</td><td>*.demo.lab</td><td>同一 Wildcard key</td></tr><tr><td>api.demo.lab</td><td>https-api</td><td>api-demo-lab-tls</td><td>api.demo.lab</td><td>独立 API key</td></tr></tbody></table>
+        <pre class="code terminal command-code"><span class="prompt">$</span> echo | openssl s_client -connect $GATEWAY_IP:443 -servername api.demo.lab ...</pre>
+        <div class="slide-number">50</div>
+        <aside class="speaker-copy"><p>DNS 名都指同一个 IP，listener 根据 SNI 区分。Store 和 Blog 的证书与私钥完全相同，API 不同。</p><p>openssl s_client 必须带 -servername，否则测试不到预期 SNI listener。</p></aside>
+      </section>
+
+      <section class="slide" data-section="HTTP 重定向" data-title="端口 80 返回 301，客户端再建立新的 443 TLS 连接">
+        <div class="slide-header"><div><p class="eyebrow">Redirect is a separate round trip</p><h2>端口 80 返回 301，客户端再建立新的 443 TLS 连接</h2><div class="rule"></div></div><button class="action-btn" type="button" data-replay="#redirect-flow" title="重播动画" aria-label="重播重定向动画">↻</button></div>
+        <div class="redirect-flow is-playing" id="redirect-flow"><article><span>1</span><strong>HTTP GET :80</strong><code>store.demo.lab</code></article><div class="redirect-lane"><i>REQUEST</i></div><article><span>2</span><strong>301 response</strong><code>Location: https://...</code></article><div class="redirect-lane secure"><i>NEW TLS</i></div><article class="secure"><span>3</span><strong>HTTPS :443</strong><code>TLS handshake</code></article></div>
+        <pre class="code terminal command-code"><span class="prompt">$</span> curl -v http://store.demo.lab/ 2&gt;&amp;1 | grep -E "Location|HTTP"
+&lt; HTTP/1.1 301 Moved Permanently
+&lt; Location: https://store.demo.lab/</pre><div class="slide-number">51</div>
+        <aside class="speaker-copy"><p>301 本身仍走明文 HTTP。客户端读到 Location 后，另起 TLS 连接访问 443。</p><p>curl 若要自动跟随，要加 -L；本页只观察重定向响应。</p></aside>
+      </section>
+
+      <section class="slide" data-section="链验证" data-title="openssl s_client 能查看 Envoy 实际发送的证书与链">
+        <div class="slide-header"><div><p class="eyebrow">Observe the served identity</p><h2>openssl s_client 能查看 Envoy 实际发送的证书与链</h2><div class="rule"></div></div></div>
+        <pre class="code terminal chain-output"><span class="prompt">$</span> sudo docker exec clab-ingress-tls-user sh -c \
+"echo | openssl s_client \
+  -connect store.demo.lab:443 \
+  -servername store.demo.lab \
+  -CAfile /tmp/lab-ca.crt 2&gt;/dev/null | \
+  openssl x509 -noout -subject -issuer -serial -dates"
+
+subject=O=Demo Lab, CN=*.demo.lab
+issuer=O=Demo Lab, CN=Demo Lab Certificate Authority
+serial=...
+notBefore=...
+notAfter=...</pre>
+        <div class="callout"><strong>验证对象：</strong>这里看到的是 Envoy 当前服务的证书，不只是 Kubernetes Secret 中存储的证书。</div><div class="slide-number">52</div>
+        <aside class="speaker-copy"><p>Secret 正确不代表 Envoy 一定已经加载。s_client 直接连 Gateway，看到的是线上握手真实返回的证书。</p><p>-servername 控制 SNI，-CAfile 让 openssl 完成信任验证。</p></aside>
+      </section>
+
+      <section class="slide" data-section="轮换准备" data-title="轮换前同时记录 Secret 证书与 Gateway 服务证书的 serial">
+        <div class="slide-header"><div><p class="eyebrow">Establish before evidence</p><h2>轮换前同时记录 Secret 证书与 Gateway 服务证书的 serial</h2><div class="rule"></div></div></div>
+        <div class="serial-before"><article><span>KUBERNETES SECRET</span><strong>serial A</strong><code>api-demo-lab-tls / tls.crt</code></article><article><span>ENVOY SERVED</span><strong>serial A</strong><code>SNI api.demo.lab</code></article><b>MATCH</b></div>
+        <pre class="code terminal command-code"><span class="prompt">$</span> kubectl get secret api-demo-lab-tls -n cert-manager-demo \
+  -o jsonpath='{.data.tls\.crt}' | base64 -d | openssl x509 -noout -serial
+<span class="prompt">$</span> echo | openssl s_client -connect api.demo.lab:443 -servername api.demo.lab ... | \
+  openssl x509 -noout -serial</pre><div class="slide-number">53</div>
+        <aside class="speaker-copy"><p>轮换测试必须有 before serial。分别记录 Secret 和 Envoy 服务证书，先证明当前两边一致。</p><p>如果一开始就不一致，应先排查加载问题，不要继续触发轮换。</p></aside>
+      </section>
+
+      <section class="slide" data-section="触发轮换" data-title="课程删除 Secret 模拟重签发，官方更推荐 cmctl renew">
+        <div class="slide-header"><div><p class="eyebrow">Lab method and production method</p><h2>课程删除 Secret 模拟重签发，官方更推荐 cmctl renew</h2><div class="rule"></div></div></div>
+        <div class="renew-methods"><article class="course"><span>COURSE DEMO</span><h3>delete Secret</h3><code>kubectl delete secret api-demo-lab-tls</code><p>直观展示 controller 发现目标缺失并重建。</p></article><article class="recommended"><span>CERT-MANAGER RECOMMENDATION</span><h3>cmctl renew</h3><code>cmctl renew api-demo-lab -n cert-manager-demo</code><p>明确触发 Certificate 重新签发，语义更稳定。</p></article></div>
+        <pre class="code terminal command-code"><span class="prompt">$</span> kubectl get certificate api-demo-lab -n cert-manager-demo -w
+api-demo-lab   False   api-demo-lab-tls
+api-demo-lab   True    api-demo-lab-tls</pre>
+        <div class="slide-number">54</div>
+        <aside class="speaker-copy"><p>为了贴近课程，现场可以删除 Secret 观察它被重建。但当前 cert-manager 官方明确说，手工轮换推荐 cmctl renew，而不是删除 Secret。</p><p>生产自动续期由 RenewalTime 触发，不需要人工删除。</p></aside>
+      </section>
+
+      <section class="slide" data-section="轮换流程" data-title="Secret 更新后，Envoy 通过动态配置加载新证书">
+        <div class="slide-header"><div><p class="eyebrow">Reissue and hot reload</p><h2>Secret 更新后，Envoy 通过动态配置加载新证书</h2><div class="rule"></div></div><button class="action-btn" type="button" data-replay="#rotation-flow" title="重播动画" aria-label="重播证书轮换动画">↻</button></div>
+        <div class="rotation-flow is-playing" id="rotation-flow"><article><span>1</span><strong>Certificate needs reissue</strong><code>secret missing / renew</code></article><div class="rotation-lane"><i>REQUEST</i></div><article><span>2</span><strong>cert-manager signs</strong><code>new leaf certificate</code></article><div class="rotation-lane"><i>SECRET B</i></div><article><span>3</span><strong>Secret updated</strong><code>new serial / key policy</code></article><div class="rotation-lane"><i>xDS / SDS</i></div><article class="envoy"><span>4</span><strong>Envoy reloads TLS</strong><code>new handshakes use cert B</code></article></div>
+        <div class="flat-block blue"><p class="body">预期无需重启代理，但必须用新握手验证实际 serial。现有 TLS 连接不会重新握手，因此仍使用建立连接时的证书上下文。</p></div><div class="slide-number">55</div>
+        <aside class="speaker-copy"><p>cert-manager 重新签发后更新 Secret，Envoy Gateway controller 观察变化并把 TLS secret 配置推给 Envoy。</p><p>热更新影响新的握手。已有连接已经完成认证，不会中途重新展示证书。</p></aside>
+      </section>
+
+      <section class="slide" data-section="轮换验证" data-title="新 Secret serial 与 Envoy 新握手 serial 必须再次一致">
+        <div class="slide-header"><div><p class="eyebrow">Prove propagation end to end</p><h2>新 Secret serial 与 Envoy 新握手 serial 必须再次一致</h2><div class="rule"></div></div></div>
+        <div class="serial-after"><article><span>BEFORE</span><strong>serial A</strong></article><i>›</i><article><span>SECRET AFTER</span><strong>serial B</strong></article><i>›</i><article class="served"><span>ENVOY AFTER</span><strong>serial B</strong></article></div>
+        <pre class="code terminal command-code"><span class="prompt">$</span> kubectl get secret api-demo-lab-tls -n cert-manager-demo ... | openssl x509 -noout -serial
+<span class="prompt">$</span> echo | openssl s_client -connect api.demo.lab:443 -servername api.demo.lab ... | \
+  openssl x509 -noout -serial
+<span class="prompt">$</span> curl --cacert /tmp/lab-ca.crt https://api.demo.lab/</pre>
+        <div class="callout"><strong>日志仅作辅助：</strong>Controller/Envoy 日志格式与 namespace 会随版本变化；serial 对比和成功握手是更稳定的端到端证据。</div><div class="slide-number">56</div>
+        <aside class="speaker-copy"><p>轮换完成需要三件事：serial 变了、Secret 和线上 serial 一致、完整 HTTPS 请求仍然 verify ok。</p><p>课程给出的 xDS/SDS 日志示例可能因版本不同不完全一致，不应把某条固定日志当唯一成功条件。</p></aside>
+      </section>
+
+      <section class="slide" data-section="Issuer 切换" data-title="修改 issuerRef 会触发重签发，但同时改变信任链">
+        <div class="slide-header"><div><p class="eyebrow">Changing signer changes client trust</p><h2>修改 issuerRef 会触发重签发，但同时改变信任链</h2><div class="rule"></div></div></div>
+        <div class="issuer-switch"><article><span>BEFORE</span><strong>lab-ca-issuer</strong><code>trusted by /tmp/lab-ca.crt</code></article><div class="switch-action">patch issuerRef</div><article class="after"><span>AFTER</span><strong>selfsigned-issuer</strong><code>new self-signed leaf</code></article></div>
+        <pre class="code terminal command-code"><span class="prompt">$</span> kubectl patch certificate api-demo-lab -n cert-manager-demo --type='json' -p='[
+  {"op":"replace","path":"/spec/issuerRef/name","value":"selfsigned-issuer"}
+]'</pre>
+        <div class="flat-block red"><p class="body">旧 Lab CA 不会信任新的 self-signed leaf。切换 Issuer 前必须先规划 trust bundle 过渡，实验后应恢复原 issuer。</p></div><div class="slide-number">57</div>
+        <aside class="speaker-copy"><p>修改 issuerRef 本身会触发重签发，不一定需要删除 Secret。切到 selfsigned 后，新证书不再由 Lab CA 签，客户端现有 CAfile 会验证失败。</p><p>生产 Issuer 迁移必须先分发新信任链，并安排重叠窗口。</p></aside>
+      </section>
+
+      <section class="slide" data-section="排障" data-title="沿 cert-manager、Secret、Gateway listener、Route 与客户端信任逐层检查">
+        <div class="slide-header"><div><p class="eyebrow">Troubleshooting ladder</p><h2>沿 cert-manager、Secret、Gateway listener、Route 与客户端信任逐层检查</h2><div class="rule"></div></div></div>
+        <div class="trouble-grid tls-trouble"><article><span>1</span><h3>Controller</h3><code>pods/logs -n cert-manager</code><p>组件与 webhook 是否 Ready。</p></article><article><span>2</span><h3>Issuer</h3><code>get clusterissuer</code><p>CA Secret 与 Ready condition。</p></article><article><span>3</span><h3>Certificate</h3><code>describe certificate</code><p>CertificateRequest、event、RenewalTime。</p></article><article><span>4</span><h3>Secret</h3><code>get secret / openssl</code><p>证书、私钥、SAN 与 issuer。</p></article><article><span>5</span><h3>Gateway / Route</h3><code>describe gateway,httproute</code><p>ResolvedRefs、sectionName、backend。</p></article><article><span>6</span><h3>Client</h3><code>curl -v / s_client</code><p>DNS、SNI、CAfile、线上 serial。</p></article></div>
+        <div class="slide-number">58</div>
+        <aside class="speaker-copy"><p>排障从 Certificate 控制面到 TLS 数据面逐层查。Issuer False 不要先看 Envoy，Secret 正确但握手错再看 listener 和 SNI。</p><p>curl 错误里 unknown CA、hostname mismatch、connection refused 对应完全不同的层。</p></aside>
+      </section>
+
+      <section class="slide" data-section="现场演示" data-title="三十五分钟演示顺序覆盖安装、签发、验证与轮换">
+        <div class="slide-header"><div><p class="eyebrow">Live demo runbook</p><h2>三十五分钟演示顺序覆盖安装、签发、验证与轮换</h2><div class="rule"></div></div></div>
+        <div class="demo-columns tls-demo"><ol><li><code>./deploy.sh</code><span>搭网络、BGP、LB pool 和 GatewayClass</span></li><li><code>apply cert-manager v1.16.2</code><span>等待三个 Deployment Available</span></li><li><code>selfsigned smoke test</code><span>验证 Certificate→Secret</span></li><li><code>deploy store/blog/api</code><span>确认三套 Service</span></li><li><code>apply cluster-issuers.yaml</code><span>观察 CA issuer 初始 False</span></li><li><code>apply certificates.yaml</code><span>watch 三张 Certificate Ready</span></li><li><code>openssl inspect Secrets</code><span>确认 Subject、Issuer、SAN</span></li></ol><ol start="8"><li><code>apply Gateway + Grants + Routes</code><span>检查 listener/Route conditions</span></li><li><code>read GATEWAY_IP</code><span>写入 user /etc/hosts</span></li><li><code>copy lab-ca.crt</code><span>验证 CA fingerprint</span></li><li><code>curl --cacert three hosts</code><span>对比 wildcard 与 dedicated</span></li><li><code>curl HTTP :80</code><span>验证 301 Location</span></li><li><code>record serial + renew</code><span>观察 Secret 更新</span></li><li><code>s_client new serial</code><span>证明 Envoy 热更新</span></li></ol></div>
+        <div class="callout"><strong>清理：</strong>恢复任何 Issuer 测试改动，停止日志 watch，然后执行 <code>chmod +x destroy.sh &amp;&amp; ./destroy.sh</code>。</div><div class="slide-number">59</div>
+        <aside class="speaker-copy"><p>整场演示分四段：安装 cert-manager、签发证书、配置 Gateway、验证和轮换。</p><p>每一步先说证据目标，再跑命令。特别是轮换，要先记录 serial，再触发，再对比线上证书。</p></aside>
+      </section>
+
+      <section class="slide" data-section="总结与来源" data-title="Ingress TLS 的完整证据链">
+        <div class="slide-header"><div><p class="eyebrow">Summary and sources</p><h2>Ingress TLS 的完整证据链</h2><div class="rule"></div></div></div>
+        <div class="summary-row"><article><span>01</span><h3>签发</h3><p>Certificate + Issuer 生成 Secret。</p></article><article><span>02</span><h3>授权</h3><p>ReferenceGrant 允许 Gateway 读跨 namespace Secret。</p></article><article><span>03</span><h3>终止</h3><p>Envoy 按 SNI 选 listener 和证书，解密后转 HTTP。</p></article><article><span>04</span><h3>轮换</h3><p>Secret 更新后用新握手 serial 验证代理加载。</p></article></div>
+        <div class="sources"><article><strong>Lesson 20</strong><a href="https://k8snetworking.com/lessons/20-ingress-tls">k8snetworking.com/.../20-ingress-tls</a></article><article><strong>课程仓库</strong><a href="https://github.com/aadhilam/k8-networking-calico-containerlab/tree/master/containerlab/20-ingress-tls">github.com/aadhilam/.../20-ingress-tls</a></article><article><strong>cert-manager</strong><a href="https://cert-manager.io/docs/">cert-manager.io/docs</a></article><article><strong>Gateway TLS</strong><a href="https://gateway-api.sigs.k8s.io/guides/user-guides/tls/">gateway-api.sigs.k8s.io/.../tls</a></article></div>
+        <div class="flat-block yellow final-note"><p class="body">生产还需要安全分发信任根、加密 Secret at rest、最小 RBAC、CA 轮换计划、到期监控以及 Gateway 到后端的加密策略。</p></div><div class="slide-number">60</div>
+        <aside class="speaker-copy"><p>最后记住四层证据：Certificate Ready、Secret 内容正确、Gateway listener ResolvedRefs、客户端握手 verify ok。</p><p>课程本地 CA 适合学习。生产 PKI 还要解决根密钥保护、信任分发、吊销、CA 轮换和灾难恢复。</p></aside>
+      </section>
+
+    </div>
+    <div class="progress-track" aria-hidden="true"><div id="progress-fill"></div></div>
+    <nav class="controls" aria-label="演示控制"><button class="tool-btn" id="prev" type="button" title="上一页" aria-label="上一页">‹</button><button class="tool-btn" id="next" type="button" title="下一页" aria-label="下一页">›</button><button class="tool-btn" id="notes-toggle" type="button" title="讲稿" aria-label="显示或隐藏讲稿" aria-pressed="false">N</button><button class="tool-btn" id="overview-toggle" type="button" title="总览" aria-label="显示或隐藏总览" aria-pressed="false">▦</button><button class="tool-btn" id="fullscreen" type="button" title="全屏" aria-label="切换全屏">⛶</button></nav>
+    <button class="notes-backdrop" id="notes-backdrop" type="button" aria-label="关闭讲稿" tabindex="-1"></button>
+    <aside class="notes-panel" id="notes-panel" aria-live="polite" aria-hidden="true"><div class="notes-header"><h2 id="notes-title">讲稿</h2><button class="notes-close" id="notes-close" type="button" title="关闭讲稿" aria-label="关闭讲稿">×</button></div><div id="notes-body"></div></aside>
+    <aside class="overview" id="overview" aria-label="幻灯片总览"></aside>
+  </main>
+  <script src="app.js?v=1"></script>
+</body>
+</html>
