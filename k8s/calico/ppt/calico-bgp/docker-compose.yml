@@ -1,0 +1,19 @@
+services:
+  calico-bgp-presentation:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: calico-bgp-presentation:local
+    container_name: calico-bgp-presentation
+    ports:
+      - "${PRESENTATION_PORT:-8080}:80"
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1/healthz | grep -q '^ok$'"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
+

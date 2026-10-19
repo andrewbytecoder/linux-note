@@ -1,0 +1,10 @@
+.git
+.gitignore
+.codex
+.agents
+.reference-course
+node_modules
+npm-debug.log*
+Dockerfile.*
+docker-compose.override.yml
+

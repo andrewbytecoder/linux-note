@@ -1,0 +1,494 @@
+/* Shared dark technical presentation theme. Loaded after each deck's layout CSS. */
+:root {
+  color-scheme: dark;
+  --paper: #070b10;
+  --white: #0d151c;
+  --ink: #eaf5f3;
+  --muted: #8aa09c;
+  --line: #263942;
+  --soft: #101b22;
+  --navy: #081018;
+  --blue: #45a8ff;
+  --blue-soft: #0d2638;
+  --cyan: #24d6c5;
+  --cyan-soft: #0b2c2d;
+  --green: #4bdf8a;
+  --green-soft: #0c2b20;
+  --yellow: #ffd166;
+  --yellow-soft: #302819;
+  --orange: #ff7849;
+  --orange-soft: #342018;
+  --magenta: #f36dac;
+  --magenta-soft: #321a29;
+  --red: #ff6168;
+  --red-soft: #35191d;
+}
+
+html,
+body {
+  background: #020508;
+  color: var(--ink);
+}
+
+.deck-shell {
+  background:
+    linear-gradient(90deg, rgba(36, 214, 197, .055) 1px, transparent 1px) 0 0 / 28px 28px,
+    linear-gradient(rgba(36, 214, 197, .055) 1px, transparent 1px) 0 0 / 28px 28px,
+    #020508;
+}
+
+#deck-canvas {
+  background: var(--paper);
+  border: 0;
+  box-shadow: inset 0 0 0 1px #1b2d35, 0 28px 90px rgba(0, 0, 0, .72), 0 0 42px rgba(36, 214, 197, .08);
+}
+
+#deck-canvas::before {
+  content: "";
+  position: absolute;
+  z-index: 72;
+  left: 0;
+  right: 0;
+  top: 0;
+  height: 2px;
+  pointer-events: none;
+  background: var(--cyan);
+  box-shadow: 0 0 18px rgba(36, 214, 197, .8);
+}
+
+.slide {
+  color: var(--ink);
+  background:
+    linear-gradient(90deg, rgba(125, 158, 165, .035) 1px, transparent 1px) 0 0 / 40px 40px,
+    linear-gradient(rgba(125, 158, 165, .035) 1px, transparent 1px) 0 0 / 40px 40px,
+    var(--paper);
+}
+
+.slide.active {
+  animation: slide-in .28s ease-out;
+}
+
+@keyframes slide-in {
+  from { opacity: .25; transform: translateY(5px); filter: brightness(.75); }
+  to { opacity: 1; transform: translateY(0); filter: brightness(1); }
+}
+
+.slide::after,
+.slide-number {
+  color: #668078;
+  text-transform: uppercase;
+  font-family: var(--mono);
+  letter-spacing: 0;
+}
+
+h1,
+h2,
+h3 {
+  color: #f2fbfa;
+}
+
+h1 {
+  text-shadow: 0 0 28px rgba(36, 214, 197, .11);
+}
+
+.lead,
+.body,
+.small,
+.slide p {
+  color: #b6c9c5;
+}
+
+.muted {
+  color: var(--muted) !important;
+}
+
+.eyebrow {
+  color: var(--cyan);
+  text-shadow: 0 0 13px rgba(36, 214, 197, .28);
+}
+
+.rule {
+  height: 3px;
+  background: var(--cyan);
+  box-shadow: 0 0 15px rgba(36, 214, 197, .52);
+}
+
+.yellow-mark {
+  padding: 0;
+  color: var(--cyan);
+  background: none;
+  text-shadow: 0 0 18px rgba(36, 214, 197, .25);
+}
+
+a {
+  color: #6dbbff;
+  text-decoration-color: rgba(109, 187, 255, .52);
+}
+
+code,
+.mono {
+  color: #6ce7dc;
+}
+
+.hot { color: var(--orange) !important; }
+.cool { color: var(--cyan) !important; }
+.good { color: var(--green) !important; }
+.error { color: #ff888d !important; }
+
+.cover::before {
+  background: var(--cyan);
+  box-shadow: 5px 0 25px rgba(36, 214, 197, .26);
+}
+
+.cover-meta span,
+.command {
+  border-color: #29414a;
+  background: #0a1218;
+  color: #bfe9e4;
+  box-shadow: inset 0 0 0 1px rgba(36, 214, 197, .03);
+}
+
+.slide article {
+  border-color: #2a3c44;
+  box-shadow: inset 0 0 0 1px rgba(147, 190, 194, .035);
+}
+
+.code,
+.terminal,
+.manifest-code,
+.command-code,
+.mini-code {
+  border-color: var(--cyan);
+  background:
+    linear-gradient(90deg, rgba(36, 214, 197, .035) 1px, transparent 1px) 0 0 / 22px 22px,
+    linear-gradient(rgba(36, 214, 197, .025) 1px, transparent 1px) 0 0 / 22px 22px,
+    #050b10;
+  color: #d9eeeb;
+  box-shadow: inset 0 0 0 1px #1f3038, 0 12px 28px rgba(0, 0, 0, .24);
+}
+
+.terminal {
+  border-left-color: var(--orange);
+}
+
+.code .comment { color: #728b86; }
+.code .key { color: #63b9ff; }
+.code .value { color: #ffd166; }
+.prompt { color: #ffd166; }
+
+.data-table {
+  border-color: var(--line);
+  background: #0b1319;
+  color: #dcebea;
+  box-shadow: inset 0 0 0 1px rgba(36, 214, 197, .035);
+}
+
+.data-table th {
+  border-color: #2a434c;
+  background: #101d25;
+  color: #78e5da;
+  text-transform: uppercase;
+}
+
+.data-table td {
+  border-color: #22343c;
+  background: rgba(10, 18, 24, .76);
+}
+
+.data-table tbody tr:nth-child(even) td {
+  background: rgba(16, 27, 34, .82);
+}
+
+.good-cell {
+  background: #0d2f22 !important;
+  color: #70eba4 !important;
+}
+
+.bad-cell {
+  background: #381a1f !important;
+  color: #ff989d !important;
+}
+
+.flat-block,
+.flat-block.blue,
+.flat-block.green,
+.flat-block.yellow,
+.flat-block.orange,
+.flat-block.red,
+.callout {
+  color: #d9e8e5;
+  box-shadow: inset 0 0 0 1px rgba(156, 194, 196, .05);
+}
+
+.callout {
+  border-color: #6a582d;
+  border-left-color: var(--yellow);
+  background: #1f1b12;
+}
+
+.flat-block { background: var(--cyan-soft); }
+.flat-block.blue { background: var(--blue-soft); }
+.flat-block.green { background: var(--green-soft); }
+.flat-block.yellow { background: var(--yellow-soft); }
+.flat-block.orange { background: var(--orange-soft); }
+.flat-block.red { background: var(--red-soft); }
+
+.flat-block p,
+.callout,
+.callout p {
+  color: #cfdfdc;
+}
+
+.action-btn,
+.tool-btn,
+.notes-close {
+  border-color: #2b414a;
+  background: #081116;
+  color: #9ceee6;
+  box-shadow: inset 0 0 0 1px rgba(36, 214, 197, .04);
+}
+
+.action-btn:hover,
+.action-btn:focus-visible,
+.tool-btn:hover,
+.tool-btn:focus-visible,
+.tool-btn[aria-pressed="true"],
+.notes-close:hover,
+.notes-close:focus-visible {
+  border-color: var(--cyan);
+  background: #0b2b2c;
+  color: #efffff;
+  box-shadow: 0 0 17px rgba(36, 214, 197, .25);
+}
+
+.progress-track {
+  background: rgba(255, 255, 255, .05);
+}
+
+#progress-fill {
+  background: var(--cyan);
+  box-shadow: 0 0 16px rgba(36, 214, 197, .72);
+}
+
+.controls {
+  border-color: #263c45;
+  background: rgba(5, 11, 16, .94);
+  box-shadow: 0 16px 42px rgba(0, 0, 0, .56), 0 0 20px rgba(36, 214, 197, .06);
+  backdrop-filter: blur(12px);
+}
+
+.notes-backdrop {
+  background: rgba(1, 4, 7, .74);
+  backdrop-filter: blur(3px);
+}
+
+.notes-panel {
+  border-color: #2a414b;
+  background: #080f14;
+  color: var(--ink);
+  box-shadow: -20px 0 70px rgba(0, 0, 0, .7), 0 0 28px rgba(36, 214, 197, .08);
+}
+
+.notes-header {
+  border-color: #263b44;
+  background: #080f14;
+}
+
+.notes-panel p {
+  color: #c7d8d5;
+}
+
+.notes-panel .note-source {
+  border-color: #263b44;
+}
+
+.overview {
+  border-color: #2a424c;
+  background:
+    linear-gradient(90deg, rgba(36, 214, 197, .035) 1px, transparent 1px) 0 0 / 28px 28px,
+    linear-gradient(rgba(36, 214, 197, .035) 1px, transparent 1px) 0 0 / 28px 28px,
+    rgba(5, 10, 14, .985);
+  box-shadow: 0 25px 80px rgba(0, 0, 0, .72);
+}
+
+.overview button {
+  border-color: #233740;
+  background: #0b141a;
+  color: #d5e7e4;
+}
+
+.overview button:hover,
+.overview button:focus-visible,
+.overview button.current {
+  border-color: var(--cyan);
+  background: #0c292c;
+  box-shadow: inset 3px 0 0 var(--cyan), 0 0 15px rgba(36, 214, 197, .12);
+}
+
+.ov-num { color: var(--cyan); }
+
+.course-figure img,
+.course-image img,
+.tls-course-image img,
+figure img {
+  border-color: #2a4149 !important;
+  filter: brightness(.78) contrast(1.08) saturate(.92);
+  box-shadow: 0 18px 46px rgba(0, 0, 0, .35);
+}
+
+.course-figure figcaption,
+.course-image figcaption,
+.tls-course-image figcaption,
+figure figcaption {
+  background: #09131a !important;
+  color: #bed3cf !important;
+  border-top: 1px solid #2a4149;
+}
+
+/* Convert a few legacy literal light surfaces without changing layout geometry. */
+.slide article[style*="background: white"],
+.slide article[style*="background:white"] {
+  background: var(--white) !important;
+}
+
+@media print {
+  :root { color-scheme: dark; }
+  html, body, .deck-shell { background: #020508 !important; }
+  .slide, .slide.active { background-color: var(--paper) !important; }
+}
+
+/* Compatibility for early decks that predate the shared component palette. */
+.cover-node,
+.cover-node strong,
+.cover-router,
+.cover-router strong,
+.svc-cover-client,
+.svc-cover-client strong,
+.svc-cover-vip,
+.svc-cover-vip strong,
+.svc-cover-endpoint,
+.svc-cover-endpoint strong,
+.dns-cover-client,
+.dns-cover-client strong,
+.dns-cover-vip,
+.dns-cover-vip strong,
+.dns-cover-endpoint,
+.dns-cover-endpoint strong,
+.vip-badge,
+.vip-badge strong {
+  color: #eaf5f3 !important;
+}
+
+.cover-pod,
+.svc-cover-packet,
+.dns-cover-packet,
+.chain-link-packet,
+.bgp-route-packet {
+  color: #071016 !important;
+}
+
+.learning-step,
+.component-box.runtime {
+  background: #0d151c !important;
+  color: var(--ink) !important;
+}
+
+.learning-step p,
+.component-box.runtime span {
+  color: #afc3bf !important;
+}
+
+.path-label,
+.path-caption {
+  background: rgba(8, 17, 22, .96) !important;
+  color: #dcecea !important;
+  border: 1px solid #29414a;
+}
+
+.veth-line {
+  background: #58707a !important;
+}
+
+.env-table,
+.route-table,
+.trouble-table,
+.policy-table,
+.plugin-table,
+.mode-table {
+  color: #dcebea;
+  background: #0b1319;
+}
+
+.env-table th,
+.route-table th,
+.trouble-table th,
+.policy-table th,
+.plugin-table th,
+.mode-table th,
+.slide table th {
+  background: #101d25 !important;
+  color: #78e5da !important;
+}
+
+.env-table td,
+.route-table td,
+.trouble-table td,
+.policy-table td,
+.plugin-table td,
+.mode-table td,
+.slide table td {
+  border-color: #22343c !important;
+  background: rgba(10, 18, 24, .78) !important;
+  color: #cddedb;
+}
+
+.slide code {
+  color: #6ce7dc !important;
+}
+
+.controls button {
+  border-color: #2b414a;
+  background: #081116;
+  color: #9ceee6;
+}
+
+.slide strong:not(.hot):not(.cool):not(.good):not(.error),
+.slide h3,
+.slide h2 {
+  color: #f0f9f7;
+}
+
+/* Three legacy covers were authored for an edge-to-edge 900px grid. */
+.cover-slide {
+  padding: 0;
+}
+
+.cover-slide .cover-grid {
+  height: 100%;
+}
+
+.cover-slide .bgp-cover,
+.cover-slide .multi-cover,
+.cover-slide .overlay-cover {
+  min-height: 0;
+  height: 100%;
+}
+
+/* Keep a handful of dense legacy pages inside the fixed 1600x900 stage. */
+.wide-terminal { min-height: 430px; margin-top: 24px; padding-top: 34px; }
+.pool-status { margin-top: 20px; }
+.pool-status article { min-height: 158px; padding-top: 18px; padding-bottom: 18px; }
+.slide > img.course-image { max-height: 620px; }
+.course-image.wide { max-height: 575px; }
+.image-note { padding-top: 10px; padding-bottom: 10px; }
+.yaml-compare { margin-top: 24px; }
+.yaml-compare .code { min-height: 445px; }
+.cleanup-conflict { margin-top: 35px; margin-bottom: 24px; }
+.cleanup-conflict article { min-height: 310px; }
+.cleanup-conflict strong { margin-top: 43px; }
+.large-output { min-height: 410px; margin-top: 30px; padding-top: 40px; }
+.rule-reading { margin-top: 20px; }
+.rule-reading article { min-height: 158px; padding-top: 22px; padding-bottom: 22px; }
+.fdb-map { margin-top: 20px; }
+.fdb-map div { min-height: 118px; padding-top: 14px; padding-bottom: 14px; }
+.fdb-map + .flat-block { margin-top: 18px !important; padding-top: 14px; padding-bottom: 14px; }

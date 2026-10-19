@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Kubernetes 与 Calico 网络 HTML 演示课件中心">
+  <title>Kubernetes Networking Deck Library</title>
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="catalog.css?v=1">
+</head>
+<body>
+  <main class="library">
+    <header class="library-header">
+      <div><p class="eyebrow">KUBERNETES NETWORKING · CALICO LABS</p><h1>技术演示课件中心</h1><p>18 套动态 HTML 课件</p></div>
+      <label class="search"><span>FILTER</span><input id="deck-search" type="search" placeholder="搜索课件或主题" autocomplete="off"></label>
+    </header>
+    <section class="deck-list" id="deck-list" aria-label="课件列表">
+	  <a href="Calico_IPAM.html" data-search="IPAM"><span>01</span><strong>Calico IPAM</strong><em>IPAM IP address management</em><b>21 页</b></a>
+      <a href="pod-networking/index.html" data-search="pod networking cni veth 网络"><span>02</span><strong>Pod Networking</strong><em>CNI · veth · namespace</em><b>21 页</b></a>
+      <a href="pod-routing/index.html" data-search="pod routing route node 路由"><span>03</span><strong>Pod Routing</strong><em>同节点 · 跨节点 · FIB</em><b>28 页</b></a>
+      <a href="k8s-services/index.html" data-search="service clusterip kube-proxy iptables"><span>04</span><strong>Kubernetes Services</strong><em>ClusterIP · EndpointSlice · DNAT</em><b>31 页</b></a>
+      <a href="k8s-dns/index.html" data-search="dns coredns resolv service discovery"><span>05</span><strong>Kubernetes DNS</strong><em>CoreDNS · resolver · cluster.local</em><b>32 页</b></a>
+      <a href="calico-overlay/index.html" data-search="overlay vxlan crosssubnet 封装"><span>06</span><strong>Calico Overlay</strong><em>VXLAN · VTEP · underlay</em><b>35 页</b></a>
+      <a href="calico-bgp/index.html" data-search="bgp loadbalancer vip ceos"><span>08</span><strong>Calico BGP</strong><em>eBGP · LoadBalancer · VIP</em><b>31 页</b></a>
+      <a href="calico-multi-ippool/index.html" data-search="multiple ippool ipam annotation"><span>09</span><strong>Multiple IPPools</strong><em>IPAM · pool selection</em><b>35 页</b></a>
+      <a href="calico-bgp-ippool/index.html" data-search="advertise ippool bgp native routing"><span>10</span><strong>Advertise IPPool Using BGP</strong><em>Pod CIDR · ToR · native routing</em><b>35 页</b></a>
+      <a href="k8s-headless-services/index.html" data-search="headless service dns statefulset"><span>11</span><strong>Headless Services</strong><em>DNS · EndpointSlice · StatefulSet</em><b>38 页</b></a>
+      <a href="calico-qos/index.html" data-search="qos bandwidth tc iperf"><span>12</span><strong>Calico Network QoS</strong><em>bandwidth · tc · iperf3</em><b>38 页</b></a>
+      <a href="calico-wireguard/index.html" data-search="wireguard encryption fwmark 加密"><span>13</span><strong>Calico WireGuard</strong><em>encryption · routing · fwmark</em><b>41 页</b></a>
+      <a href="calico-ipv6/index.html" data-search="ipv6 dual stack 双栈"><span>14</span><strong>Calico IPv4 / IPv6</strong><em>dual stack · VXLAN · services</em><b>43 页</b></a>
+      <a href="calico-selective-bgp/index.html" data-search="selective bgp peering node selector"><span>15</span><strong>Selective BGP Peering</strong><em>BGPPeer · selector · ECMP</em><b>46 页</b></a>
+      <a href="calico-static-ip/index.html" data-search="static pod ip reservation ipam"><span>16</span><strong>Static Pod IP</strong><em>IPReservation · annotation · CNI</em><b>44 页</b></a>
+      <a href="nodelocal-dnscache/index.html" data-search="nodelocal dnscache notrack dns"><span>17</span><strong>NodeLocal DNSCache</strong><em>cache · NOTRACK · CoreDNS</em><b>45 页</b></a>
+      <a href="calico-mtu/index.html" data-search="mtu pmtud rpf vxlan"><span>18</span><strong>Calico MTU</strong><em>jumbo · PMTUD · RPF</em><b>55 页</b></a>
+      <a href="calico-ingress/index.html" data-search="ingress gateway envoy canary bgp"><span>19</span><strong>Calico Ingress Gateway</strong><em>Gateway API · Envoy · canary</em><b>55 页</b></a>
+      <a href="ingress-tls/index.html" data-search="ingress tls cert-manager certificate envoy"><span>20</span><strong>Ingress TLS</strong><em>cert-manager · SNI · rotation</em><b>60 页</b></a>
+    </section>
+    <p class="empty" id="empty-state" hidden>没有匹配的课件</p>
+  </main>
+  <script>
+    const input = document.getElementById('deck-search');
+    const rows = [...document.querySelectorAll('#deck-list a')];
+    const empty = document.getElementById('empty-state');
+    input.addEventListener('input', () => {
+      const query = input.value.trim().toLowerCase();
+      let visible = 0;
+      rows.forEach(row => {
+        const match = !query || `${row.textContent} ${row.dataset.search}`.toLowerCase().includes(query);
+        row.hidden = !match;
+        if (match) visible += 1;
+      });
+      empty.hidden = visible !== 0;
+    });
+  </script>
+</body>
+</html>
